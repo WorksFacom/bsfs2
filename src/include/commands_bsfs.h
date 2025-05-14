@@ -1,4 +1,6 @@
 #ifndef COMMANDS_H
+#define COMMANDS_H
+
 #include "filesystem_bsfs.h"
 #include <stdio.h>
 

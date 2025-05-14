@@ -1,0 +1,132 @@
+/**
+ * @file block_operations_bsfs.c
+ * @brief Functions for reading and writing blocks in the file system.
+ *
+ * This file contains functions for reading and writing single blocks to
+ * the disk and for marking blocks as free in the file system.
+ */
+
+#include "../../include/block_operations_bsfs.h"
+
+/**
+ * @brief Writes data to a single block.
+ *
+ * This function writes a block of data to the specified block number on
+ * the disk. It ensures the size of the data does not exceed the block size.
+ * The data is written to the block with a full write of the block size.
+ *
+ * @param disk Pointer to the disk file where data will be written.
+ * @param block_number The block number where the data will be written.
+ * @param data Pointer to the data to be written.
+ * @param size The size of the data to be written.
+ * @return 0 on success, -1 if there is an error in the writing process.
+ */
+int write_block(FILE *disk, uint32_t block_number, const void *data,
+                size_t size) {
+  if (size > BLOCK_SIZE) {
+    fprintf(stderr,
+            "Error (write block): write size greater than block size.\n");
+    return -1;
+  }
+
+  if (!disk) {
+    fprintf(stderr, "Error (write block): null disk pointer .\n");
+    return -1;
+  }
+
+  // Calculate the offset
+  uint64_t offset = (uint64_t)block_number * BLOCK_SIZE;
+
+  if (fseek(disk, offset, SEEK_SET) != 0) {
+    perror("Error (write block): fseek.\n");
+    return -1;
+  }
+
+  // Prepare the buffer
+  uint8_t buffer[BLOCK_SIZE];
+  memset(buffer, 0, BLOCK_SIZE);
+  memcpy(buffer, data, size);
+
+  // Write the full block
+  if (fwrite(buffer, 1, BLOCK_SIZE, disk) != BLOCK_SIZE) {
+    perror("Error (write block): fwrite\n");
+    return -1;
+  }
+
+  return 0; // Success
+}
+
+/**
+ * @brief Reads data from a single block.
+ *
+ * This function reads a block of data from the specified block number on
+ * the disk. It ensures the size of the data to be read does not exceed the
+ * block size.
+ *
+ * @param disk Pointer to the disk file where data will be read from.
+ * @param block_number The block number from which the data will be read.
+ * @param data Pointer to the buffer where the read data will be stored.
+ * @param size The size of the data to be read.
+ * @return 0 on success, -1 if there is an error in the reading process.
+ */
+int read_block(FILE *disk, uint32_t block_number, void *data, size_t size) {
+  if (size > BLOCK_SIZE) {
+    fprintf(stderr,
+            "Error (read block): reading size greater than block size.\n");
+    return -1;
+  }
+
+  if (!disk) {
+    fprintf(stderr, "Error (read block): null disk pointer.\n");
+    return -1;
+  }
+
+  // Calculate the offset
+  uint64_t offset = (uint64_t)block_number * BLOCK_SIZE;
+
+  if (fseek(disk, offset, SEEK_SET) != 0) {
+    perror("Error (read block): fseek.\n");
+    return -1;
+  }
+
+  // Read the full block
+  if (fread(data, 1, size, disk) != size) {
+    perror("Error (read block): fread.\n");
+    return -1;
+  }
+
+  return 0; // Success
+}
+
+/**
+ * @brief Marks a block as free in the file system.
+ *
+ * This function marks the specified block as free in the bitmap and
+ * saves the updated bitmap back to the disk. The block is marked by
+ * clearing the corresponding bit in the bitmap.
+ *
+ * @param disk Pointer to the disk file where the block is located.
+ * @param block_number The block number to be marked as free.
+ * @param bitmap Pointer to the bitmap that tracks the allocation of blocks.
+ * @param bitmap_start_block The starting block of the bitmap on the disk.
+ * @param bitmap_total_blocks The total number of blocks allocated for the
+ * bitmap.
+ * @return 0 on success, -1 if there is an error during the process.
+ */
+int free_block(FILE *disk, superblock_t *sb, uint32_t block_number,
+               uint8_t *bitmap, uint32_t bitmap_size) {
+  if (!disk || !bitmap) {
+    fprintf(stderr, "Error (free block): null disk pointer or bitmap.\n");
+    return -1;
+  }
+
+  // Mark the block as free in the bitmap
+  clear_bit(bitmap, block_number);
+
+  // Save the updated bitmap back to the disk
+  if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {
+    return -1;
+  }
+
+  return 0; // Success
+}
