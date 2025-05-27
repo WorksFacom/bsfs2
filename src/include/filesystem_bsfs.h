@@ -94,6 +94,16 @@ typedef struct {
   uint8_t name_size;
   uint8_t file_type;
   char filename[MAX_FILENAME];
-} directory_entry_t;
+} dir_entry_t;
+
+typedef struct {
+  inode_t inode;
+  uint32_t pos;
+} file_t;
+
+typedef struct {
+  inode_t inode;
+  uint32_t dir_index;
+} dir_t;
 
 #endif // FILESYSTEM_BSFS
