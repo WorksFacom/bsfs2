@@ -16,7 +16,7 @@ file_t *open_file(FILE *disk, btree_handle_t *inode_tree,
 void close_file(file_t *f);
 
 // Posiciona o ponteiro em arquivo aberto
-int bsfs_seek(file_t *f, uint32_t offset);
+int seek_file(file_t *f, uint32_t offset);
 
 // Leitura em um arquivo aberto
 int read_file(FILE *disk, btree_handle_t *bspan_tree, file_t *f,

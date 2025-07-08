@@ -1,11 +1,22 @@
 /**
  * @file block_operations_bsfs.c
- * @brief Functions for reading and writing blocks in the file system.
+ * @brief Implementation of low-level block I/O operations for BSFS.
  *
- * This file contains functions for reading and writing single blocks to
- * the disk and for marking blocks as free in the file system.
+ * This module provides basic functions for reading and writing fixed-size
+ * blocks on disk in the BSFS file system. It also includes a utility function
+ * to free blocks and mark them as available in the block bitmap.
+ *
+ * - `write_block()` writes a full block of data to a given block number.
+ * - `read_block()` reads a full block of data from a given block number.
+ * - `free_block()` clears the content of a block and marks it as free in the
+ * bitmap.
+ *
+ * These functions form the foundation for all I/O operations involving
+ * disk-resident structures, including metadata trees, inodes, and data files.
+ *
+ * All access respects the `BLOCK_SIZE` defined in the superblock
+ * and integrates with the bitmap for block availability tracking.
  */
-
 #include "../../include/block_operations_bsfs.h"
 
 /**

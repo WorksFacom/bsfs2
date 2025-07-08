@@ -1,16 +1,32 @@
 /**
  * @file bitmap_operations_bsfs.h
- * @brief Header file containing functions for bitmap manipulation in the BSFS
- * file system.
+ * @brief Bitmap management utilities for the BSFS file system.
  *
- * This file provides functions for loading, saving, and manipulating the bitmap
- * which is used for managing free and allocated blocks in the filesystem.
+ * This header provides the core functions to manage the block allocation bitmap
+ * in the Basic Solution File System (BSFS). The bitmap tracks which blocks on
+ * the disk are allocated or free, and is essential for operations such as:
+ *
+ * - Block allocation and deallocation
+ * - File creation and deletion
+ * - Space management and consistency
+ *
+ * The bitmap is stored on disk as a linked list of fixed-size blocks and is
+ * loaded into memory for manipulation during runtime. These functions abstract
+ * the bitmap I/O and provide low-level access to set, clear, and query bit
+ * status.
+ *
+ * ## Key functionalities:
+ * - Initialization of the bitmap block list on disk
+ * - Loading and saving the bitmap from/to disk
+ * - Marking individual blocks as free or occupied
+ * - Querying the state of specific blocks
+ *
+ * This interface is used internally by the allocator and file system logic
+ * to ensure efficient space tracking and integrity of data block usage.
  */
 #ifndef BITMAP_OPERATIONS
 #define BITMAP_OPERATIONS
 #include "filesystem_bsfs.h"
-#include <stdio.h>
-#include <stdlib.h>
 
 /**
  * @brief Initializes a linked list of bitmap blocks on disk.

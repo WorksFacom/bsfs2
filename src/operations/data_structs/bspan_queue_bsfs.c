@@ -1,9 +1,21 @@
 /**
  * @file bspan_queue_bsfs.c
- * @brief Implementation of operations for manipulating a bspan queue.
+ * @brief Implementation of dynamic queue operations for BSpan allocation.
  *
- * This file contains functions for initializing, enqueueing, dequeueing,
- * copying, and freeing a bspan queue.
+ * This file provides the implementation of a FIFO queue used to manage
+ * sequences of block spans (bspan_t) in the BSFS file system. These queues are
+ * used during block allocation to track contiguous ranges of blocks available
+ * for file storage.
+ *
+ * Core operations include:
+ * - Initializing an empty queue
+ * - Enqueuing and dequeuing bspans
+ * - Copying a queue
+ * - Freeing all queue elements
+ * - Checking if the queue is empty
+ *
+ * This abstraction simplifies memory management and ordering of block span
+ * assignments during file writing or preallocation.
  */
 #include "../../include/bspan_queue_bsfs.h"
 

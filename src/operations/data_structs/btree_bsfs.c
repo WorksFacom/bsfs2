@@ -1,15 +1,73 @@
+/**
+ * @file btree_bsfs.c
+ * @brief Implementation of B-tree operations for the BSFS filesystem.
+ *
+ * This file implements a disk-based B-tree used to manage mappings in the BSFS
+ * filesystem, such as inode references, block span allocations, and recovery
+ * indexes.
+ *
+ * The B-tree is parameterized by entry type and size, and each node is stored
+ * in a disk block. This implementation supports search, insertion, update,
+ * and deletion operations, ensuring the tree remains balanced across writes.
+ */
 #include "../../include/btree_bsfs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// === Funções auxiliares ===
+/*
+ * Static functions prototypes
+ * */
+static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
+                                 btree_handle_t *handle, btree_node_t *node,
+                                 void *entry);
+static void btree_split_child(FILE *disk, superblock_t *sb,
+                              btree_handle_t *handle, btree_node_t *parent,
+                              int index);
+static void btree_remove_internal(FILE *disk, superblock_t *sb,
+                                  btree_handle_t *handle, uint32_t node_block,
+                                  uint32_t key, int *success);
+static void btree_merge(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                        btree_node_t *parent, int idx);
+static void btree_fill(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                       btree_node_t *parent, int idx);
+static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle,
+                                   btree_node_t *parent, int idx);
+static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle,
+                                   btree_node_t *parent, int idx);
+/**
+ * @brief Default comparison function for integer keys (uint32_t).
+ *
+ * This function interprets the input pointers as pointers to uint32_t values
+ * and compares them. It returns a result suitable for use in sorting or
+ * search functions.
+ *
+ * @param a Pointer to the first value (expected to point to a uint32_t).
+ * @param b Pointer to the second value (expected to point to a uint32_t).
+ * @return int -1 if a < b, 1 if a > b, 0 if equal.
+ */
 static int default_compare(const void *a, const void *b) {
   uint32_t ka = *(uint32_t *)a;
   uint32_t kb = *(uint32_t *)b;
   return (ka < kb) ? -1 : (ka > kb);
 }
 
+/**
+ * @brief Computes the minimum degree (t) of a B-tree node based on the entry
+ * size.
+ *
+ * This function calculates the maximum value of the minimum degree `t` such
+ * that a B-tree node with `(2t - 1)` entries and `(2t)` child pointers still
+ * fits within the defined block size (`BLOCK_SIZE`). It considers:
+ * - Total space used by entries (based on `entry_size`)
+ * - Total space used by child pointers (32-bit each)
+ * - Overhead for metadata (`is_leaf` and `num_entries`)
+ *
+ * This ensures that each B-tree node can be written to a single disk block.
+ *
+ * @param entry_size The size in bytes of a single entry in the B-tree.
+ * @return int The maximum minimum degree `t` that fits within a block.
+ */
 static int compute_min_degree(size_t entry_size) {
   size_t entry_area = entry_size * (2 * 4 - 1);
   size_t pointer_area = sizeof(uint32_t) * (2 * 4);
@@ -25,6 +83,21 @@ static int compute_min_degree(size_t entry_size) {
   }
 }
 
+/**
+ * @brief Shifts B-tree entries to the left in memory.
+ *
+ * This function performs an in-place memory shift to remove an entry from a
+ * B-tree node. It moves all entries after the `from` index one position to the
+ * left, effectively overwriting the entry at position `from`.
+ *
+ * This is typically used after deleting an entry from a node to maintain
+ * the contiguous layout of the entries array.
+ *
+ * @param entries Pointer to the beginning of the entries array.
+ * @param entry_size The size in bytes of each entry.
+ * @param from The index at which the shift begins.
+ * @param count The total number of entries currently in the node.
+ */
 static void btree_shift_left(void *entries, size_t entry_size, int from,
                              int count) {
   for (int i = from; i < count - 1; i++) {
@@ -33,50 +106,193 @@ static void btree_shift_left(void *entries, size_t entry_size, int from,
   }
 }
 
-// === Manipuladores específicos ===
+/**
+ * @brief Extracts the key from an inode entry.
+ *
+ * This function casts the input pointer to an `inode_t` and returns its
+ * `inode_number` field, which is used as the key for insertion, search, and
+ * comparison in the B-tree of inodes.
+ *
+ * @param entry Pointer to the inode entry (expected to be of type `inode_t`).
+ * @return uint32_t The inode number used as the key.
+ */
 uint32_t get_inode_key(const void *entry) {
   return ((const inode_t *)entry)->inode_number;
 }
 
+/**
+ * @brief Compares two inode entries by their inode number.
+ *
+ * This function compares the keys extracted from two `inode_t` entries
+ * using `get_inode_key`. It returns:
+ * - A negative value if a < b
+ * - Zero if a == b
+ * - A positive value if a > b
+ *
+ * This comparison logic is used by the B-tree to maintain order among inode
+ * entries.
+ *
+ * @param a Pointer to the first inode entry.
+ * @param b Pointer to the second inode entry.
+ * @return int Comparison result: negative, zero, or positive.
+ */
 int compare_inode(const void *a, const void *b) {
   return (get_inode_key(a) > get_inode_key(b)) -
          (get_inode_key(a) < get_inode_key(b));
 }
 
+/**
+ * @brief Creates a B-tree handle specifically for managing inode entries.
+ *
+ * This function initializes and returns a pointer to a `btree_handle_t`
+ * configured to operate on entries of type `inode_t`. It sets the appropriate:
+ * - Data type identifier (`BTREE_TYPE_INODE`)
+ * - Entry size (based on `sizeof(inode_t)`)
+ * - Key extraction function (`get_inode_key`)
+ * - Comparison function (`compare_inode`)
+ *
+ * The resulting handle can be used for all B-tree operations involving inodes,
+ * such as insertion, search, update, and removal.
+ *
+ * @return Pointer to a newly allocated and configured `btree_handle_t` for
+ * inodes.
+ */
 btree_handle_t *btree_create_inode_handle() {
   return btree_create_handle(BTREE_TYPE_INODE, sizeof(inode_t), compare_inode,
                              get_inode_key);
 }
 
+/**
+ * @brief Extracts the key from a bspan entry.
+ *
+ * This function casts the input pointer to a `bspan_t` and returns the
+ * `file_blk` field, which represents the logical file block number.
+ * This value is used as the key in B-tree operations for bspan entries.
+ *
+ * @param entry Pointer to a bspan entry (expected to be of type `bspan_t`).
+ * @return uint32_t The logical file block number used as the key.
+ */
 uint32_t get_bspan_key(const void *entry) {
   return ((const bspan_t *)entry)->file_blk;
 }
 
+/**
+ * @brief Compares two bspan entries by their logical file block number.
+ *
+ * This function compares the keys extracted from two `bspan_t` entries
+ * using `get_bspan_key`. It returns:
+ * - A negative value if a < b
+ * - Zero if a == b
+ * - A positive value if a > b
+ *
+ * This comparison is used to maintain the order of bspan entries in the B-tree.
+ *
+ * @param a Pointer to the first bspan entry.
+ * @param b Pointer to the second bspan entry.
+ * @return int Comparison result: negative, zero, or positive.
+ */
 int compare_bspan(const void *a, const void *b) {
   return (get_bspan_key(a) > get_bspan_key(b)) -
          (get_bspan_key(a) < get_bspan_key(b));
 }
 
+/**
+ * @brief Creates a B-tree handle for managing bspan entries.
+ *
+ * This function initializes a `btree_handle_t` configured for use with
+ * `bspan_t` entries. It sets:
+ * - The data type identifier to `BTREE_TYPE_BSPAN`
+ * - The entry size to `sizeof(bspan_t)`
+ * - The comparison function to `compare_bspan`
+ * - The key extraction function to `get_bspan_key`
+ *
+ * This handle can be used for managing logical-to-physical block mappings
+ * of files stored in the BSFS.
+ *
+ * @return Pointer to a configured `btree_handle_t` for bspan entries.
+ */
 btree_handle_t *btree_create_bspan_handle() {
   return btree_create_handle(BTREE_TYPE_BSPAN, sizeof(bspan_t), compare_bspan,
                              get_bspan_key);
 }
 
+/**
+ * @brief Extracts the key from a recovery entry.
+ *
+ * This function casts the input pointer to a `rec_entry_t` and returns
+ * the `index` field, which serves as the unique identifier or key for
+ * the recovery entry in the B-tree.
+ *
+ * @param entry Pointer to a recovery entry (expected to be of type
+ * `rec_entry_t`).
+ * @return uint32_t The index value used as the key in the B-tree.
+ */
 uint32_t get_rec_entry_key(const void *entry) {
   return ((const rec_entry_t *)entry)->index;
 }
 
+/**
+ * @brief Compares two recovery entries by their index field.
+ *
+ * This function compares the keys extracted from two `rec_entry_t` entries
+ * using `get_rec_entry_key`. It returns:
+ * - A negative value if a < b
+ * - Zero if a == b
+ * - A positive value if a > b
+ *
+ * This is used to maintain the sorted order of recovery entries in the B-tree.
+ *
+ * @param a Pointer to the first recovery entry.
+ * @param b Pointer to the second recovery entry.
+ * @return int Comparison result: negative, zero, or positive.
+ */
 int compare_rec_entry(const void *a, const void *b) {
   return (get_rec_entry_key(a) > get_rec_entry_key(b)) -
          (get_rec_entry_key(a) < get_rec_entry_key(b));
 }
 
+/**
+ * @brief Creates a B-tree handle for managing recovery entries.
+ *
+ * This function sets up a `btree_handle_t` for use with entries of type
+ * `rec_entry_t`. It specifies:
+ * - The data type as `BTREE_TYPE_RECOVERY`
+ * - The entry size as `sizeof(rec_entry_t)`
+ * - The comparison function as `compare_rec_entry`
+ * - The key extraction function as `get_rec_entry_key`
+ *
+ * The resulting handle is used to manage entries in the recovery subsystem
+ * of the BSFS.
+ *
+ * @return Pointer to a configured `btree_handle_t` for recovery entries.
+ */
 btree_handle_t *btree_create_rec_entry_handle() {
   return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t),
                              compare_rec_entry, get_rec_entry_key);
 }
 
-// === Inicialização do manipulador de árvore ===
+/**
+ * @brief Creates a generic B-tree handle for managing structured data.
+ *
+ * This function initializes a `btree_handle_t` structure, which serves as the
+ * context for performing B-tree operations (insertion, search, removal, etc.)
+ * on a specific data type. It sets up key parameters including:
+ * - The type of data being stored (`btree_data_type_t`)
+ * - The size of each entry (in bytes)
+ * - A comparison function for ordering keys
+ * - A key extraction function used by the B-tree logic
+ *
+ * If a comparison function is not provided, the default one (`default_compare`)
+ * is used. The function also calculates the minimum degree of the B-tree nodes
+ * based on the entry size and `BLOCK_SIZE`.
+ *
+ * @param type The type of data the B-tree will manage (e.g., INODE, BSPAN,
+ * RECOVERY).
+ * @param entry_size The size in bytes of each entry in the tree.
+ * @param cmp A comparison function for comparing two entries. Can be NULL.
+ * @param get_key A function to extract the key from an entry.
+ * @return Pointer to a newly allocated and configured `btree_handle_t`.
+ */
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size,
                                     compare_fn cmp, key_fn get_key) {
   btree_handle_t *handle = malloc(sizeof(btree_handle_t));
@@ -89,7 +305,26 @@ btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size,
   return handle;
 }
 
-// === Atualização de entrada na árvore ===
+/**
+ * @brief Updates an existing entry in the B-tree with new data.
+ *
+ * This function searches for an entry in the B-tree based on the key extracted
+ * from `new_entry`, and if found, replaces the existing entry with the new one.
+ * The update is performed in-place within the node and persisted to disk.
+ *
+ * If the key is not found in the current node and the node is not a leaf,
+ * the function recurses into the appropriate child. If the key is not found
+ * anywhere in the tree, the function returns 0 and no update occurs.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle that contains type-specific
+ * information.
+ * @param node_block Block number of the node to start searching from (typically
+ * the root).
+ * @param new_entry Pointer to the entry containing updated data (must contain a
+ * valid key).
+ * @return int 1 if the entry was found and updated, 0 if the key was not found.
+ */
 int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
                  void *new_entry) {
   if (node_block == 0)
@@ -125,7 +360,25 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
   return updated;
 }
 
-// === Escrita e leitura de nós ===
+/**
+ * @brief Serializes and writes a B-tree node to disk.
+ *
+ * This function converts a B-tree node structure into a binary format
+ * and writes it to a specified disk block. The serialization includes:
+ * - A flag indicating whether the node is a leaf.
+ * - The number of entries in the node.
+ * - The array of entries (`entry_size` * (2t - 1)).
+ * - The array of child block pointers (2t).
+ *
+ * The total serialized size must not exceed `BLOCK_SIZE`, and the layout
+ * must be consistent with `btree_read_node` to ensure correct deserialization.
+ *
+ * @param disk Pointer to the opened disk file.
+ * @param handle Pointer to the B-tree handle (used to determine entry size and
+ * degree).
+ * @param block The disk block number where the node will be written.
+ * @param node Pointer to the B-tree node to serialize and write.
+ */
 void btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
                       btree_node_t *node) {
   uint8_t buffer[BLOCK_SIZE] = {0};
@@ -142,6 +395,27 @@ void btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
   write_block(disk, block, buffer, sizeof(buffer));
 }
 
+/**
+ * @brief Reads and deserializes a B-tree node from disk.
+ *
+ * This function reads a B-tree node from the specified disk block and
+ * reconstructs it into a `btree_node_t` structure in memory. The format
+ * must match the layout written by `btree_write_node`, including:
+ * - A flag indicating whether the node is a leaf.
+ * - The number of entries.
+ * - The array of entries.
+ * - The array of child pointers.
+ *
+ * Memory for the node and its arrays is dynamically allocated.
+ * The caller is responsible for freeing the resulting node using
+ * `btree_free_node`.
+ *
+ * @param disk Pointer to the opened disk file.
+ * @param handle Pointer to the B-tree handle (used to determine entry size and
+ * degree).
+ * @param block The disk block number to read from.
+ * @return Pointer to a newly allocated and populated `btree_node_t` structure.
+ */
 btree_node_t *btree_read_node(FILE *disk, btree_handle_t *handle,
                               uint32_t block) {
   uint8_t buffer[BLOCK_SIZE];
@@ -162,13 +436,46 @@ btree_node_t *btree_read_node(FILE *disk, btree_handle_t *handle,
   return node;
 }
 
+/**
+ * @brief Frees the memory allocated for a B-tree node.
+ *
+ * This function deallocates all dynamic memory used by a `btree_node_t`
+ * structure, including:
+ * - The entries array.
+ * - The children array.
+ * - The node structure itself.
+ *
+ * Should be called after reading or allocating a B-tree node to avoid memory
+ * leaks.
+ *
+ * @param node Pointer to the B-tree node to be deallocated.
+ */
 void btree_free_node(btree_node_t *node) {
   free(node->entries);
   free(node->children);
   free(node);
 }
 
-// === Busca genérica ===
+/**
+ * @brief Searches for a key in the B-tree and retrieves the associated entry.
+ *
+ * This function performs a recursive search in the B-tree starting at the node
+ * identified by `node_block`. It uses the comparison function and key extractor
+ * provided in the B-tree handle to locate the entry corresponding to the given
+ * key.
+ *
+ * If the key is found, the corresponding entry is copied into `output`.
+ * If not found, the function returns 0.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle containing type and logic
+ * information.
+ * @param node_block Block number of the node to begin searching from.
+ * @param key The key to search for.
+ * @param output Pointer to a memory location where the found entry will be
+ * copied.
+ * @return int 1 if the key was found, 0 otherwise.
+ */
 int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block,
                  uint32_t key, void *output) {
   if (node_block == 0)
@@ -199,14 +506,27 @@ int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block,
   return btree_search(disk, handle, child_block, key, output);
 }
 
-// === Inserção ===
-static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
-                                 btree_handle_t *handle, btree_node_t *node,
-                                 void *entry);
-static void btree_split_child(FILE *disk, superblock_t *sb,
-                              btree_handle_t *handle, btree_node_t *parent,
-                              int index);
-
+/**
+ * @brief Inserts a new entry into the B-tree.
+ *
+ * This function inserts a new entry into the B-tree associated with the given
+ * `btree_handle_t`. If the tree is empty, it initializes the root node.
+ * If the root node is full, it performs a split and creates a new root,
+ * maintaining the B-tree balance properties. Otherwise, it inserts directly
+ * into the appropriate non-full node.
+ *
+ * Internally, the function may allocate new nodes on disk using the
+ * `allocate_single_block` function and uses helper functions
+ * `btree_insert_nonfull` and `btree_split_child` to perform recursive
+ * insertion and node splitting logic.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock structure, used for block allocation.
+ * @param handle Pointer to the B-tree handle containing metadata and logic
+ * functions.
+ * @param entry Pointer to the entry to be inserted (must match the tree's entry
+ * type).
+ */
 void btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                   void *entry) {
   if (handle->root_block == 0) {
@@ -245,6 +565,26 @@ void btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
   btree_free_node(root);
 }
 
+/**
+ * @brief Inserts an entry into a non-full B-tree node.
+ *
+ * This function is used internally during the insertion process when the
+ * current node has room for at least one more entry (i.e., it is not full). If
+ * the node is a leaf, the entry is inserted at the correct sorted position. If
+ * the node is internal, the function determines the correct child to descend
+ * into, and recursively inserts the entry. If the child is full, it is split
+ * before descending.
+ *
+ * This function ensures that insertions always happen in non-full nodes,
+ * preserving the B-tree invariants.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock (used for block allocation if needed).
+ * @param handle Pointer to the B-tree handle (contains entry size and key
+ * functions).
+ * @param node Pointer to the current node in memory (assumed to be non-full).
+ * @param entry Pointer to the entry to be inserted.
+ */
 static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
                                  btree_handle_t *handle, btree_node_t *node,
                                  void *entry) {
@@ -278,6 +618,30 @@ static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
   }
 }
 
+/**
+ * @brief Splits a full child node in a B-tree.
+ *
+ * This function is called when a child node at position `index` in the `parent`
+ * node is full and cannot accommodate a new entry. It splits the child node
+ * into two separate nodes:
+ * - The left half remains in the original child node.
+ * - The right half is moved to a newly allocated node.
+ * - The middle key is promoted to the parent node.
+ *
+ * After the split, the parent node has one more key and one more child pointer,
+ * and the B-tree invariants are preserved. This operation is crucial for
+ * keeping insertions efficient and balanced in a B-tree.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock (used for allocating a new block for the
+ * new node).
+ * @param handle Pointer to the B-tree handle with configuration and entry
+ * logic.
+ * @param parent Pointer to the parent node in memory where the split key will
+ * be inserted.
+ * @param index Index of the child in the parent’s `children` array that needs
+ * to be split.
+ */
 static void btree_split_child(FILE *disk, superblock_t *sb,
                               btree_handle_t *handle, btree_node_t *parent,
                               int index) {
@@ -324,32 +688,60 @@ static void btree_split_child(FILE *disk, superblock_t *sb,
   btree_free_node(new_node);
 }
 
-// === Função de remoção completa na árvore B ===
-int btree_remove(FILE *disk, btree_handle_t *handle, uint32_t node_block,
-                 uint32_t key);
-
-static void btree_remove_internal(FILE *disk, btree_handle_t *handle,
-                                  uint32_t node_block, uint32_t key,
-                                  int *success);
-static void btree_merge(FILE *disk, btree_handle_t *handle,
-                        btree_node_t *parent, int idx);
-static void btree_fill(FILE *disk, btree_handle_t *handle, btree_node_t *parent,
-                       int idx);
-static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle,
-                                   btree_node_t *parent, int idx);
-static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle,
-                                   btree_node_t *parent, int idx);
-
-int btree_remove(FILE *disk, btree_handle_t *handle, uint32_t node_block,
-                 uint32_t key) {
+/**
+ * @brief Removes an entry from the B-tree based on its key.
+ *
+ * This is the public interface for removing an entry from a B-tree. It
+ * initiates a recursive deletion process starting from the node specified by
+ * `node_block`.
+ *
+ * Internally, the actual logic is handled by `btree_remove_internal`, which
+ * updates the tree structure, balances nodes if necessary, and writes changes
+ * to disk.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock, used for block deallocation if
+ * necessary.
+ * @param handle Pointer to the B-tree handle structure.
+ * @param node_block The block number of the root (or subroot) node to start the
+ * removal.
+ * @param key The key of the entry to remove from the tree.
+ * @return int 1 if the key was found and removed, 0 if the key was not found.
+ */
+int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                 uint32_t node_block, uint32_t key) {
   int success = 0;
-  btree_remove_internal(disk, handle, node_block, key, &success);
+  btree_remove_internal(disk, sb, handle, node_block, key, &success);
   return success;
 }
 
-static void btree_remove_internal(FILE *disk, btree_handle_t *handle,
-                                  uint32_t node_block, uint32_t key,
-                                  int *success) {
+/**
+ * @brief Internal recursive function to remove a key from a B-tree node.
+ *
+ * This function handles all cases of B-tree deletion, including:
+ * - Removing a key from a leaf node.
+ * - Removing a key from an internal node by replacing it with its predecessor
+ * or successor.
+ * - Merging child nodes when neither sibling has enough entries to lend one.
+ * - Borrowing an entry from a sibling when possible to restore minimum
+ * occupancy.
+ *
+ * It also ensures the B-tree invariants are preserved during removal and
+ * interacts with the `btree_merge()` and `btree_fill()` routines which may
+ * trigger block deallocation when a node becomes empty after a merge.
+ *
+ * @param disk Pointer to the open FILE representing the disk image.
+ * @param sb Pointer to the superblock, used for block deallocation if
+ * necessary.
+ * @param handle Pointer to the B-tree handle that contains tree metadata.
+ * @param node_block Block number of the node to inspect and modify.
+ * @param key The key to be removed from the B-tree.
+ * @param success Output parameter set to 1 if the key was found and removed, or
+ * 0 if not found.
+ */
+static void btree_remove_internal(FILE *disk, superblock_t *sb,
+                                  btree_handle_t *handle, uint32_t node_block,
+                                  uint32_t key, int *success) {
   btree_node_t *node = btree_read_node(disk, handle, node_block);
   int i = 0;
   while (i < node->num_entries &&
@@ -377,7 +769,7 @@ static void btree_remove_internal(FILE *disk, btree_handle_t *handle,
             handle->get_key((uint8_t *)pred->entries +
                             (pred->num_entries - 1) * handle->entry_size);
         btree_free_node(pred);
-        btree_remove_internal(disk, handle, node->children[i], pred_key,
+        btree_remove_internal(disk, sb, handle, node->children[i], pred_key,
                               success);
       } else {
         btree_node_t *succ =
@@ -388,11 +780,12 @@ static void btree_remove_internal(FILE *disk, btree_handle_t *handle,
           btree_write_node(disk, handle, node_block, node);
           uint32_t succ_key = handle->get_key(succ->entries);
           btree_free_node(succ);
-          btree_remove_internal(disk, handle, node->children[i + 1], succ_key,
-                                success);
+          btree_remove_internal(disk, sb, handle, node->children[i + 1],
+                                succ_key, success);
         } else {
-          btree_merge(disk, handle, node, i);
-          btree_remove_internal(disk, handle, node->children[i], key, success);
+          btree_merge(disk, sb, handle, node, i);
+          btree_remove_internal(disk, sb, handle, node->children[i], key,
+                                success);
         }
         btree_free_node(succ);
       }
@@ -405,18 +798,44 @@ static void btree_remove_internal(FILE *disk, btree_handle_t *handle,
       btree_node_t *child =
           btree_read_node(disk, handle, node->children[child_idx]);
       if (child->num_entries < handle->min_degree) {
-        btree_fill(disk, handle, node, child_idx);
+        btree_fill(disk, sb, handle, node, child_idx);
         btree_write_node(disk, handle, node_block, node);
       }
       btree_free_node(child);
-      btree_remove_internal(disk, handle, node->children[child_idx], key,
+      btree_remove_internal(disk, sb, handle, node->children[child_idx], key,
                             success);
     }
   }
+
   btree_free_node(node);
 }
 
-static void btree_merge(FILE *disk, btree_handle_t *handle,
+/**
+ * @brief Merges two child nodes of a parent in a B-tree.
+ *
+ * This function merges the child at position `idx` and its immediate right
+ * sibling (at `idx + 1`) into a single node. The entry from the parent node
+ * that separates the two children is moved down into the new merged node.
+ *
+ * This is used during deletion when both child nodes have fewer than the
+ * minimum number of entries and neither can lend an entry. The merge reduces
+ * the height of the tree when applied at the root and maintains balance
+ * otherwise.
+ *
+ * After the merge:
+ * - The parent has one fewer entry and child.
+ * - The left child now contains all entries and children from the right child.
+ * - The right child's block is deallocated.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock (for bitmap updates).
+ * @param handle Pointer to the B-tree handle.
+ * @param parent Pointer to the parent node containing the children to be
+ * merged.
+ * @param idx Index of the left child to merge (merges child[idx] and
+ * child[idx+1]).
+ */
+static void btree_merge(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                         btree_node_t *parent, int idx) {
   btree_node_t *left = btree_read_node(disk, handle, parent->children[idx]);
   btree_node_t *right =
@@ -450,12 +869,35 @@ static void btree_merge(FILE *disk, btree_handle_t *handle,
   btree_write_node(disk, handle, parent->children[idx + 1], right);
   btree_write_node(disk, handle, parent->children[idx], parent);
 
+  deallocate_single_block(disk, sb, parent->children[idx + 1]);
+
   btree_free_node(left);
   btree_free_node(right);
 }
 
-static void btree_fill(FILE *disk, btree_handle_t *handle, btree_node_t *parent,
-                       int idx) {
+/**
+ * @brief Ensures that the child node at a given index has at least the minimum
+ * number of entries.
+ *
+ * This function is called during deletion when the child node at position `idx`
+ * has fewer than the minimum required number of entries. It attempts to
+ * rebalance the tree by:
+ * - Borrowing an entry from the left sibling, if possible.
+ * - Borrowing an entry from the right sibling, if possible.
+ * - Merging with a sibling node if neither sibling can spare an entry.
+ *
+ * This ensures that recursive deletion operations can proceed without violating
+ * B-tree balance invariants.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param sb Pointer to the superblock, used for block deallocation if
+ * necessary.
+ * @param handle Pointer to the B-tree handle.
+ * @param parent Pointer to the parent node that contains the underfull child.
+ * @param idx Index of the underfull child in the parent's `children` array.
+ */
+static void btree_fill(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                       btree_node_t *parent, int idx) {
   if (idx > 0) {
     btree_node_t *left =
         btree_read_node(disk, handle, parent->children[idx - 1]);
@@ -476,9 +918,30 @@ static void btree_fill(FILE *disk, btree_handle_t *handle, btree_node_t *parent,
     }
     btree_free_node(right);
   }
-  btree_merge(disk, handle, parent, (idx > 0) ? idx - 1 : idx);
+  btree_merge(disk, sb, handle, parent, (idx > 0) ? idx - 1 : idx);
 }
 
+/**
+ * @brief Borrows an entry from the left sibling of a B-tree node.
+ *
+ * This function is used during deletion when a child node has fewer than the
+ * minimum number of entries (`t - 1`). If its immediate left sibling has at
+ * least `t` entries, one entry is borrowed to balance the tree.
+ *
+ * The borrowing process:
+ * - The last entry of the left sibling is moved up to the parent.
+ * - The parent entry above the underfull child is moved down into the child.
+ * - If internal nodes are involved, the corresponding child pointer is also
+ * transferred.
+ *
+ * This preserves the B-tree properties without requiring a merge.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle.
+ * @param parent Pointer to the parent node containing both the underfull child
+ * and its left sibling.
+ * @param idx Index of the underfull child in the parent's `children` array.
+ */
 static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle,
                                    btree_node_t *parent, int idx) {
   btree_node_t *child = btree_read_node(disk, handle, parent->children[idx]);
@@ -521,6 +984,28 @@ static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle,
   btree_free_node(sibling);
 }
 
+/**
+ * @brief Borrows an entry from the right sibling of a B-tree node.
+ *
+ * This function is used during deletion when a child node has fewer than the
+ * minimum number of entries (`t - 1`). If its immediate right sibling has at
+ * least `t` entries, one entry is borrowed to balance the tree.
+ *
+ * The borrowing process:
+ * - The first entry of the right sibling is moved up to the parent.
+ * - The parent entry above the underfull child is moved down into the child.
+ * - If internal nodes are involved, the corresponding child pointer is also
+ * transferred.
+ *
+ * This operation ensures continued adherence to B-tree balance properties
+ * without requiring a node merge.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle.
+ * @param parent Pointer to the parent node containing both the underfull child
+ * and its right sibling.
+ * @param idx Index of the underfull child in the parent's `children` array.
+ */
 static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle,
                                    btree_node_t *parent, int idx) {
   btree_node_t *child = btree_read_node(disk, handle, parent->children[idx]);

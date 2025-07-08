@@ -19,7 +19,7 @@ file_t *open_file(FILE *disk, btree_handle_t *inode_tree,
 void close_file(file_t *f) { free(f); }
 
 // === Função seek que define a posição de um arquivo ===
-int bsfs_seek(file_t *f, uint32_t offset) {
+int seek_file(file_t *f, uint32_t offset) {
   if (offset > f->inode.file_size) {
     return -1; // não pode buscar além do fim do arquivo
   }
