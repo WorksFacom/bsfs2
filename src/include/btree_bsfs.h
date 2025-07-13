@@ -366,4 +366,20 @@ btree_node_t *btree_read_node(FILE *disk, btree_handle_t *handle,
  */
 void btree_free_node(btree_node_t *node);
 
+/**
+ * @brief Recursively deallocates all nodes and data blocks in a B-tree.
+ *
+ * This function traverses the entire B-tree starting from the given node block.
+ * It recursively frees child nodes (if any), and also deallocates each data
+ * block referenced by bspan_t entries (only applies to BTREE_TYPE_BSPAN).
+ * Finally, it deallocates the node block itself from the bitmap.
+ *
+ * @param disk Pointer to the filesystem image.
+ * @param sb Pointer to the superblock.
+ * @param handle Pointer to the B-tree handle.
+ * @param node_block Block number of the current node.
+ */
+void btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                          uint32_t node_block);
+
 #endif // BTREE_BSFS_H

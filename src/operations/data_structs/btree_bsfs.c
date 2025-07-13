@@ -17,7 +17,7 @@
 
 /*
  * Static functions prototypes
- * */
+ */
 static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
                                  btree_handle_t *handle, btree_node_t *node,
                                  void *entry);
@@ -1044,4 +1044,43 @@ static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle,
 
   btree_free_node(child);
   btree_free_node(sibling);
+}
+
+/**
+ * @brief Recursively deallocates all nodes and data blocks in a B-tree.
+ *
+ * This function traverses the entire B-tree starting from the given node block.
+ * It recursively frees child nodes (if any), and also deallocates each data
+ * block referenced by bspan_t entries (only applies to BTREE_TYPE_BSPAN).
+ * Finally, it deallocates the node block itself from the bitmap.
+ *
+ * @param disk Pointer to the filesystem image.
+ * @param sb Pointer to the superblock.
+ * @param handle Pointer to the B-tree handle.
+ * @param node_block Block number of the current node.
+ */
+void btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                          uint32_t node_block) {
+  if (node_block == INVALID_BLOCK || node_block == 0)
+    return;
+
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+
+  if (!node->is_leaf) {
+    for (uint32_t i = 0; i <= node->num_entries; i++) {
+      btree_deallocate_all(disk, sb, handle, node->children[i]);
+    }
+  }
+
+  // Deallocate all data blocks if this is a BSPAN tree
+  if (handle->type == BTREE_TYPE_BSPAN) {
+    for (uint32_t i = 0; i < node->num_entries; i++) {
+      bspan_t *entry = (bspan_t *)(node->entries + i * handle->entry_size);
+      deallocate_bspan(disk, sb, entry);
+    }
+  }
+
+  deallocate_single_block(disk, sb, node_block);
+
+  btree_free_node(node);
 }
