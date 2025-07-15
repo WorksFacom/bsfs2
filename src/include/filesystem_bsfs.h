@@ -308,8 +308,7 @@ typedef struct {
  * @brief Represents a directory entry in the BSFS file system.
  *
  * Each directory entry maps a file or subdirectory name to its corresponding
- * inode. The structure supports variable-length entries to allow flexible
- * storage within directory blocks.
+ * inode.
  */
 typedef struct {
   /**
@@ -318,26 +317,27 @@ typedef struct {
   uint32_t inode_number;
 
   /**
-   * Total size in bytes of this directory entry, including metadata and
-   * filename. Allows traversal of variable-length entries within a block.
-   */
-  uint16_t entry_size;
-
-  /**
-   * Number of bytes used by the filename (excluding the null terminator).
-   */
-  uint8_t name_size;
-
-  /**
    * Type of file (e.g., regular file, directory, symbolic link).
    */
   uint8_t file_type;
+
+  /**
+   * Size of the file in bytes (as last known when directory was written).
+   * Used to optimize operations like `ls` without reading full inode.
+   */
+  uint8_t file_size;
+
+  /**
+   * Hash value of the filename, used for indexing or fast lookup.
+   */
+  uint32_t name_hash;
 
   /**
    * Null-terminated character array storing the name of the file or directory.
    * The maximum length is defined by MAX_FILENAME.
    */
   char filename[MAX_FILENAME];
+
 } dir_entry_t;
 
 /**
@@ -361,29 +361,5 @@ typedef struct {
    */
   uint32_t pos;
 } file_t;
-
-/**
- * @struct dir_t
- * @brief Represents an open directory in memory within the BSFS file system.
- *
- * This structure holds a snapshot of a directory's inode and a traversal index.
- * It allows for listing entries, navigating through directory contents, or
- * manipulating directory state during runtime.
- *
- *
- */
-typedef struct {
-  /**
-   * The inode of the directory being accessed. Includes information about the
-   * structure and layout of its contents.
-   */
-  inode_t inode;
-
-  /**
-   * Current index in the directory entry list. Used for sequential traversal
-   * (e.g., readdir-like functionality).
-   */
-  uint32_t dir_index;
-} dir_t;
 
 #endif // FILESYSTEM_BSFS

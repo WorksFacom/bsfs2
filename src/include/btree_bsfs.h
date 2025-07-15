@@ -4,7 +4,8 @@
  *
  * This header defines the core structures and function prototypes for handling
  * B-tree operations over disk blocks in the BSFS system. B-trees are used to
- * organize entries such as inodes, block spans (bspan), and recovery entries.
+ * organize entries such as inodes, block spans (bspan), directory entries and
+ * recovery entries.
  *
  * The API supports creation, insertion, search, update, and removal of entries
  * in the B-tree stored on disk, and allows configuration for different types of
@@ -30,7 +31,8 @@
 typedef enum {
   BTREE_TYPE_INODE,
   BTREE_TYPE_BSPAN,
-  BTREE_TYPE_RECOVERY
+  BTREE_TYPE_RECOVERY,
+  BTREE_TYPE_DIR_ENTRY
 } btree_data_type_t;
 
 /**
@@ -135,6 +137,17 @@ typedef struct {
 } btree_handle_t;
 
 /**
+ * @brief Computes the djb2 hash of a given filename.
+ *
+ * This function implements the classic djb2 hashing algorithm created by
+ * Daniel J. Bernstein. It is fast and widely used for hashing strings.
+ *
+ * @param name The null-terminated string (filename) to be hashed.
+ * @return A 32-bit unsigned integer hash value.
+ */
+uint32_t hash_filename(const char *name);
+
+/**
  * @brief Creates a generic B-tree handle for managing structured data.
  *
  * This function initializes a `btree_handle_t` structure, which serves as the
@@ -193,6 +206,17 @@ btree_handle_t *btree_create_inode_handle(void);
  * @return Pointer to a configured `btree_handle_t` for bspan entries.
  */
 btree_handle_t *btree_create_bspan_handle(void);
+
+/**
+ * @brief Creates a B-tree handle for managing directory entries.
+ *
+ * This function initializes a new `btree_handle_t` configured to operate
+ * on directory entries (`dir_entry_t`) using their hashed filenames as keys.
+ *
+ * @return A pointer to a newly allocated B-tree handle configured for
+ *         directory entries.
+ */
+btree_handle_t *btree_create_dir_entry_handle();
 
 /**
  * @brief Creates a B-tree handle for managing recovery entries.
@@ -302,7 +326,7 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
  * @return int 1 if the key was found and removed, 0 if the key was not found.
  */
 int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                 uint32_t node_block, uint32_t key);
+                 uint32_t key);
 
 /**
  * @brief Serializes and writes a B-tree node to disk.

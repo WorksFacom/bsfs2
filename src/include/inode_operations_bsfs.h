@@ -64,4 +64,30 @@ int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode);
 int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                  uint32_t inode_number);
 
+/**
+ * @brief Finds the next available inode number by scanning the inode B-tree.
+ *
+ * This function scans the inode tree to find the highest inode number in use
+ * and returns the next available one. This ensures uniqueness of inode numbers
+ * without reusing deleted ones.
+ *
+ * @param disk Pointer to the disk file.
+ * @param inode_tree Pointer to the B-tree handle for inodes.
+ * @return The next available (unused) inode number.
+ */
+uint32_t get_next_inode_number(FILE *disk, btree_handle_t *inode_tree);
+
+/**
+ * @brief Checks if an inode with the given number exists in the inode B-tree.
+ *
+ * This function performs a lookup in the inode B-tree to determine whether
+ * an inode with the specified number is currently present in the file system.
+ *
+ * @param disk Pointer to the file representing the disk.
+ * @param inode_tree Pointer to the B-tree handle managing inodes.
+ * @param inode_number The inode number to check for existence.
+ * @return 1 if the inode exists, 0 if it does not.
+ */
+int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
+
 #endif // INODE_OPERATIONS_H

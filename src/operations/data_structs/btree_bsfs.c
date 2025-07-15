@@ -217,6 +217,78 @@ btree_handle_t *btree_create_bspan_handle() {
 }
 
 /**
+ * @brief Computes the djb2 hash of a given filename.
+ *
+ * This function implements the classic djb2 hashing algorithm created by
+ * Daniel J. Bernstein. It is fast and widely used for hashing strings.
+ *
+ * @param name The null-terminated string (filename) to be hashed.
+ * @return A 32-bit unsigned integer hash value.
+ */
+uint32_t hash_filename(const char *name) {
+  uint32_t hash = 5381;
+  int c;
+  while ((c = *name++)) {
+    hash = ((hash << 5) + hash) + c;
+  }
+  return hash;
+}
+
+/**
+ * @brief Retrieves the key (hash of the filename) for a directory entry.
+ *
+ * This function is used by the B-tree infrastructure to extract the
+ * comparison key from a directory entry, which is the result of hashing
+ * its filename with `hash_filename`.
+ *
+ * @param entry Pointer to the `dir_entry_t` structure.
+ * @return The hash of the filename as a 32-bit unsigned integer.
+ */
+uint32_t get_dir_entry_key(const void *entry) {
+  return hash_filename(((const dir_entry_t *)entry)->filename);
+}
+
+/**
+ * @brief Compares two directory entries by filename hash.
+ *
+ * This function compares two `dir_entry_t` entries based on the hash of their
+ * filenames using the djb2 algorithm. If the hashes are equal, it falls back
+ * to a full `strcmp` to resolve hash collisions.
+ *
+ * @param a Pointer to the first `dir_entry_t`.
+ * @param b Pointer to the second `dir_entry_t`.
+ * @return -1 if a < b, 1 if a > b, 0 if equal.
+ */
+int compare_dir_entry(const void *a, const void *b) {
+  uint32_t ha = get_dir_entry_key(a);
+  uint32_t hb = get_dir_entry_key(b);
+
+  if (ha < hb)
+    return -1;
+  if (ha > hb)
+    return 1;
+
+  // In case of hash collision, fallback to full string comparison
+  const dir_entry_t *ea = (const dir_entry_t *)a;
+  const dir_entry_t *eb = (const dir_entry_t *)b;
+  return strcmp(ea->filename, eb->filename);
+}
+
+/**
+ * @brief Creates a B-tree handle for managing directory entries.
+ *
+ * This function initializes a new `btree_handle_t` configured to operate
+ * on directory entries (`dir_entry_t`) using their hashed filenames as keys.
+ *
+ * @return A pointer to a newly allocated B-tree handle configured for
+ *         directory entries.
+ */
+btree_handle_t *btree_create_dir_entry_handle() {
+  return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(dir_entry_t),
+                             compare_dir_entry, get_dir_entry_key);
+}
+
+/**
  * @brief Extracts the key from a recovery entry.
  *
  * This function casts the input pointer to a `rec_entry_t` and returns
@@ -703,15 +775,13 @@ static void btree_split_child(FILE *disk, superblock_t *sb,
  * @param sb Pointer to the superblock, used for block deallocation if
  * necessary.
  * @param handle Pointer to the B-tree handle structure.
- * @param node_block The block number of the root (or subroot) node to start the
- * removal.
  * @param key The key of the entry to remove from the tree.
  * @return int 1 if the key was found and removed, 0 if the key was not found.
  */
 int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                 uint32_t node_block, uint32_t key) {
+                 uint32_t key) {
   int success = 0;
-  btree_remove_internal(disk, sb, handle, node_block, key, &success);
+  btree_remove_internal(disk, sb, handle, handle->root_block, key, &success);
   return success;
 }
 

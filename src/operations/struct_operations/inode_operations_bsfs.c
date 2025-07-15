@@ -86,3 +86,56 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
     return 0;
   return btree_remove(disk, sb, handle, handle->root_block, inode_number);
 }
+
+/**
+ * @brief Finds the next available inode number by scanning the inode B-tree.
+ *
+ * This function scans the inode tree to find the highest inode number in use
+ * and returns the next available one. This ensures uniqueness of inode numbers
+ * without reusing deleted ones.
+ *
+ * @param disk Pointer to the disk file.
+ * @param inode_tree Pointer to the B-tree handle for inodes.
+ * @return The next available (unused) inode number.
+ */
+uint32_t get_next_inode_number(FILE *disk, btree_handle_t *inode_tree) {
+  if (!inode_tree || inode_tree->root_block == 0)
+    return 1;
+
+  uint32_t max_inode = 0;
+  btree_node_t *node =
+      btree_read_node(disk, inode_tree, inode_tree->root_block);
+
+  while (!node->is_leaf) {
+    uint32_t last_child = node->children[node->num_entries];
+    btree_free_node(node);
+    node = btree_read_node(disk, inode_tree, last_child);
+  }
+
+  if (node->num_entries > 0) {
+    inode_t *entries = (inode_t *)node->entries;
+    inode_t *last_inode = &entries[node->num_entries - 1];
+    max_inode = last_inode->inode_number;
+  }
+
+  btree_free_node(node);
+  return max_inode + 1;
+}
+
+/**
+ * @brief Checks if an inode with the given number exists in the inode B-tree.
+ *
+ * This function performs a lookup in the inode B-tree to determine whether
+ * an inode with the specified number is currently present in the file system.
+ *
+ * @param disk Pointer to the file representing the disk.
+ * @param inode_tree Pointer to the B-tree handle managing inodes.
+ * @param inode_number The inode number to check for existence.
+ * @return 1 if the inode exists, 0 if it does not.
+ */
+int inode_exists(FILE *disk, btree_handle_t *inode_tree,
+                 uint32_t inode_number) {
+  inode_t temp;
+  return btree_search(disk, inode_tree, inode_tree->root_block, inode_number,
+                      &temp);
+}
