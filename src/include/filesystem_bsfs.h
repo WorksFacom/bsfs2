@@ -89,6 +89,9 @@
  */
 #define INVALID_BLOCK 0xFFFFFFFF
 
+#define FILE_TYPE_DIR 1
+#define FILE_TYPE_FILE 0
+
 /**
  * @struct superblock_t
  * @brief Represents the superblock of the BSFS file system.

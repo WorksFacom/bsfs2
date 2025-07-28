@@ -1,20 +1,68 @@
-#ifndef DIRECTORY_OPERATIONS
-#define DIRECTORY_OPERATIONS
+/**
+ * @file directory_operations_bsfs.h
+ * @brief High-level operations for directory management in the BSFS file
+ * system.
+ *
+ * This header defines functions to create, delete, rename, and move directories
+ * and files by manipulating their directory entries and associated inodes.
+ */
 
-#include "btree_bsfs.h"
+#ifndef DIRECTORY_OPERATIONS_BSFS_H
+#define DIRECTORY_OPERATIONS_BSFS_H
+
+#include "dir_entry_operations_bsfs.h"
 #include "filesystem_bsfs.h"
 #include "inode_operations_bsfs.h"
+#include "path_utils_bsfs.h"
 
 /**
- * @struct dir_t
- * @brief Represents an open directory in memory in the BSFS file system.
+ * @brief Creates a new directory at the given path.
  *
- * This structure is used to manage the iteration and manipulation of
- * directory entries during read operations like readdir().
+ * This function allocates a new inode of type directory and inserts it as an
+ * entry into the parent directory determined by the path.
+ *
+ * @param disk Pointer to the disk file.
+ * @param sb Pointer to the loaded superblock.
+ * @param path Absolute or relative path for the new directory.
+ * @param cwd Current working directory (for resolving relative paths).
+ * @return 0 on success, -1 on error.
  */
-typedef struct {
-  inode_t inode;          ///< The inode of the directory
-  uint32_t current_index; ///< The logical position of the next entry to read
-  btree_handle_t *btree;  ///< Handle to the B-tree storing directory entries
-} dir_t;
-#endif // !DIRECTORY_OPERATIONS
+int create_directory(FILE *disk, superblock_t *sb, const char *path,
+                     dir_t *cwd);
+
+/**
+ * @brief Deletes a directory at the given path, if it is empty.
+ *
+ * This function removes the directory entry and deallocates the associated
+ * inode.
+ *
+ * @param disk Pointer to the disk file.
+ * @param sb Pointer to the loaded superblock.
+ * @param path Absolute or relative path of the directory to remove.
+ * @param cwd Current working directory (for resolving relative paths).
+ * @return 0 on success, -1 if the directory is not empty or cannot be removed.
+ */
+int remove_directory(FILE *disk, superblock_t *sb, const char *path,
+                     dir_t *cwd);
+
+/**
+ * @brief Moves or renames a directory entry from one directory to another.
+ *
+ * This function removes an existing directory entry from the source directory
+ * and inserts it into the destination directory. The entry can also be renamed
+ * in the process.
+ *
+ * @param disk Pointer to the disk file.
+ * @param sb Pointer to the superblock.
+ * @param src_dir Pointer to the source directory.
+ * @param src_name Name of the entry to move (existing name).
+ * @param dest_dir Pointer to the destination directory.
+ * @param dest_name New name for the entry in the destination (can be same as
+ * src_name).
+ * @return 0 on success, -1 on failure.
+ */
+int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
+                   const char *src_name, dir_t *dest_dir,
+                   const char *dest_name);
+
+#endif // DIRECTORY_OPERATIONS_BSFS_H

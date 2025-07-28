@@ -43,14 +43,14 @@ int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number,
  * @param handle Pointer to the B-tree handle for inode management.
  * @param inode Pointer to the inode to be inserted.
  */
-void insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                  const inode_t *inode) {
+int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                 const inode_t *inode) {
   if (!handle || !inode)
-    return;
+    return -1;
 
   inode_t copy;
   memcpy(&copy, inode, sizeof(inode_t));
-  btree_insert(disk, sb, handle, &copy);
+  return btree_insert(disk, sb, handle, &copy);
 }
 
 /**
@@ -63,7 +63,7 @@ void insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
  */
 int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode) {
   if (!handle || !inode)
-    return 0;
+    return -1;
 
   return btree_update(disk, handle, handle->root_block, (void *)inode);
 }
@@ -83,8 +83,8 @@ int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode) {
 int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                  uint32_t inode_number) {
   if (!handle || handle->type != BTREE_TYPE_INODE)
-    return 0;
-  return btree_remove(disk, sb, handle, handle->root_block, inode_number);
+    return -1;
+  return btree_remove(disk, sb, handle, inode_number);
 }
 
 /**
