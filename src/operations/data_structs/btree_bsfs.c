@@ -18,12 +18,12 @@
 /*
  * Static functions prototypes
  */
-static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
-                                 btree_handle_t *handle, btree_node_t *node,
-                                 void *entry);
-static void btree_split_child(FILE *disk, superblock_t *sb,
-                              btree_handle_t *handle, btree_node_t *parent,
-                              int index);
+static int btree_insert_nonfull(FILE *disk, superblock_t *sb,
+                                btree_handle_t *handle, btree_node_t *node,
+                                void *entry);
+static int btree_split_child(FILE *disk, superblock_t *sb,
+                             btree_handle_t *handle, btree_node_t *parent,
+                             int index);
 static void btree_remove_internal(FILE *disk, superblock_t *sb,
                                   btree_handle_t *handle, uint32_t node_block,
                                   uint32_t key, int *success);
@@ -433,40 +433,42 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
 }
 
 /**
- * @brief Serializes and writes a B-tree node to disk.
+ * @brief Writes a B-tree node to disk.
  *
- * This function converts a B-tree node structure into a binary format
- * and writes it to a specified disk block. The serialization includes:
- * - A flag indicating whether the node is a leaf.
- * - The number of entries in the node.
- * - The array of entries (`entry_size` * (2t - 1)).
- * - The array of child block pointers (2t).
+ * Serializes the in-memory B-tree node structure into a fixed-size block
+ * and writes it to the specified block number on disk.
  *
- * The total serialized size must not exceed `BLOCK_SIZE`, and the layout
- * must be consistent with `btree_read_node` to ensure correct deserialization.
- *
- * @param disk Pointer to the opened disk file.
- * @param handle Pointer to the B-tree handle (used to determine entry size and
- * degree).
- * @param block The disk block number where the node will be written.
- * @param node Pointer to the B-tree node to serialize and write.
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle containing entry configuration.
+ * @param block The block number where the node should be written.
+ * @param node Pointer to the in-memory B-tree node structure.
+ * @return 0 on success, -1 on failure.
  */
-void btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
-                      btree_node_t *node) {
+int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
+                     btree_node_t *node) {
   uint8_t buffer[BLOCK_SIZE] = {0};
   size_t offset = 0;
+
   memcpy(buffer + offset, &node->is_leaf, sizeof(uint8_t));
   offset += sizeof(uint8_t);
+
   memcpy(buffer + offset, &node->num_entries, sizeof(uint32_t));
   offset += sizeof(uint32_t);
+
   memcpy(buffer + offset, node->entries,
          handle->entry_size * (2 * handle->min_degree - 1));
   offset += handle->entry_size * (2 * handle->min_degree - 1);
+
   memcpy(buffer + offset, node->children,
          sizeof(uint32_t) * (2 * handle->min_degree));
-  write_block(disk, block, buffer, sizeof(buffer));
-}
 
+  if (write_block(disk, block, buffer, sizeof(buffer)) != 0) {
+    fprintf(stderr, "Failed to write B-tree node at block %u\n", block);
+    return -1;
+  }
+
+  return 0;
+}
 /**
  * @brief Reads and deserializes a B-tree node from disk.
  *
@@ -599,42 +601,86 @@ int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block,
  * @param entry Pointer to the entry to be inserted (must match the tree's entry
  * type).
  */
-void btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                  void *entry) {
+int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                 void *entry) {
   if (handle->root_block == 0) {
     btree_node_t *root = malloc(sizeof(btree_node_t));
+    if (!root)
+      return -1;
     root->is_leaf = 1;
     root->num_entries = 0;
     root->entries = calloc(2 * handle->min_degree - 1, handle->entry_size);
     root->children = calloc(2 * handle->min_degree, sizeof(uint32_t));
+    if (!root->entries || !root->children) {
+      btree_free_node(root);
+      return -1;
+    }
 
     handle->root_block = allocate_single_block(disk, sb);
-    btree_insert_nonfull(disk, sb, handle, root, entry);
-    btree_write_node(disk, handle, handle->root_block, root);
+    if (handle->root_block == INVALID_BLOCK) {
+      btree_free_node(root);
+      return -1;
+    }
+
+    if (btree_insert_nonfull(disk, sb, handle, root, entry) != 0 ||
+        btree_write_node(disk, handle, handle->root_block, root) != 0) {
+      btree_free_node(root);
+      return -1;
+    }
+
     btree_free_node(root);
-    return;
+    return 0;
   }
 
   btree_node_t *root = btree_read_node(disk, handle, handle->root_block);
+  if (!root)
+    return -1;
+
   if (root->num_entries == 2 * handle->min_degree - 1) {
     btree_node_t *new_root = malloc(sizeof(btree_node_t));
+    if (!new_root) {
+      btree_free_node(root);
+      return -1;
+    }
     new_root->is_leaf = 0;
     new_root->num_entries = 0;
     new_root->entries = calloc(2 * handle->min_degree - 1, handle->entry_size);
     new_root->children = calloc(2 * handle->min_degree, sizeof(uint32_t));
+    if (!new_root->entries || !new_root->children) {
+      btree_free_node(new_root);
+      btree_free_node(root);
+      return -1;
+    }
 
     uint32_t new_root_block = allocate_single_block(disk, sb);
+    if (new_root_block == INVALID_BLOCK) {
+      btree_free_node(new_root);
+      btree_free_node(root);
+      return -1;
+    }
+
     new_root->children[0] = handle->root_block;
-    btree_split_child(disk, sb, handle, new_root, 0);
-    btree_insert_nonfull(disk, sb, handle, new_root, entry);
-    btree_write_node(disk, handle, new_root_block, new_root);
-    btree_free_node(new_root);
+
+    if (btree_split_child(disk, sb, handle, new_root, 0) != 0 ||
+        btree_insert_nonfull(disk, sb, handle, new_root, entry) != 0 ||
+        btree_write_node(disk, handle, new_root_block, new_root) != 0) {
+      btree_free_node(new_root);
+      btree_free_node(root);
+      return -1;
+    }
+
     handle->root_block = new_root_block;
+    btree_free_node(new_root);
   } else {
-    btree_insert_nonfull(disk, sb, handle, root, entry);
-    btree_write_node(disk, handle, handle->root_block, root);
+    if (btree_insert_nonfull(disk, sb, handle, root, entry) != 0 ||
+        btree_write_node(disk, handle, handle->root_block, root) != 0) {
+      btree_free_node(root);
+      return -1;
+    }
   }
+
   btree_free_node(root);
+  return 0;
 }
 
 /**
@@ -657,9 +703,9 @@ void btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
  * @param node Pointer to the current node in memory (assumed to be non-full).
  * @param entry Pointer to the entry to be inserted.
  */
-static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
-                                 btree_handle_t *handle, btree_node_t *node,
-                                 void *entry) {
+static int btree_insert_nonfull(FILE *disk, superblock_t *sb,
+                                btree_handle_t *handle, btree_node_t *node,
+                                void *entry) {
   int i = node->num_entries - 1;
   uint8_t *entries = node->entries;
   uint32_t key = handle->get_key(entry);
@@ -672,21 +718,34 @@ static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
     }
     memcpy(entries + (i + 1) * handle->entry_size, entry, handle->entry_size);
     node->num_entries++;
+    return 0;
   } else {
     while (i >= 0 && handle->cmp(&key, entries + i * handle->entry_size) < 0)
-      i--;
+      i++;
     i++;
     btree_node_t *child = btree_read_node(disk, handle, node->children[i]);
+    if (!child)
+      return -1;
+
     if (child->num_entries == 2 * handle->min_degree - 1) {
-      btree_split_child(disk, sb, handle, node, i);
+      if (btree_split_child(disk, sb, handle, node, i) != 0) {
+        btree_free_node(child);
+        return -1;
+      }
       if (handle->cmp(&key, entries + i * handle->entry_size) > 0)
         i++;
       btree_free_node(child);
       child = btree_read_node(disk, handle, node->children[i]);
+      if (!child)
+        return -1;
     }
-    btree_insert_nonfull(disk, sb, handle, child, entry);
-    btree_write_node(disk, handle, node->children[i], child);
+
+    int result = btree_insert_nonfull(disk, sb, handle, child, entry);
+    if (result == 0)
+      result = btree_write_node(disk, handle, node->children[i], child);
+
     btree_free_node(child);
+    return result;
   }
 }
 
@@ -714,16 +773,34 @@ static void btree_insert_nonfull(FILE *disk, superblock_t *sb,
  * @param index Index of the child in the parent’s `children` array that needs
  * to be split.
  */
-static void btree_split_child(FILE *disk, superblock_t *sb,
-                              btree_handle_t *handle, btree_node_t *parent,
-                              int index) {
+static int btree_split_child(FILE *disk, superblock_t *sb,
+                             btree_handle_t *handle, btree_node_t *parent,
+                             int index) {
   btree_node_t *child = btree_read_node(disk, handle, parent->children[index]);
+  if (!child)
+    return -1;
+
   btree_node_t *new_node = malloc(sizeof(btree_node_t));
+  if (!new_node) {
+    btree_free_node(child);
+    return -1;
+  }
   new_node->is_leaf = child->is_leaf;
   new_node->num_entries = handle->min_degree - 1;
   new_node->entries = calloc(2 * handle->min_degree - 1, handle->entry_size);
   new_node->children = calloc(2 * handle->min_degree, sizeof(uint32_t));
+  if (!new_node->entries || !new_node->children) {
+    btree_free_node(child);
+    btree_free_node(new_node);
+    return -1;
+  }
+
   uint32_t new_block = allocate_single_block(disk, sb);
+  if (new_block == INVALID_BLOCK) {
+    btree_free_node(child);
+    btree_free_node(new_node);
+    return -1;
+  }
 
   memcpy(new_node->entries,
          (char *)child->entries + handle->min_degree * handle->entry_size,
@@ -753,11 +830,13 @@ static void btree_split_child(FILE *disk, superblock_t *sb,
 
   parent->num_entries++;
 
-  btree_write_node(disk, handle, parent->children[index], child);
-  btree_write_node(disk, handle, new_block, new_node);
+  int ok = 0;
+  ok |= btree_write_node(disk, handle, parent->children[index], child);
+  ok |= btree_write_node(disk, handle, new_block, new_node);
 
   btree_free_node(child);
   btree_free_node(new_node);
+  return (ok == 0) ? 0 : -1;
 }
 
 /**

@@ -36,8 +36,8 @@ int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number,
  * @param handle Pointer to the B-tree handle for inode management.
  * @param inode Pointer to the inode to be inserted.
  */
-void insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                  const inode_t *inode);
+int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                 const inode_t *inode);
 
 /**
  * @brief Updates an existing inode in the B-tree.

@@ -256,8 +256,8 @@ btree_handle_t *btree_create_rec_entry_handle(void);
  * @param entry Pointer to the entry to be inserted (must match the tree's entry
  * type).
  */
-void btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                  void *entry);
+int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                 void *entry);
 
 /**
  * @brief Searches for a key in the B-tree and retrieves the associated entry.
@@ -329,26 +329,19 @@ int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                  uint32_t key);
 
 /**
- * @brief Serializes and writes a B-tree node to disk.
+ * @brief Writes a B-tree node to disk.
  *
- * This function converts a B-tree node structure into a binary format
- * and writes it to a specified disk block. The serialization includes:
- * - A flag indicating whether the node is a leaf.
- * - The number of entries in the node.
- * - The array of entries (`entry_size` * (2t - 1)).
- * - The array of child block pointers (2t).
+ * Serializes the in-memory B-tree node structure into a fixed-size block
+ * and writes it to the specified block number on disk.
  *
- * The total serialized size must not exceed `BLOCK_SIZE`, and the layout
- * must be consistent with `btree_read_node` to ensure correct deserialization.
- *
- * @param disk Pointer to the opened disk file.
- * @param handle Pointer to the B-tree handle (used to determine entry size and
- * degree).
- * @param block The disk block number where the node will be written.
- * @param node Pointer to the B-tree node to serialize and write.
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle containing entry configuration.
+ * @param block The block number where the node should be written.
+ * @param node Pointer to the in-memory B-tree node structure.
+ * @return 0 on success, -1 on failure.
  */
-void btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
-                      btree_node_t *node);
+int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
+                     btree_node_t *node);
 
 /**
  * @brief Reads and deserializes a B-tree node from disk.

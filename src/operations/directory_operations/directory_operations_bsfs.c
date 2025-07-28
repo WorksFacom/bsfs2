@@ -1,137 +1,317 @@
+/**
+ * @file directory_operations_bsfs.c
+ * @brief Implementation of high-level directory operations for BSFS.
+ *
+ * This module handles directory creation, deletion, and movement of files and
+ * subdirectories between parent directories. It relies on directory entry
+ * manipulation and inode handling provided by supporting modules.
+ */
+
 #include "../../include/directory_operations_bsfs.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /**
- * @brief Opens a directory given its inode number.
+ * @brief Creates a new directory at the given path.
  *
- * Loads the directory inode from the inode B-tree, initializes a dir_t
- * structure and prepares the B-tree handle for reading directory entries.
+ * This function allocates a new inode of type directory and inserts it
+ * into the parent directory. It also initializes the new directory
+ * with "." and ".." entries pointing to itself and its parent.
  *
  * @param disk Pointer to the open filesystem image.
- * @param inode_tree Pointer to the B-tree containing inodes.
- * @param inode_number The inode number of the directory to open.
- * @return Pointer to an allocated dir_t on success, NULL on failure.
- */
-dir_t *open_dir(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
-  inode_t inode;
-  if (!read_inode(disk, inode_tree, inode_number, &inode)) {
-    fprintf(stderr, "Failed to load directory inode.\n");
-    return NULL;
-  }
-
-  if (inode.file_type != 1) { // 1 = directory
-    fprintf(stderr, "Inode is not a directory.\n");
-    return NULL;
-  }
-
-  dir_t *dir = malloc(sizeof(dir_t));
-  if (!dir) {
-    fprintf(stderr, "Failed to allocate memory for dir_t.\n");
-    return NULL;
-  }
-
-  dir->inode = inode;
-  dir->current_index = 0;
-  dir->btree = btree_create_dir_entry_handle();
-  dir->btree->root_block = inode.btree_root;
-
-  return dir;
-}
-
-/**
- * @brief Closes a directory and frees allocated resources.
- *
- * This function deallocates the memory used by the dir_t structure
- * and its associated B-tree handle.
- *
- * @param dir Pointer to the open directory to be closed.
- * @return 0 on success.
- */
-int close_dir(dir_t *dir) {
-  if (!dir)
-    return -1;
-
-  if (dir->btree) {
-    free(dir->btree);
-  }
-
-  free(dir);
-  return 0;
-}
-
-/**
- * @brief Adds a new entry to a directory.
- *
- * This function inserts a new dir_entry_t into the directory's B-tree
- * structure.
- *
- * @param disk Pointer to the filesystem image file.
  * @param sb Pointer to the loaded superblock.
- * @param dir Pointer to the open directory structure.
- * @param entry Pointer to the directory entry to insert.
- * @return 0 on success, -1 if an entry with the same name already exists.
+ * @param path Absolute or relative path for the new directory.
+ * @param cwd Pointer to the current working directory (used for relative
+ * resolution).
+ * @return 0 on success, -1 on error.
  */
-int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
-                  dir_entry_t *entry) {
+int create_directory(FILE *disk, superblock_t *sb, const char *path,
+                     dir_t *cwd) {
+  dir_t parent;
+  char name[MAX_FILENAME];
+
+  // 1. Resolve the parent directory and final component
+  if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
+    fprintf(stderr, "Failed to resolve path: %s\n", path);
+    return -1;
+  }
+
+  // 2. Check if an entry with the same name already exists
   dir_entry_t existing;
-  uint32_t hash = hash_filename(entry->filename);
-
-  if (btree_search(disk, dir->btree, dir->inode.btree_root, hash, &existing)) {
-    fprintf(stderr, "Directory entry '%s' already exists.\n", entry->filename);
+  if (lookup_dir_entry(disk, sb, &parent, name, &existing) == 0) {
+    fprintf(stderr, "Entry already exists: %s\n", name);
     return -1;
   }
 
-  btree_insert(disk, sb, dir->btree, entry);
+  // 3. Prepare inode handle and allocate inode number
+  btree_handle_t *inode_tree = btree_create_inode_handle();
+  uint32_t new_inode_number = get_next_inode_number(disk, inode_tree);
+  if (new_inode_number == INVALID_BLOCK) {
+    fprintf(stderr, "Failed to allocate new inode number.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  inode_t new_inode;
+  memset(&new_inode, 0, sizeof(inode_t));
+  new_inode.inode_number = new_inode_number;
+  new_inode.file_type = FILE_TYPE_DIR;
+  new_inode.permissions = 0755;
+  new_inode.links_count = 1;
+  new_inode.created_at = new_inode.modified_at = new_inode.accessed_at =
+      (uint32_t)time(NULL);
+
+  // 4. Insert the inode into the inode tree
+  if (insert_inode(disk, sb, inode_tree, &new_inode) != 0) {
+    fprintf(stderr, "Failed to insert new inode.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 5. Create "." entry pointing to self
+  dir_entry_t dot;
+  memset(&dot, 0, sizeof(dir_entry_t));
+  dot.inode_number = new_inode_number;
+  dot.file_type = FILE_TYPE_DIR;
+  dot.file_size = 0;
+  strncpy(dot.filename, ".", MAX_FILENAME);
+
+  dir_t new_dir;
+  new_dir.inode = new_inode;
+  new_dir.current_index = 0;
+
+  if (add_dir_entry(disk, sb, &new_dir, &dot) != 0) {
+    fprintf(stderr, "Failed to add '.' entry.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 6. Create ".." entry pointing to parent
+  dir_entry_t dotdot;
+  memset(&dotdot, 0, sizeof(dir_entry_t));
+  dotdot.inode_number = parent.inode.inode_number;
+  dotdot.file_type = FILE_TYPE_DIR;
+  dotdot.file_size = 0;
+  strncpy(dotdot.filename, "..", MAX_FILENAME);
+
+  if (add_dir_entry(disk, sb, &new_dir, &dotdot) != 0) {
+    fprintf(stderr, "Failed to add '..' entry.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 7. Add this new directory as an entry to the parent
+  dir_entry_t entry;
+  memset(&entry, 0, sizeof(dir_entry_t));
+  entry.inode_number = new_inode_number;
+  entry.file_type = FILE_TYPE_DIR;
+  entry.file_size = 0;
+  strncpy(entry.filename, name, MAX_FILENAME);
+  entry.filename[MAX_FILENAME - 1] = '\0';
+
+  if (add_dir_entry(disk, sb, &parent, &entry) != 0) {
+    fprintf(stderr, "Failed to add directory entry to parent.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  free(inode_tree);
   return 0;
 }
 
 /**
- * @brief Removes an entry from a directory by name.
+ * @brief Removes an empty directory at the specified path.
  *
- * Looks up the entry in the B-tree and removes it if found.
+ * This function checks whether the directory exists and is empty, then removes
+ * it from the parent directory and deletes its inode.
  *
- * @param disk Pointer to the filesystem image file.
+ * @param disk Pointer to the open filesystem image.
  * @param sb Pointer to the loaded superblock.
- * @param dir Pointer to the open directory structure.
- * @param filename Name of the entry to remove.
- * @return 0 on success, -1 if the entry was not found.
+ * @param path Absolute or relative path to the directory to remove.
+ * @param cwd Current working directory for resolving relative paths.
+ * @return 0 on success, -1 on failure.
  */
-int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
-                     const char *filename) {
-  uint32_t hash = hash_filename(filename);
 
-  dir_entry_t found;
-  if (!btree_search(disk, dir->btree, dir->inode.btree_root, hash, &found)) {
-    fprintf(stderr, "Directory entry '%s' not found.\n", filename);
+int remove_directory(FILE *disk, superblock_t *sb, const char *path,
+                     dir_t *cwd) {
+  dir_t parent;
+  char name[MAX_FILENAME];
+
+  // 1. Resolve parent and name
+  if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
+    fprintf(stderr, "Path resolution failed: %s\n", path);
     return -1;
   }
 
-  return btree_remove(disk, sb, dir->btree, hash);
+  // 2. Lookup entry
+  dir_entry_t entry;
+  if (lookup_dir_entry(disk, sb, &parent, name, &entry) != 0) {
+    fprintf(stderr, "Directory entry not found: %s\n", name);
+    return -1;
+  }
+
+  if (entry.file_type != FILE_TYPE_DIR) {
+    fprintf(stderr, "Target is not a directory.\n");
+    return -1;
+  }
+
+  // 3. Load inode
+  btree_handle_t *inode_tree = btree_create_inode_handle();
+  inode_t dir_inode;
+  if (read_inode(disk, inode_tree, entry.inode_number, &dir_inode) != 0) {
+    fprintf(stderr, "Failed to read directory inode.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 4. Open the directory and check if it's empty
+  dir_t dir;
+  dir.inode = dir_inode;
+  dir.current_index = 0;
+
+  btree_handle_t *dir_tree = btree_create_dir_entry_handle();
+  int count = 0;
+  dir_entry_t temp;
+
+  while (read_dir_entry(disk, sb, &dir, dir_tree, &temp) == 0) {
+    if (strcmp(temp.filename, ".") != 0 && strcmp(temp.filename, "..") != 0) {
+      count++;
+      break;
+    }
+  }
+
+  free(dir_tree);
+
+  if (count > 0) {
+    fprintf(stderr, "Directory is not empty.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 5. Remove directory entry from parent
+  if (remove_dir_entry(disk, sb, &parent, name) != 0) {
+    fprintf(stderr, "Failed to remove directory entry from parent.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  // 6. Remove inode
+  if (remove_inode(disk, sb, inode_tree, entry.inode_number) != 0) {
+    fprintf(stderr, "Failed to remove inode.\n");
+    free(inode_tree);
+    return -1;
+  }
+
+  free(inode_tree);
+  return 0;
 }
 
 /**
- * @brief Updates an existing directory entry in the B-tree.
+ * @brief Moves or renames a directory entry from one directory to another.
  *
- * This function searches for an existing directory entry using the hash of the
- * filename and replaces its contents with the new data.
+ * This function removes an existing directory entry from the source directory
+ * and inserts it into the destination directory. The entry can also be renamed
+ * in the process.
  *
- * @param disk Pointer to the filesystem image.
+ * @param disk Pointer to the disk file.
  * @param sb Pointer to the superblock.
- * @param dir Pointer to the open directory structure.
- * @param entry Pointer to the updated directory entry.
- * @return 0 on success, -1 if the entry was not found.
+ * @param src_dir Pointer to the source directory.
+ * @param src_name Name of the entry to move (existing name).
+ * @param dest_dir Pointer to the destination directory.
+ * @param dest_name New name for the entry in the destination (can be same as
+ * src_name).
+ * @return 0 on success, -1 on failure.
  */
-int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
-                     dir_entry_t *entry) {
-  uint32_t hash = hash_filename(entry->filename);
-
-  dir_entry_t existing;
-  if (!btree_search(disk, dir->btree, dir->inode.btree_root, hash, &existing)) {
-    fprintf(stderr, "Cannot update: entry '%s' not found in directory.\n",
-            entry->filename);
+int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
+                   const char *src_name, dir_t *dest_dir,
+                   const char *dest_name) {
+  // 1. Lookup entry in source
+  dir_entry_t entry;
+  if (lookup_dir_entry(disk, sb, src_dir, src_name, &entry) != 0) {
+    fprintf(stderr, "Entry '%s' not found in source directory.\n", src_name);
     return -1;
   }
 
-  return btree_update(disk, dir->btree, dir->inode.btree_root, entry);
+  // 2. Remove from source directory
+  if (remove_dir_entry(disk, sb, src_dir, src_name) != 0) {
+    fprintf(stderr, "Failed to remove entry '%s' from source.\n", src_name);
+    return -1;
+  }
+
+  // 3. Update name if needed
+  if (strcmp(src_name, dest_name) != 0) {
+    strncpy(entry.filename, dest_name, MAX_FILENAME);
+    entry.filename[MAX_FILENAME - 1] = '\0'; // Garantir terminação
+  }
+
+  // 4. Add to destination directory
+  if (add_dir_entry(disk, sb, dest_dir, &entry) != 0) {
+    fprintf(stderr, "Failed to insert entry into destination directory.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+int create_root_directory(FILE *disk, superblock_t *sb) {
+  uint32_t root_inode_number = sb->root_inode;
+
+  inode_t root_inode;
+  memset(&root_inode, 0, sizeof(inode_t));
+  root_inode.inode_number = root_inode_number;
+  root_inode.file_type = FILE_TYPE_DIR; // DIRECTORY
+  root_inode.links_count = 1;
+  root_inode.permissions = 0755;
+  root_inode.uid = 0;
+  root_inode.gid = 0;
+  root_inode.created_at = root_inode.modified_at = root_inode.accessed_at =
+      time(NULL);
+  root_inode.block_count = 0;
+  root_inode.file_size = 0;
+
+  // Initialize directory tree
+  btree_handle_t *dir_tree = btree_create_dir_entry_handle();
+  root_inode.btree_root = allocate_single_block(disk, sb);
+
+  if (root_inode.btree_root == INVALID_BLOCK) {
+    fprintf(stderr, "Failed to allocate block for root directory B-tree.\n");
+    free(dir_tree);
+    return -1;
+  }
+
+  // . and .. entries
+  dir_entry_t dot = {
+      .inode_number = root_inode_number, .file_type = 1, .file_size = 0};
+  strcpy(dot.filename, ".");
+
+  dir_entry_t dotdot = {
+      .inode_number = root_inode_number, .file_type = 1, .file_size = 0};
+  strcpy(dotdot.filename, "..");
+
+  // Inserção na árvore
+  if (btree_insert(disk, sb, dir_tree, &dot) != 0 ||
+      btree_insert(disk, sb, dir_tree, &dotdot) != 0) {
+    fprintf(stderr, "Failed to insert root directory entries.\n");
+    free(dir_tree);
+    return -1;
+  }
+
+  // Tree on superblock
+  sb->inode_root =
+      sb->inode_root == 0 ? allocate_single_block(disk, sb) : sb->inode_root;
+
+  btree_handle_t *inode_tree = btree_create_inode_handle();
+
+  if (insert_inode(disk, sb, inode_tree, &root_inode) != 0) {
+    fprintf(stderr, "Failed to insert root inode.\n");
+    free(dir_tree);
+    free(inode_tree);
+    return -1;
+  }
+
+  free(dir_tree);
+  free(inode_tree);
+  return 0;
 }
