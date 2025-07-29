@@ -94,6 +94,7 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
   Command commands[] = {
     {"exit", bsfs_cmd_exit}, 
     {"info", bsfs_cmd_info},
+    {"help", bsfs_cmd_help},
     {"cd", cd},
     {"pwd", pwd},
     {"ls", list},
