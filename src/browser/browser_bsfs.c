@@ -131,7 +131,7 @@ void browser_loop(FILE *file, superblock_t *sb) {
   char **args;
   int status;
   do {
-    fprintf(stdout, "BSFS > ");
+    fprintf(stdout, "BSFS:%s> ", current_path);
     line = browser_read_line();
     args = browser_split_line(line);
     status = browser_execute(file, *sb, args);
