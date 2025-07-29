@@ -91,7 +91,22 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
     return 1;
   }
 
-  Command commands[] = {{"exit", bsfs_cmd_exit}, {"info", bsfs_cmd_info}};
+  Command commands[] = {
+    {"exit", bsfs_cmd_exit}, 
+    {"info", bsfs_cmd_info},
+    {"cd", cd},
+    {"pwd", pwd},
+    {"ls", list},
+    {"list", list},
+    {"mkdir", mkdir},
+    {"rmdir", rmdir},
+    {"touch", touch},
+    {"rm", rm},
+    {"cp", cp},
+    {"mv", mv},
+    {"cat", cat},
+    {"echo", echo}
+  };
 
   int num_commands = sizeof(commands) / sizeof(Command);
 
