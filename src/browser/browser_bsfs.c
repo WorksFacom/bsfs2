@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
 
   superblock_t superblock = {0};
   read_superblock(file, &superblock);
-  fprintf(stdout, "BSFS Browser\nPartition: %s\nType \"info\" for details\n",
+  fprintf(stdout, "BSFS Browser\nPartition: %s\nType \"help\" for available commands or \"info\" for filesystem details\n",
           argv[1]);
 
   browser_loop(file, &superblock);
