@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+char current_path[PATH_MAX] = "/";  // Initialize current path to root
+
 /**
  * @brief Reads the superblock from the file and fills the superblock_t struct.
  * @param file Pointer to the opened BSFS file.
