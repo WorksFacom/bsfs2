@@ -15,9 +15,12 @@ extern char current_path[PATH_MAX];
  * @param disk Unused parameter.
  * @param sb Unused parameter.
  * @param args Unused parameter.
- * @return Always returns 0.
+ * @return Always returns 1 to continue the browser loop.
  */
 int pwd(FILE *disk, superblock_t *sb, char **args) {
+    (void)disk;
+    (void)sb;
+    (void)args;
     printf("%s\n", current_path);
-    return 0;
+    return 1;
 }
