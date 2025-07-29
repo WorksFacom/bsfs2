@@ -15,17 +15,17 @@
  * @param disk Pointer to the disk file.
  * @param sb Pointer to the superblock structure.
  * @param args Command arguments array, expects the directory name at args[1].
- * @return Returns 0 on success, -1 on failure.
+ * @return Returns 1 to continue browser loop on success or failure.
  */
 int rmdir(FILE *disk, superblock_t *sb, char **args) {
     if (!args[1]) {
         printf("Usage: rmdir <directory>\n");
-        return -1;
+        return 1;
     }
     if (rmdir_bsfs(disk, sb, args[1]) != 0) {
         printf("Error removing directory (must be empty): %s\n", args[1]);
-        return -1;
+        return 1;
     }
     printf("Directory removed: %s\n", args[1]);
-    return 0;
+    return 1;
 }

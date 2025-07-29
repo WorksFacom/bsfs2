@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+char current_path[PATH_MAX] = "/";  // Initialize current path to root
+
 /**
  * @brief Reads the superblock from the file and fills the superblock_t struct.
  * @param file Pointer to the opened BSFS file.
@@ -89,7 +91,23 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
     return 1;
   }
 
-  Command commands[] = {{"exit", bsfs_cmd_exit}, {"info", bsfs_cmd_info}};
+  Command commands[] = {
+    {"exit", bsfs_cmd_exit}, 
+    {"info", bsfs_cmd_info},
+    {"help", bsfs_cmd_help},
+    {"cd", cd},
+    {"pwd", pwd},
+    {"ls", list},
+    {"list", list},
+    {"mkdir", mkdir},
+    {"rmdir", rmdir},
+    {"touch", touch},
+    {"rm", rm},
+    {"cp", cp},
+    {"mv", mv},
+    {"cat", cat},
+    {"echo", echo}
+  };
 
   int num_commands = sizeof(commands) / sizeof(Command);
 
@@ -114,7 +132,7 @@ void browser_loop(FILE *file, superblock_t *sb) {
   char **args;
   int status;
   do {
-    fprintf(stdout, "BSFS > ");
+    fprintf(stdout, "BSFS:%s> ", current_path);
     line = browser_read_line();
     args = browser_split_line(line);
     status = browser_execute(file, *sb, args);
@@ -152,7 +170,7 @@ int main(int argc, char *argv[]) {
 
   superblock_t superblock = {0};
   read_superblock(file, &superblock);
-  fprintf(stdout, "BSFS Browser\nPartition: %s\nType \"info\" for details\n",
+  fprintf(stdout, "BSFS Browser\nPartition: %s\nType \"help\" for available commands or \"info\" for filesystem details\n",
           argv[1]);
 
   browser_loop(file, &superblock);

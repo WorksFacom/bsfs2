@@ -14,7 +14,7 @@
  * @param disk Pointer to the disk file.
  * @param sb Pointer to the superblock structure.
  * @param args Command arguments array, optionally contains the directory path at args[1].
- * @return Returns 0 on success, -1 if directory cannot be opened.
+ * @return Returns 1 on success to continue browser loop, 1 if directory cannot be opened.
  */
 int list(FILE *disk, superblock_t *sb, char **args) {
     dir_t dir;
@@ -23,7 +23,7 @@ int list(FILE *disk, superblock_t *sb, char **args) {
 
     if (opendir_bsfs(disk, sb, path, &dir) != 0) {
         printf("Error opening directory: %s\n", path);
-        return -1;
+        return 1;
     }
 
     while (readdir_bsfs(disk, sb, &dir, &entry) == 1) {
@@ -31,5 +31,5 @@ int list(FILE *disk, superblock_t *sb, char **args) {
     }
 
     closedir_bsfs(&dir);
-    return 0;
+    return 1;
 }
