@@ -1,6 +1,20 @@
+/**
+ * @file commands_bsfs.c
+ * @brief Core browser commands for the BSFS filesystem.
+ *
+ * Implements basic browser functionality including exit and info commands.
+ */
 #include "../include/commands_bsfs.h"
 #include <stdio.h>
 
+/**
+ * @brief Exits the BSFS browser.
+ *
+ * @param file Unused parameter.
+ * @param sb Unused parameter.
+ * @param args Unused parameter.
+ * @return Always returns 0 to exit the browser loop.
+ */
 int bsfs_cmd_exit(FILE *file, superblock_t *sb, char **args) {
   (void)file;
   (void)sb;
@@ -9,6 +23,14 @@ int bsfs_cmd_exit(FILE *file, superblock_t *sb, char **args) {
   return 0;
 }
 
+/**
+ * @brief Displays filesystem information from the superblock.
+ *
+ * @param file Unused parameter.
+ * @param sb Pointer to the superblock structure containing filesystem metadata.
+ * @param args Unused parameter.
+ * @return Always returns 1 to continue the browser loop.
+ */
 int bsfs_cmd_info(FILE *file, superblock_t *sb, char **args) {
   (void)file;
   (void)args;
