@@ -16,4 +16,7 @@ int cd(FILE *disk, superblock_t *sb, char **args);
 int pwd(FILE *disk, superblock_t *sb, char **args);
 int list(FILE *disk, superblock_t *sb, char **args);
 
+int mkdir(FILE *disk, superblock_t *sb, char **args);
+int rmdir(FILE *disk, superblock_t *sb, char **args);
+
 #endif
