@@ -11,6 +11,7 @@ typedef struct {
 
 int bsfs_cmd_exit(FILE *file, superblock_t *sb, char **args);
 int bsfs_cmd_info(FILE *file, superblock_t *sb, char **args);
+int bsfs_cmd_help(FILE *file, superblock_t *sb, char **args);
 
 int cd(FILE *disk, superblock_t *sb, char **args);
 int pwd(FILE *disk, superblock_t *sb, char **args);
