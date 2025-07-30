@@ -395,8 +395,9 @@ void btree_free_node(btree_node_t *node);
  * @param sb Pointer to the superblock.
  * @param handle Pointer to the B-tree handle.
  * @param node_block Block number of the current node.
+ * @return 0 on success, -1 on failure (e.g., deallocation errors).
  */
-void btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                          uint32_t node_block);
+int btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                         uint32_t node_block);
 
 #endif // BTREE_BSFS_H
