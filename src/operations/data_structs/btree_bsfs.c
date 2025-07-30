@@ -1207,29 +1207,46 @@ static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle,
  * @param sb Pointer to the superblock.
  * @param handle Pointer to the B-tree handle.
  * @param node_block Block number of the current node.
+ * @return 0 on success, -1 on failure (e.g., deallocation errors).
  */
-void btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
-                          uint32_t node_block) {
+int btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                         uint32_t node_block) {
   if (node_block == INVALID_BLOCK || node_block == 0)
-    return;
+    return 0;
 
   btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node) {
+    fprintf(stderr, "Failed to read B-tree node at block %u.\n", node_block);
+    return -1;
+  }
 
+  // Recursively deallocate children
   if (!node->is_leaf) {
     for (uint32_t i = 0; i <= node->num_entries; i++) {
-      btree_deallocate_all(disk, sb, handle, node->children[i]);
+      if (btree_deallocate_all(disk, sb, handle, node->children[i]) != 0) {
+        btree_free_node(node);
+        return -1;
+      }
     }
   }
 
-  // Deallocate all data blocks if this is a BSPAN tree
+  // Deallocate data blocks if this is a BSPAN tree
   if (handle->type == BTREE_TYPE_BSPAN) {
     for (uint32_t i = 0; i < node->num_entries; i++) {
       bspan_t *entry = (bspan_t *)(node->entries + i * handle->entry_size);
-      deallocate_bspan(disk, sb, entry);
+      if (deallocate_bspan(disk, sb, entry) != 0) {
+        btree_free_node(node);
+        return -1;
+      }
     }
   }
 
-  deallocate_single_block(disk, sb, node_block);
+  // Deallocate the node block itself
+  if (deallocate_single_block(disk, sb, node_block) != 0) {
+    btree_free_node(node);
+    return -1;
+  }
 
   btree_free_node(node);
+  return 0;
 }
