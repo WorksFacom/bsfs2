@@ -59,3 +59,11 @@ int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
 // Remove diretório (deve estar vazio)
 // Retorna 0 se sucesso, -1 se erro
 int rmdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
+
+// Muda diretório atual
+// Retorna 0 se sucesso, -1 se erro
+int chdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
+
+// Obtém caminho do diretório atual
+// Retorna 0 se sucesso, -1 se erro
+int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer, size_t buffer_size);
