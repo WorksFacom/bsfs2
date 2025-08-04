@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-char current_path[PATH_MAX] = "/";  // Initialize current path to root
+char current_path[PATH_MAX] = "/"; // Initialize current path to root
 
 /**
  * @brief Reads the superblock from the file and fills the superblock_t struct.
@@ -91,23 +91,22 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
     return 1;
   }
 
-  Command commands[] = {
-    {"exit", bsfs_cmd_exit}, 
-    {"info", bsfs_cmd_info},
-    {"help", bsfs_cmd_help},
-    {"cd", cd},
-    {"pwd", pwd},
-    {"ls", list},
-    {"list", list},
-    {"mkdir", mkdir},
-    {"rmdir", rmdir},
-    {"touch", touch},
-    {"rm", rm},
-    {"cp", cp},
-    {"mv", mv},
-    {"cat", cat},
-    {"echo", echo}
-  };
+  Command commands[] = {{"exit", bsfs_cmd_exit},
+                        {"info", bsfs_cmd_info},
+                        {"help", bsfs_cmd_help},
+                        {"cd", cd},
+                        {"pwd", pwd},
+                        {"ls", list},
+                        {"list", list},
+                        {"mkdir", mkdir},
+                        {"rmdir", rmdir},
+                        {"touch", touch},
+                        {"rm", rm},
+                        {"cp", cp},
+                        {"mv", mv},
+                        {"cat", cat},
+                        {"echo", echo},
+                        {"stat", stat_cmd}};
 
   int num_commands = sizeof(commands) / sizeof(Command);
 
@@ -170,7 +169,9 @@ int main(int argc, char *argv[]) {
 
   superblock_t superblock = {0};
   read_superblock(file, &superblock);
-  fprintf(stdout, "BSFS Browser\nPartition: %s\nType \"help\" for available commands or \"info\" for filesystem details\n",
+  fprintf(stdout,
+          "BSFS Browser\nPartition: %s\nType \"help\" for available commands "
+          "or \"info\" for filesystem details\n",
           argv[1]);
 
   browser_loop(file, &superblock);
