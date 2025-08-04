@@ -8,39 +8,34 @@
 #include <string.h>
 #include "filesystem_bsfs.h"
 #include "api_bsfs.h"
-#include "path_utils_bsfs.h"
 
 extern char current_path[PATH_MAX];
 
 /**
- * @brief Updates the current_path string based on the path argument.
- * 
- * @param new_path The path to change to.
+ * @brief Updates the current_path string based on the target path.
+ * @param target_path The path to navigate to.
  */
-static void update_current_path(const char *new_path) {
-    if (new_path[0] == '/') {
+static void update_current_path(const char *target_path) {
+    if (target_path[0] == '/') {
         // Absolute path
-        strncpy(current_path, new_path, PATH_MAX - 1);
-    } else {
-        // Relative path - handle special cases
-        if (strcmp(new_path, ".") == 0) {
-            // Stay in current directory
-            return;
-        } else if (strcmp(new_path, "..") == 0) {
-            // Go to parent directory
-            char *last_slash = strrchr(current_path, '/');
-            if (last_slash && last_slash != current_path) {
-                *last_slash = '\0';
-            } else {
-                strcpy(current_path, "/");
-            }
+        strncpy(current_path, target_path, PATH_MAX - 1);
+    } else if (strcmp(target_path, ".") == 0) {
+        // Current directory - no change
+        return;
+    } else if (strcmp(target_path, "..") == 0) {
+        // Parent directory
+        char *last_slash = strrchr(current_path, '/');
+        if (last_slash && last_slash != current_path) {
+            *last_slash = '\0';
         } else {
-            // Regular relative path
-            if (strlen(current_path) > 1) {
-                strncat(current_path, "/", PATH_MAX - strlen(current_path) - 1);
-            }
-            strncat(current_path, new_path, PATH_MAX - strlen(current_path) - 1);
+            strcpy(current_path, "/");
         }
+    } else {
+        // Relative path
+        if (strlen(current_path) > 1) {
+            strncat(current_path, "/", PATH_MAX - strlen(current_path) - 1);
+        }
+        strncat(current_path, target_path, PATH_MAX - strlen(current_path) - 1);
     }
     current_path[PATH_MAX - 1] = '\0';
 }
@@ -59,14 +54,13 @@ int cd(FILE *disk, superblock_t *sb, char **args) {
         return 1;
     }
 
-    // Try to change directory using the API
-    if (chdir_bsfs(disk, sb, args[1]) != 0) {
+    dir_t dir;
+    if (opendir_bsfs(disk, sb, args[1], &dir) != 0) {
         printf("Directory not found: %s\n", args[1]);
         return 1;
     }
-    
-    // Update the global current_path for display purposes
+    closedir_bsfs(&dir);
+
     update_current_path(args[1]);
-    
     return 1;
 }
