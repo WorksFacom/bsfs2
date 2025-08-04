@@ -26,8 +26,22 @@ int list(FILE *disk, superblock_t *sb, char **args) {
         return 1;
     }
 
+    printf("Listing directory: %s\n", path);
+    printf("%-20s %s\n", "Name", "Type");
+    printf("%-20s %s\n", "----", "----");
+
     while (readdir_bsfs(disk, sb, &dir, &entry) == 1) {
-        printf("%s\n", entry.name);
+        // Get inode information to determine type
+        inode_t inode;
+        btree_handle_t *inode_handle = btree_create_inode_handle();
+        if (inode_handle && read_inode(disk, inode_handle, entry.inode_number, &inode) == 0) {
+            const char *type = (inode.file_type == 0) ? "DIR" : "FILE";
+            printf("%-20s %s\n", entry.name, type);
+            free(inode_handle);
+        } else {
+            printf("%-20s %s\n", entry.name, "?");
+            if (inode_handle) free(inode_handle);
+        }
     }
 
     closedir_bsfs(&dir);
