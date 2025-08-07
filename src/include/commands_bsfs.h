@@ -26,5 +26,6 @@ int cp(FILE *disk, superblock_t *sb, char **args);
 int mv(FILE *disk, superblock_t *sb, char **args);
 int cat(FILE *disk, superblock_t *sb, char **args);
 int echo(FILE *disk, superblock_t *sb, char **args);
+int stat_cmd(FILE *disk, superblock_t *sb, char **args);
 
 #endif

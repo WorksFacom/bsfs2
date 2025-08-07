@@ -105,7 +105,8 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
                         {"cp", cp},
                         {"mv", mv},
                         {"cat", cat},
-                        {"echo", echo}};
+                        {"echo", echo},
+                        {"stat", stat_cmd}};
 
   int num_commands = sizeof(commands) / sizeof(Command);
 
