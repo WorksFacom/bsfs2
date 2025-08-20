@@ -3,6 +3,11 @@
 
 #include "commands_bsfs.h"
 #include <stdio.h>
+#include <limits.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 void read_superblock(FILE *file, superblock_t *sb);
 void print_superblock_info(superblock_t *sb);
