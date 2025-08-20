@@ -88,6 +88,8 @@ int bsfs_cmd_help(FILE *file, superblock_t *sb, char **args) {
   fprintf(stdout, "  echo <text>        - Display text or write to file\n");
   fprintf(stdout, "    echo \"text\" > file   - Write text to file (overwrite)\n");
   fprintf(stdout, "    echo \"text\" >> file  - Append text to file\n");
+  fprintf(stdout, "  dd if=<src> of=<dest> bs=<size> count=<blocks> - Create files of specific size\n");
+  fprintf(stdout, "    Example: dd if=/dev/zero of=testfile bs=1M count=10 (creates 10MB file)\n");
   fprintf(stdout, "\n");
   fprintf(stdout, "System:\n");
   fprintf(stdout, "  info               - Display filesystem information\n");
