@@ -168,7 +168,7 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
     file_t file;
     if (open_bsfs(disk, sb, absolute_path, &file) != 0) {
         printf("dd: cannot open file '%s'\n", output_file);
-        remove_file_bsfs(disk, sb, absolute_path); // Clean up
+        remove_file_bsfs(disk, sb, absolute_path);
         return -1;
     }
     
