@@ -300,7 +300,7 @@ btree_handle_t *btree_create_dir_entry_handle() {
  * @return uint32_t The index value used as the key in the B-tree.
  */
 uint32_t get_rec_entry_key(const void *entry) {
-  return ((const rec_entry_t *)entry)->index;
+  return ((const rec_entry_t *)entry)->recovery_id;
 }
 
 /**

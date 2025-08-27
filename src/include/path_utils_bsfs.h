@@ -51,4 +51,47 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
 int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
                 inode_t *out_inode);
 
+/**
+ * @brief Resolve the parent directory and basename from a path.
+ *
+ * This function takes an absolute or relative path, normalizes it,
+ * validates it, splits it into parent directory path and basename,
+ * and resolves the parent directory into a @ref dir_t structure.
+ *
+ * Workflow:
+ *  1. Normalize the input path using normalize_path().
+ *  2. Reject paths ending with '/' (files must have a basename).
+ *  3. Split the normalized path into parent and basename using
+ *     split_parent_basename().
+ *  4. Resolve the parent path into a directory inode using
+ *     lookup_file().
+ *  5. Verify that the resolved parent is a directory.
+ *  6. Return the parent directory in @p out_parent and the basename
+ *     in @p out_basename.
+ *
+ * Error handling:
+ *  - Returns -1 if arguments are invalid.
+ *  - Returns -1 if normalization or splitting fails.
+ *  - Returns -1 if the parent path cannot be resolved or is not a directory.
+ *  - Returns 0 on success.
+ *
+ * Memory:
+ *  - Internally allocates a temporary normalized path; this is freed before
+ *    return.
+ *
+ * @param disk          Pointer to the open filesystem image.
+ * @param sb            Pointer to the loaded superblock.
+ * @param path          Absolute or relative path of the file.
+ * @param cwd           Current working directory for relative path resolution.
+ * @param out_parent    Output: resolved parent directory (as @ref dir_t).
+ * @param out_basename  Output: buffer that will receive the final component
+ *                      (basename) of the path.
+ * @param basename_cap  Capacity of @p out_basename buffer (in bytes).
+ *
+ * @return 0 on success; -1 on error.
+ */
+int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path,
+                       dir_t *cwd, dir_t *out_parent, char *out_basename,
+                       size_t basename_cap);
+
 #endif // PATH_UTILS_BSFS_H
