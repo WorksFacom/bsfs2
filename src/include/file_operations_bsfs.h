@@ -15,8 +15,11 @@
 #include "block_operations_bsfs.h"
 #include "bspan_queue_bsfs.h"
 #include "btree_bsfs.h"
+#include "dir_entry_operations_bsfs.h"
+#include "directory_operations_bsfs.h"
 #include "filesystem_bsfs.h"
 #include "inode_operations_bsfs.h"
+#include "superblock_operations_bsfs.h"
 #include <stdint.h>
 #include <stdio.h>
 

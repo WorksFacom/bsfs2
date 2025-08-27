@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /**
  * @brief Magic number used to identify a BSFS-formatted file system.
@@ -91,6 +92,7 @@
 
 #define FILE_TYPE_DIR 1
 #define FILE_TYPE_FILE 0
+#define DEFAULT_RECOVERY_TTL (30ULL * 24ULL * 60ULL * 60ULL)
 
 /**
  * @struct superblock_t
@@ -290,20 +292,95 @@ typedef struct {
 
 /**
  * @struct rec_entry_t
- * @brief Represents a recovery entry in the BSFS file system.
+ * @brief Represents a deleted file entry stored in the recovery B-tree.
  *
- * This structure is used to track entries that may be recoverable, such as
- * recently deleted or corrupted records. The recovery mechanism can use this
- * information to attempt file restoration or integrity analysis.
- *
+ * Each recovery entry acts as a snapshot of a file's inode at the moment it
+ * was deleted. These entries enable the filesystem to restore deleted files
+ * without immediately freeing their data blocks. Recovery entries are stored
+ * in a dedicated B-tree, separate from the inode tree, and remain valid until
+ * they are purged manually or by retention policies.
  */
 typedef struct {
   /**
-   * Logical index or identifier associated with the recoverable entry.
-   * This may refer to an inode number, logical block, or another
-   * recovery-related ID.
+   * Unique identifier for this recovery entry, assigned sequentially or
+   * uniquely at deletion time. Used by user-facing recovery commands
+   * (e.g., listing and restoring deleted files).
    */
-  uint32_t index;
+  uint32_t recovery_id;
+
+  /**
+   * Timestamp of when the file was deleted, in Unix time (seconds since epoch).
+   * Used for listing recovery entries chronologically and for retention checks.
+   */
+  uint64_t deleted_at;
+
+  /**
+   * Inode number of the original parent directory where the file resided.
+   * Useful for restoring the file to its original location, if available.
+   */
+  uint32_t original_parent_ino;
+
+  /**
+   * Original file name at deletion time. Used when restoring the file or
+   * displaying it in recovery listings.
+   */
+  char original_name[256];
+
+  /**
+   * Inode number of the deleted file. Can be reused when restoring the file
+   * to simplify consistency with previous references.
+   */
+  uint32_t inode_number;
+
+  /**
+   * Type of the file at deletion (e.g., regular file, directory, symlink).
+   * Uses the same enum/constant values as @ref inode_t::file_type.
+   */
+  uint8_t file_type;
+
+  /**
+   * User ID of the file owner at deletion time.
+   */
+  uint16_t uid;
+
+  /**
+   * Group ID of the file owner at deletion time.
+   */
+  uint16_t gid;
+
+  /**
+   * File permissions (e.g., 0755 format), copied from the inode at deletion.
+   */
+  uint16_t permissions;
+
+  /**
+   * Total logical size of the file in bytes at deletion time.
+   */
+  uint32_t file_size;
+
+  /**
+   * Number of blocks allocated to the file at deletion time.
+   */
+  uint32_t block_count;
+
+  /**
+   * Snapshot of the inode's 16 direct block spans, pointing to the physical
+   * blocks used by the file. Preserved to allow block reuse during restoration.
+   */
+  bspan_t direct_blocks[16];
+
+  /**
+   * Root block number of the B-tree containing additional block spans for
+   * large files. Preserved so that the full file data mapping can be recovered.
+   */
+  uint32_t btree_root;
+
+  /**
+   * Timestamp until which this recovery entry is retained, in Unix time.
+   * After this point, a garbage collector may safely purge the entry and
+   * release its data blocks back to the free space pool.
+   */
+  uint64_t retention_until;
 } rec_entry_t;
 
 /**

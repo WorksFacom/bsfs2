@@ -272,7 +272,7 @@ int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
       (final_pos > f->inode.file_size) ? (final_pos - f->inode.file_size) : 0;
   uint32_t new_blocks = (new_bytes + block_size - 1) / block_size;
 
-  uint32_t hint_offset = 0; // Pode ser heurístico (ex: baseado no inode)
+  uint32_t hint_offset = 0;
   bspan_queue_t *queue;
   allocate_bspan_queue(disk, sb, queue, new_blocks, hint_offset);
   if (!queue) {
