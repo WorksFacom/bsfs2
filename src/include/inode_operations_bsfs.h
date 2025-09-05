@@ -90,4 +90,19 @@ uint32_t get_next_inode_number(FILE *disk, btree_handle_t *inode_tree);
  */
 int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
 
+/**
+ * @brief Initialize (or load) the inode B-tree handle.
+ *
+ * If the inode root does not exist yet in the superblock, this function
+ * allocates a fresh root node on disk (empty leaf), persists it, and stores the
+ * block number in both the handle and the superblock (via write_superblock).
+ * If the root already exists, the handle is configured to point to it.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (may be updated/persisted if creating root).
+ * @param out  Output: initialized inode B-tree handle (by value).
+ * @return 1 on success, 0 on failure.
+ */
+int inode_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out);
+
 #endif // INODE_OPERATIONS_H

@@ -42,6 +42,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
 
   dir_t current;
   btree_handle_t *inode_handle = btree_create_inode_handle();
+  inode_handle->root_block = sb->inode_root;
 
   inode_t temp_inode;
 
@@ -83,7 +84,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
     next_dir.inode = temp_inode;
     next_dir.current_index = 0;
 
-    if (next_dir.inode.file_type != 0) {
+    if (next_dir.inode.file_type != FILE_TYPE_DIR) {
       free(inode_handle);
       return -1;
     }
@@ -125,6 +126,7 @@ int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
   }
 
   btree_handle_t *inode_handle = btree_create_inode_handle();
+  inode_handle->root_block = sb->inode_root;
   int result = read_inode(disk, inode_handle, entry.inode_number, out_inode);
   free(inode_handle);
   return result;

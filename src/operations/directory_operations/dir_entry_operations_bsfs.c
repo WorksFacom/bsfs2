@@ -63,26 +63,45 @@ int close_dir(dir_t *dir) {
 /**
  * @brief Adds a new entry to a directory.
  *
- * This function inserts a new dir_entry_t into the directory's B-tree
- * structure.
+ * Inserts a new @ref dir_entry_t into the directory's B-tree. If this is the
+ * first insertion in the directory (i.e., the directory had no B-tree root),
+ * the function persists the newly created root into the directory inode.
  *
  * @param disk Pointer to the filesystem image file.
  * @param sb Pointer to the loaded superblock.
  * @param dir Pointer to the open directory structure.
  * @param entry Pointer to the directory entry to insert.
- * @return 0 on success, -1 if an entry with the same name already exists.
+ * @return 0 on success, -1 if an entry with the same name already exists or on
+ *         write error.
  */
 int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                   dir_entry_t *entry) {
+  btree_handle_t *handle = btree_create_dir_entry_handle();
+  handle->root_block = dir->inode.btree_root;
+
   dir_entry_t existing;
   uint32_t hash = hash_filename(entry->filename);
 
-  if (btree_search(disk, dir->btree, dir->inode.btree_root, hash, &existing)) {
+  if (btree_search(disk, handle, handle->root_block, hash, &existing)) {
     fprintf(stderr, "Directory entry '%s' already exists.\n", entry->filename);
+    free(handle);
     return -1;
   }
 
-  btree_insert(disk, sb, dir->btree, entry);
+  if (btree_insert(disk, sb, handle, entry) != 0) {
+    free(handle);
+    return -1;
+  }
+
+  if (dir->inode.btree_root == 0 && handle->root_block != 0) {
+    dir->inode.btree_root = handle->root_block;
+    btree_handle_t *inode_handle = btree_create_inode_handle();
+    inode_handle->root_block = sb->inode_root;
+    (void)update_inode(disk, inode_handle, &dir->inode);
+    free(inode_handle);
+  }
+
+  free(handle);
   return 0;
 }
 
@@ -95,45 +114,58 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  * @param sb Pointer to the loaded superblock.
  * @param dir Pointer to the open directory structure.
  * @param filename Name of the entry to remove.
- * @return 0 on success, -1 if the entry was not found.
+ * @return 0 on success, -1 if the entry was not found or on write error.
  */
 int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                      const char *filename) {
+  btree_handle_t *handle = btree_create_dir_entry_handle();
+  handle->root_block = dir->inode.btree_root;
+
   uint32_t hash = hash_filename(filename);
 
   dir_entry_t found;
-  if (!btree_search(disk, dir->btree, dir->inode.btree_root, hash, &found)) {
+  if (!btree_search(disk, handle, handle->root_block, hash, &found)) {
     fprintf(stderr, "Directory entry '%s' not found.\n", filename);
+    free(handle);
     return -1;
   }
 
-  return btree_remove(disk, sb, dir->btree, hash);
+  int ok = btree_remove(disk, sb, handle, hash);
+  free(handle);
+  return ok;
 }
 
 /**
  * @brief Updates an existing directory entry in the B-tree.
  *
- * This function searches for an existing directory entry using the hash of the
- * filename and replaces its contents with the new data.
+ * Searches for an existing directory entry using the hash of the filename and
+ * replaces its contents with @p entry.
  *
  * @param disk Pointer to the filesystem image.
- * @param sb Pointer to the superblock.
+ * @param sb Pointer to the superblock (unused).
  * @param dir Pointer to the open directory structure.
  * @param entry Pointer to the updated directory entry.
  * @return 0 on success, -1 if the entry was not found.
  */
 int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                      dir_entry_t *entry) {
+  (void)sb;
+  btree_handle_t *handle = btree_create_dir_entry_handle();
+  handle->root_block = dir->inode.btree_root;
+
   uint32_t hash = hash_filename(entry->filename);
 
   dir_entry_t existing;
-  if (!btree_search(disk, dir->btree, dir->inode.btree_root, hash, &existing)) {
+  if (!btree_search(disk, handle, handle->root_block, hash, &existing)) {
     fprintf(stderr, "Cannot update: entry '%s' not found in directory.\n",
             entry->filename);
+    free(handle);
     return -1;
   }
 
-  return btree_update(disk, dir->btree, dir->inode.btree_root, entry);
+  int ok = btree_update(disk, handle, handle->root_block, entry);
+  free(handle);
+  return ok;
 }
 
 /**
@@ -163,30 +195,110 @@ int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
 }
 
 /**
- * @brief Reads the next directory entry from a directory.
+ * @brief Reads the next directory entry in sorted (in-order) key order.
  *
- * This function traverses the B-tree of a directory and returns the next valid
- * entry. It uses the `dir_index` field to keep track of position across calls.
+ * Returns entries in ascending order of the directory entry key (hash of the
+ * filename). Keeps iteration state inside @ref dir_t (iter_started, iter_key).
+ * The @p handle parameter is unused.
  *
  * @param disk Pointer to the open disk file.
- * @param sb Pointer to the superblock.
+ * @param sb Pointer to the superblock (unused).
  * @param dir Pointer to the open directory structure (dir_t).
- * @param handle B-tree handler for the directory entries.
+ * @param handle Unused parameter; kept for interface compatibility.
  * @param out Output parameter to hold the directory entry read.
  * @return 0 if an entry was read successfully, -1 if end of directory is
- * reached.
+ *         reached or on error.
  */
-int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
-                   btree_handle_t *handle, dir_entry_t *out) {
-  if (!disk || !sb || !dir || !handle || !out)
-    return -1;
+static int btree_find_min_entry(FILE *disk, btree_handle_t *handle,
+                                uint32_t node_block, void *out_entry) {
+  if (node_block == 0)
+    return 0;
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node)
+    return 0;
+  int ok;
+  if (node->is_leaf) {
+    if (node->num_entries > 0) {
+      memcpy(out_entry, node->entries, handle->entry_size);
+      ok = 1;
+    } else {
+      ok = 0;
+    }
+  } else {
+    ok = btree_find_min_entry(disk, handle, node->children[0], out_entry);
+  }
+  btree_free_node(node);
+  return ok;
+}
 
-  while (dir->current_index <= 0xFFFFFFFF) {
-    uint32_t hash = dir->current_index++;
-    if (btree_search(disk, handle, dir->inode.btree_root, hash, out)) {
-      return 0;
+static int btree_find_successor_entry(FILE *disk, btree_handle_t *handle,
+                                      uint32_t node_block, uint32_t after_key,
+                                      void *out_entry) {
+  if (node_block == 0)
+    return 0;
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node)
+    return 0;
+  int found = 0;
+  uint8_t *entries = node->entries;
+
+  for (int i = 0; i < node->num_entries && !found; i++) {
+    uint32_t ekey = handle->get_key(entries + i * handle->entry_size);
+    if (ekey > after_key) {
+      if (!node->is_leaf) {
+        // Try to find in left child first
+        if (btree_find_successor_entry(disk, handle, node->children[i],
+                                       after_key, out_entry)) {
+          found = 1;
+          break;
+        }
+      }
+      // Current entry is the successor
+      memcpy(out_entry, entries + i * handle->entry_size, handle->entry_size);
+      found = 1;
+      break;
     }
   }
 
-  return -1;
+  // If not found, search in the rightmost child
+  if (!found && !node->is_leaf) {
+    found = btree_find_successor_entry(disk, handle,
+                                       node->children[node->num_entries],
+                                       after_key, out_entry);
+  }
+
+  btree_free_node(node);
+  return found;
+}
+
+int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
+                   btree_handle_t *unused, dir_entry_t *out) {
+  (void)sb;
+  (void)unused;
+  if (!disk || !dir || !out)
+    return -1;
+
+  if (dir->inode.btree_root == 0)
+    return -1;
+
+  btree_handle_t *handle = btree_create_dir_entry_handle();
+  handle->root_block = dir->inode.btree_root;
+
+  int ok = 0;
+  if (!dir->iter_started) {
+    ok = btree_find_min_entry(disk, handle, handle->root_block, out);
+    if (ok) {
+      dir->iter_started = 1;
+      dir->iter_key = hash_filename(out->filename);
+    }
+  } else {
+    ok = btree_find_successor_entry(disk, handle, handle->root_block,
+                                    dir->iter_key, out);
+    if (ok) {
+      dir->iter_key = hash_filename(out->filename);
+    }
+  }
+
+  free(handle);
+  return ok ? 0 : -1;
 }
