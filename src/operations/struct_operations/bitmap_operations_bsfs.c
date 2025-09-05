@@ -72,7 +72,7 @@ uint8_t *load_bitmap(FILE *disk, uint32_t bitmap_start_block) {
       return NULL;
     }
 
-    // Realoque o vetor para acomodar mais dados
+    // Grow the in-memory buffer to accommodate the next bitmap chunk
     bitmap = realloc(bitmap, total_bytes + BITMAP_BLOCK_BYTES);
     if (!bitmap) {
       fprintf(stderr, "Failed to realloc bitmap buffer.\n");
@@ -105,18 +105,20 @@ int write_bitmap(FILE *disk, uint8_t *bitmap, uint32_t bitmap_start_block) {
 
   while (current_block != INVALID_BLOCK) {
     bitmap_block_t block;
+    memset(&block, 0, sizeof(block));
 
-    memset(block.bits, 0, BITMAP_BLOCK_BYTES);
-
-    size_t to_copy = BITMAP_BLOCK_BYTES;
-    memcpy(block.bits, bitmap + offset, to_copy);
-    offset += to_copy;
-
-    if (fseek(disk, current_block * BLOCK_SIZE, SEEK_SET) != 0 ||
+    // Preserve next_block pointer from on-disk structure
+    if (fseek(disk, current_block * BLOCK_SIZE + BITMAP_BLOCK_BYTES, SEEK_SET) !=
+            0 ||
         fread(&block.next_block, sizeof(uint32_t), 1, disk) != 1) {
       fprintf(stderr, "Failed to read next block info.\n");
       return -1;
     }
+
+    // Copy a slice of the bitmap into this block's bits
+    size_t to_copy = BITMAP_BLOCK_BYTES;
+    memcpy(block.bits, bitmap + offset, to_copy);
+    offset += to_copy;
 
     if (fseek(disk, current_block * BLOCK_SIZE, SEEK_SET) != 0 ||
         fwrite(&block, sizeof(bitmap_block_t), 1, disk) != 1) {

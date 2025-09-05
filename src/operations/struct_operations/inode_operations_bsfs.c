@@ -50,7 +50,14 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
 
   inode_t copy;
   memcpy(&copy, inode, sizeof(inode_t));
-  return btree_insert(disk, sb, handle, &copy);
+  uint32_t prev_root = handle->root_block;
+  int rc = btree_insert(disk, sb, handle, &copy);
+  if (rc == 0 && prev_root == 0 && handle->root_block != 0 &&
+      sb->inode_root == 0) {
+    sb->inode_root = handle->root_block;
+    (void)write_superblock(disk, sb);
+  }
+  return rc;
 }
 
 /**
@@ -138,4 +145,62 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree,
   inode_t temp;
   return btree_search(disk, inode_tree, inode_tree->root_block, inode_number,
                       &temp);
+}
+
+/**
+ * @brief Initialize (or load) the inode B-tree handle.
+ */
+int inode_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
+  if (!disk || !sb || !out)
+    return 0;
+
+  btree_handle_t *tmp = btree_create_inode_handle();
+  if (!tmp)
+    return 0;
+
+  if (sb->inode_root == 0) {
+    // Create empty root leaf node on disk
+    btree_node_t node;
+    node.is_leaf = 1;
+    node.num_entries = 0;
+    node.entries = calloc((size_t)(2 * tmp->min_degree - 1),
+                          (size_t)tmp->entry_size);
+    node.children = calloc((size_t)(2 * tmp->min_degree), sizeof(uint32_t));
+    if (!node.entries || !node.children) {
+      free(node.entries);
+      free(node.children);
+      free(tmp);
+      return 0;
+    }
+
+    uint32_t root_block = allocate_single_block(disk, sb);
+    if (root_block == INVALID_BLOCK || root_block == 0) {
+      free(node.entries);
+      free(node.children);
+      free(tmp);
+      return 0;
+    }
+
+    tmp->root_block = root_block;
+    if (btree_write_node(disk, tmp, root_block, &node) != 0) {
+      free(node.entries);
+      free(node.children);
+      free(tmp);
+      return 0;
+    }
+    free(node.entries);
+    free(node.children);
+
+    sb->inode_root = root_block;
+    if (write_superblock(disk, sb) != 0) {
+      free(tmp);
+      return 0;
+    }
+  } else {
+    tmp->root_block = sb->inode_root;
+  }
+
+  *out = *tmp;
+  free(tmp);
+  return 1;
 }

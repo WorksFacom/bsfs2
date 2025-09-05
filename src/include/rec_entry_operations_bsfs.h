@@ -17,6 +17,7 @@
 
 #include "btree_bsfs.h"
 #include "filesystem_bsfs.h"
+#include "superblock_operations_bsfs.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -86,5 +87,52 @@ int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
  */
 int rec_tree_remove(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
                     uint32_t recovery_id);
+
+/**
+ * @brief Look up a recovery entry in the Recovery B-tree by ID.
+ *
+ * This function searches the Recovery B-tree for a @ref rec_entry_t whose
+ * key is the 32-bit @p recovery_id. The B-tree must be configured so that
+ * the key for each node record is the @c recovery_id field of @ref rec_entry_t
+ * (i.e., the handle's key accessor returns &entry->recovery_id).
+ *
+ * Semantics:
+ *  - If an entry with the given @p recovery_id exists, it is copied into
+ *    @p out_entry and the function returns 1.
+ *  - If not found, the function returns 0 and leaves @p out_entry unmodified.
+ *
+ * @param disk        Open filesystem image.
+ * @param rec_tree    Recovery B-tree handle (already initialized).
+ * @param recovery_id Key (unique ID) of the recovery entry to find.
+ * @param out_entry   Output buffer to receive the found entry (must be
+ * non-NULL).
+ * @return 1 if found; 0 if not found or on invalid arguments.
+ */
+int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id,
+                    rec_entry_t *out_entry);
+
+/**
+ * @brief Find recovery entries by original filename.
+ *
+ * Performs an in-order traversal over the Recovery B-tree (keyed by
+ * rec_entry_t::recovery_id) and collects entries whose
+ * rec_entry_t::original_name matches exactly the provided @p name.
+ *
+ * Up to @p max matches are copied into the @p out buffer (if non-NULL). The
+ * total number of matches found in the tree (which can be greater than @p max)
+ * is returned via @p out_count.
+ *
+ * @param disk       Open filesystem image.
+ * @param rec_tree   Initialized Recovery B-tree handle.
+ * @param name       Exact filename to match against rec_entry_t::original_name.
+ * @param out        Output buffer for matches (may be NULL to only count).
+ * @param max        Capacity of @p out in number of entries.
+ * @param out_count  Output: total number of matches found.
+ * @return 1 on success (including zero matches), 0 on invalid args or I/O
+ *         failure while traversing.
+ */
+int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree,
+                          const char *name, rec_entry_t *out, size_t max,
+                          size_t *out_count);
 
 #endif /* REC_ENTRY_OPERATIONS_BSFS_H */

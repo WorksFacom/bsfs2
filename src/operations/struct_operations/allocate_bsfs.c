@@ -3,6 +3,8 @@
  * @brief Functions for allocating blocks in the BSFS file system.
  */
 #include "../../include/allocate_bsfs.h"
+#include "../../include/rec_gc_bsfs.h"
+#include <time.h>
 
 /**
  * @brief Allocates a sequence of free blocks and fills a bspan queue.
@@ -38,6 +40,8 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
   uint32_t run_start = INVALID_BLOCK;
   uint32_t run_length = 0;
 
+  if (offset < sb->data_block_start)
+    offset = sb->data_block_start;
   for (uint32_t i = offset; i < sb->total_blocks; i++) {
     if (is_bit_free(bitmap, i)) {
       if (run_start == INVALID_BLOCK) {
@@ -83,7 +87,11 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
   }
 
   free(bitmap);
-  return -1;
+  // On-demand GC: try to free enough blocks and retry once
+  (void)rec_gc_purge_until(disk, sb, blocks_needed, (uint64_t)time(NULL));
+
+  // Retry
+  return allocate_bspan_queue(disk, sb, queue, blocks_needed, offset);
 }
 
 /**
@@ -109,7 +117,8 @@ uint32_t allocate_single_block(FILE *disk, superblock_t *sb) {
   if (!bitmap)
     return INVALID_BLOCK;
 
-  for (uint32_t i = 0; i < total_blocks; i++) {
+  uint32_t start = sb->data_block_start;
+  for (uint32_t i = start; i < total_blocks; i++) {
     if (is_bit_free(bitmap, i)) {
       set_bit(bitmap, i);
 
@@ -127,7 +136,10 @@ uint32_t allocate_single_block(FILE *disk, superblock_t *sb) {
 
   fprintf(stderr, "Error: No blocks available.\n");
   free(bitmap);
-  return INVALID_BLOCK;
+  // GC on-demand for at least 1 block, then retry once
+  (void)rec_gc_purge_until(disk, sb, 1, (uint64_t)time(NULL));
+
+  return allocate_single_block(disk, sb);
 }
 
 /**

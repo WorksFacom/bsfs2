@@ -16,6 +16,9 @@ typedef struct {
   inode_t inode;          ///< The inode of the directory
   uint32_t current_index; ///< The logical position of the next entry to read
   btree_handle_t *btree;  ///< Handle to the B-tree storing directory entries
+  /* Iteration state for in-order traversal */
+  uint32_t iter_key;      ///< Last returned key (filename hash)
+  int iter_started;       ///< 0 if iteration not started, 1 otherwise
 } dir_t;
 
 /**

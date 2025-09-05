@@ -16,6 +16,7 @@
  */
 
 #include "../../include/rec_entry_operations_bsfs.h"
+#include <string.h>
 
 /**
  * @brief Finds the next available recovery ID number by scanning the recovery
@@ -50,51 +51,6 @@ uint32_t get_next_rec_id(FILE *disk, btree_handle_t *rec_tree) {
 
   btree_free_node(node);
   return max_rec_id + 1;
-}
-
-/**
- * @brief Insert a recovery entry into the Recovery B-tree.
- *
- * This function inserts a @ref rec_entry_t into the recovery tree. The
- * B-tree must be configured so that:
- *  - handle->entry_size == sizeof(rec_entry_t);
- *  - handle->get_key points to the recovery_id field inside rec_entry_t; and
- *  - handle->cmp compares recovery_id in ascending order (or matches your
- *    chosen ordering).
- *
- * If @p entry->recovery_id is 0, a new unique ID is assigned via
- * get_next_rec_id(). On duplicate key, the underlying B-tree insert is
- * expected to fail and this function returns 0.
- *
- * @param disk      Open filesystem image.
- * @param sb        Loaded superblock (used for node allocations).
- * @param rec_tree  Recovery B-tree handle (already initialized).
- * @param entry     In/out recovery entry to insert. If recovery_id == 0, it
- *                  will be set to a fresh ID before insertion.
- * @return 1 on success; 0 on failure (I/O error or duplicate key).
- */
-int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
-                 rec_entry_t *entry) {
-  if (!disk || !sb || !rec_tree || !entry) {
-    return 0;
-  }
-
-  /* Assign a new ID if caller didn't provide one. */
-  if (entry->recovery_id == 0) {
-    entry->recovery_id = get_next_rec_id(disk, rec_tree);
-    if (entry->recovery_id == 0) {
-      /* Defensive: avoid inserting invalid key 0. */
-      return 0;
-    }
-  }
-
-  if (entry->retention_until == 0 && entry->deleted_at != 0) {
-    entry->retention_until = entry->deleted_at + DEFAULT_RECOVERY_TTL;
-  }
-
-  /* Insert the raw rec_entry_t as a node payload; the B-tree key is taken
-     from the recovery_id field via handle->get_key configured at init. */
-  return btree_insert(disk, sb, rec_tree, entry);
 }
 
 /**
@@ -162,6 +118,209 @@ int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id,
     return 1;
   }
   return 0;
+}
+
+/**
+ * @brief Initialize (or load) the Recovery B-tree handle.
+ *
+ * This function prepares a recovery B-tree handle. If the recovery root
+ * does not exist yet (sb->recovery_root == 0), it allocates a fresh root
+ * node on disk, initializes it as an empty leaf, persists the node, and
+ * stores the new root block in both the handle and the superblock.
+ *
+ * If the root already exists, the handle is simply configured to point to it.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (updated if a new root is created).
+ * @param out  Output: initialized recovery B-tree handle (by value).
+ * @return 1 on success; 0 on failure.
+ */
+int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
+  if (!disk || !sb || !out)
+    return 0;
+
+  btree_handle_t *tmp = btree_create_rec_entry_handle();
+  if (!tmp)
+    return 0;
+
+  if (sb->recovery_root == 0) {
+    // Allocate a new root block and initialize an empty leaf node
+    uint32_t root_block = allocate_single_block(disk, sb);
+    if (root_block == INVALID_BLOCK || root_block == 0) {
+      free(tmp);
+      return 0;
+    }
+
+    tmp->root_block = root_block;
+
+    btree_node_t node;
+    node.is_leaf = 1;
+    node.num_entries = 0;
+    node.entries =
+        calloc((size_t)(2 * tmp->min_degree - 1), (size_t)tmp->entry_size);
+    node.children = calloc((size_t)(2 * tmp->min_degree), sizeof(uint32_t));
+    if (!node.entries || !node.children) {
+      free(node.entries);
+      free(node.children);
+      free(tmp);
+      return 0;
+    }
+
+    if (btree_write_node(disk, tmp, root_block, &node) != 0) {
+      free(node.entries);
+      free(node.children);
+      free(tmp);
+      return 0;
+    }
+
+    // Clean up temporary node buffers
+    free(node.entries);
+    free(node.children);
+
+    // Persist new recovery root in the superblock
+    sb->recovery_root = root_block;
+    if (write_superblock(disk, sb) != 0) {
+      free(tmp);
+      return 0;
+    }
+  } else {
+    // Root exists already; just point the handle to it
+    tmp->root_block = sb->recovery_root;
+  }
+
+  // Return the handle by value and free the temporary heap allocation
+  *out = *tmp;
+  free(tmp);
+  return 1;
+}
+
+/**
+ * @brief Insert a recovery entry into the Recovery B-tree.
+ *
+ * Assigns a fresh @c recovery_id if the input entry does not carry one
+ * yet, and sets a default @c retention_until based on @c deleted_at if
+ * not provided. Then inserts the entry into the recovery B-tree.
+ *
+ * If this is the first insertion and the superblock has not yet persisted
+ * @c recovery_root, this function will update and persist it.
+ *
+ * @param disk     Open filesystem image.
+ * @param sb       Loaded superblock (may be updated to persist recovery_root).
+ * @param rec_tree Recovery B-tree handle (already initialized).
+ * @param entry    In/out entry to insert (recovery_id may be assigned).
+ * @return 1 on success; 0 on failure.
+ */
+int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
+                 rec_entry_t *entry) {
+  if (!disk || !sb || !rec_tree || !entry)
+    return 0;
+
+  // Assign a new recovery_id if missing
+  if (entry->recovery_id == 0) {
+    entry->recovery_id = get_next_rec_id(disk, rec_tree);
+    if (entry->recovery_id == 0) {
+      return 0;
+    }
+  }
+
+  // Compute default retention if not provided
+  if (entry->retention_until == 0 && entry->deleted_at != 0) {
+    entry->retention_until = entry->deleted_at + DEFAULT_RECOVERY_TTL;
+  }
+
+  // Insert the entry into the B-tree
+  int ok = btree_insert(disk, sb, rec_tree, entry);
+
+  // Best-effort: if we just created a root and the SB has not persisted it yet
+  if (ok && sb->recovery_root == 0 && rec_tree->root_block != 0) {
+    sb->recovery_root = rec_tree->root_block;
+    (void)write_superblock(disk, sb);
+  }
+
+  return ok;
+}
+
+/**
+ * @brief Helper: in-order traversal collecting Recovery entries that match
+ *        a given name.
+ *
+ * Traverses the B-tree at @p node_block and compares each entry's
+ * rec_entry_t::original_name with @p name. Up to @p max matches are copied
+ * to @p out. The running total number of matches is accumulated in @p count.
+ *
+ * @param disk       Open filesystem image.
+ * @param handle     Recovery B-tree handle.
+ * @param node_block Block number of the current node.
+ * @param name       Filename to match exactly.
+ * @param out        Output buffer for matches (may be NULL to only count).
+ * @param max        Capacity of @p out buffer.
+ * @param count      In/out: total matches found so far.
+ * @return 1 on success, 0 on error (e.g., failed to read a node).
+ */
+static int rec_tree_collect_by_name(FILE *disk, btree_handle_t *handle,
+                                    uint32_t node_block, const char *name,
+                                    rec_entry_t *out, size_t max,
+                                    size_t *count) {
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node)
+    return 0;
+
+  rec_entry_t *entries = (rec_entry_t *)node->entries;
+  int ok = 1;
+
+  for (int i = 0; i < node->num_entries && ok; i++) {
+    if (!node->is_leaf) {
+      ok = rec_tree_collect_by_name(disk, handle, node->children[i], name, out,
+                                    max, count);
+    }
+
+    if (ok && strcmp(entries[i].original_name, name) == 0) {
+      if (out && *count < max) {
+        out[*count] = entries[i];
+      }
+      (*count)++;
+    }
+  }
+
+  if (ok && !node->is_leaf) {
+    ok = rec_tree_collect_by_name(
+        disk, handle, node->children[node->num_entries], name, out, max, count);
+  }
+
+  btree_free_node(node);
+  return ok;
+}
+
+/**
+ * @brief Find recovery entries by original filename.
+ *
+ * Performs an in-order traversal over the Recovery B-tree and collects entries
+ * whose rec_entry_t::original_name matches exactly the provided @p name.
+ * Up to @p max matches are copied into @p out (if non-NULL). The total number
+ * of matches (which can exceed @p max) is written to @p out_count.
+ *
+ * @param disk       Open filesystem image.
+ * @param rec_tree   Initialized Recovery B-tree handle.
+ * @param name       Exact filename to match against rec_entry_t::original_name.
+ * @param out        Output buffer for matches (may be NULL to only count).
+ * @param max        Capacity of @p out in number of entries.
+ * @param out_count  Output: total number of matches found.
+ * @return 1 on success (including zero matches), 0 on invalid args or I/O
+ *         failure while traversing.
+ */
+int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree,
+                          const char *name, rec_entry_t *out, size_t max,
+                          size_t *out_count) {
+  if (!disk || !rec_tree || !name || !out_count)
+    return 0;
+
+  *out_count = 0;
+  if (rec_tree->root_block == 0)
+    return 1; /* empty tree */
+
+  size_t cap = out ? max : 0;
+  return rec_tree_collect_by_name(disk, rec_tree, rec_tree->root_block, name,
+                                  out, cap, out_count);
 }
 
 /**
