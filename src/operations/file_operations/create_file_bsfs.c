@@ -105,7 +105,8 @@ int create_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
   ino.btree_root = 0;
 
   /* 3) Insert inode into the inode B-tree */
-  if (insert_inode(disk, sb, inode_tree, &ino) != 1)
+  // insert_inode returns 0 on success (btree_insert convention)
+  if (insert_inode(disk, sb, inode_tree, &ino) != 0)
     return -1;
 
   /* 4) Build dir_entry_t and insert into parent directory (add_dir_entry

@@ -47,6 +47,7 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
 
   // 3. Prepare inode handle and allocate inode number
   btree_handle_t *inode_tree = btree_create_inode_handle();
+  inode_tree->root_block = sb->inode_root;
   uint32_t new_inode_number = get_next_inode_number(disk, inode_tree);
   if (new_inode_number == INVALID_BLOCK) {
     fprintf(stderr, "Failed to allocate new inode number.\n");
@@ -79,6 +80,7 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
   strncpy(dot.filename, ".", MAX_FILENAME);
 
   dir_t new_dir;
+  memset(&new_dir, 0, sizeof(new_dir));
   new_dir.inode = new_inode;
   new_dir.current_index = 0;
 
@@ -159,8 +161,9 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path,
 
   // 3. Load inode
   btree_handle_t *inode_tree = btree_create_inode_handle();
+  inode_tree->root_block = sb->inode_root;
   inode_t dir_inode;
-  if (read_inode(disk, inode_tree, entry.inode_number, &dir_inode) != 0) {
+  if (!read_inode(disk, inode_tree, entry.inode_number, &dir_inode)) {
     fprintf(stderr, "Failed to read directory inode.\n");
     free(inode_tree);
     return -1;
@@ -168,6 +171,7 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path,
 
   // 4. Open the directory and check if it's empty
   dir_t dir;
+  memset(&dir, 0, sizeof(dir));
   dir.inode = dir_inode;
   dir.current_index = 0;
 
@@ -197,8 +201,8 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path,
     return -1;
   }
 
-  // 6. Remove inode
-  if (remove_inode(disk, sb, inode_tree, entry.inode_number) != 0) {
+  // 6. Remove inode (remove_inode returns 1 on success)
+  if (!remove_inode(disk, sb, inode_tree, entry.inode_number)) {
     fprintf(stderr, "Failed to remove inode.\n");
     free(inode_tree);
     return -1;

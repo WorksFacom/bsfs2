@@ -13,16 +13,7 @@
 
 char current_path[PATH_MAX] = "/"; // Initialize current path to root
 
-/**
- * @brief Reads the superblock from the file and fills the superblock_t struct.
- * @param file Pointer to the opened BSFS file.
- * @param sb Pointer to the superblock_t struct to be filled.
- */
-void read_superblock(FILE *file, superblock_t *sb) {
-  fseek(file, 0, SEEK_SET);
-  fread(sb, sizeof(superblock_t), 1, file);
-  fflush(file);
-}
+/* Use shared read_superblock from superblock_operations_bsfs.c */
 
 /**
  * @brief Reads a line from standard input.
@@ -82,11 +73,11 @@ char **browser_split_line(char *line) {
 /**
  * @brief Executes a command by looking it up in the command table.
  * @param file Pointer to the BSFS file.
- * @param sb Superblock struct with file system metadata.
+ * @param sb Pointer to loaded superblock (passed by reference to commands).
  * @param args Tokenized arguments from user input.
  * @return 0 to exit, 1 to continue loop.
  */
-int browser_execute(FILE *file, superblock_t sb, char **args) {
+int browser_execute(FILE *file, superblock_t *sb, char **args) {
   if (args[0] == NULL) {
     return 1;
   }
@@ -96,8 +87,14 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
                         {"help", bsfs_cmd_help},
                         {"cd", cd},
                         {"pwd", pwd},
+                        {"whoami", whoami_cmd},
+                        {"su", su_cmd},
+                        {"umask", umask_cmd},
                         {"ls", list},
                         {"list", list},
+                        {"recovery", recovery},
+                        {"restore", restore},
+                        {"purge", purge},
                         {"mkdir", mkdir},
                         {"rmdir", rmdir},
                         {"touch", touch},
@@ -105,6 +102,9 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
                         {"cp", cp},
                         {"mv", mv},
                         {"cat", cat},
+                        {"chmod", chmod},
+                        {"chown", chown},
+                        {"chgrp", chgrp},
                         {"echo", echo},
                         {"stat", stat_cmd},
                         {"dd", dd}};
@@ -113,7 +113,7 @@ int browser_execute(FILE *file, superblock_t sb, char **args) {
 
   for (int i = 0; i < num_commands; i++) {
     if (strcmp(args[0], commands[i].name) == 0) {
-      return commands[i].func(file, &sb, args);
+      return commands[i].func(file, sb, args);
     }
   }
 
@@ -132,10 +132,12 @@ void browser_loop(FILE *file, superblock_t *sb) {
   char **args;
   int status;
   do {
+    // Refresh superblock from disk so commands see up-to-date roots
+    read_superblock(file, sb);
     fprintf(stdout, "BSFS:%s> ", current_path);
     line = browser_read_line();
     args = browser_split_line(line);
-    status = browser_execute(file, *sb, args);
+    status = browser_execute(file, sb, args);
 
     free(line);
     free(args);

@@ -16,6 +16,7 @@
  * internals.
  */
 #include "../../include/inode_operations_bsfs.h"
+#include "../../include/superblock_operations_bsfs.h"
 
 /**
  * @brief Reads an inode from the inode B-tree.

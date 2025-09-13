@@ -8,6 +8,7 @@
  */
 
 #include "../../include/path_utils_bsfs.h"
+#include "../../include/permissions_bsfs.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -48,7 +49,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
 
   // Start from root if absolute, or from cwd if relative
   if (path[0] == '/') {
-    if (read_inode(disk, inode_handle, sb->root_inode, &temp_inode) != 0) {
+    if (!read_inode(disk, inode_handle, sb->root_inode, &temp_inode)) {
       free(inode_handle);
       return -1;
     }
@@ -59,6 +60,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
   }
 
   token = strtok(rest, "/");
+  uint16_t uid = 0, gid = 0; /* default to root here; API-level will enforce */
   while (token != NULL) {
     char *next_token = strtok(NULL, "/");
 
@@ -69,13 +71,19 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
       return 0;
     }
 
+    // require traverse on current directory before descending
+    if (!bsfs_can_traverse_dir(&current.inode, uid, gid)) {
+      free(inode_handle);
+      return -1;
+    }
+
     dir_entry_t entry;
     if (lookup_dir_entry(disk, sb, &current, token, &entry) != 0) {
       free(inode_handle);
       return -1;
     }
 
-    if (read_inode(disk, inode_handle, entry.inode_number, &temp_inode) != 0) {
+    if (!read_inode(disk, inode_handle, entry.inode_number, &temp_inode)) {
       free(inode_handle);
       return -1;
     }
@@ -113,23 +121,42 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
  */
 int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
                 inode_t *out_inode) {
+  if (!disk || !sb || !path || !cwd || !out_inode)
+    return -1;
+
+  // Handle special cases: root "/" and current "."
+  if (path[0] == '/' && path[1] == '\0') {
+    btree_handle_t *inode_handle = btree_create_inode_handle();
+    inode_handle->root_block = sb->inode_root;
+    int ok = read_inode(disk, inode_handle, sb->root_inode, out_inode);
+    free(inode_handle);
+    return ok ? 0 : -1;
+  }
+  if ((path[0] == '.' && path[1] == '\0')) {
+    *out_inode = cwd->inode;
+    return 0;
+  }
   dir_t parent;
   char name[MAX_FILENAME];
 
   if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
+    fprintf(stderr, "lookup_file: resolve_path failed for '%s'\n", path);
     return -1;
   }
 
   dir_entry_t entry;
   if (lookup_dir_entry(disk, sb, &parent, name, &entry) != 0) {
+    fprintf(stderr,
+            "lookup_file: entry not found. parent ino=%u name='%s'\n",
+            parent.inode.inode_number, name);
     return -1;
   }
 
   btree_handle_t *inode_handle = btree_create_inode_handle();
   inode_handle->root_block = sb->inode_root;
-  int result = read_inode(disk, inode_handle, entry.inode_number, out_inode);
+  int found = read_inode(disk, inode_handle, entry.inode_number, out_inode);
   free(inode_handle);
-  return result;
+  return found ? 0 : -1;
 }
 
 /**

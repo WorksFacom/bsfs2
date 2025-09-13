@@ -125,6 +125,7 @@ int read_block(FILE *disk, uint32_t block_number, void *data, size_t size) {
  */
 int free_block(FILE *disk, superblock_t *sb, uint32_t block_number,
                uint8_t *bitmap, uint32_t bitmap_size) {
+  (void)bitmap_size; // unused parameter
   if (!disk || !bitmap) {
     fprintf(stderr, "Error (free block): null disk pointer or bitmap.\n");
     return -1;

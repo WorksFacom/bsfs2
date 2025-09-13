@@ -29,12 +29,12 @@ static void collect_all(FILE *disk, btree_handle_t *rec_handle,
   if (!node)
     return;
   if (!node->is_leaf) {
-    for (int i = 0; i < node->num_entries; i++)
+    for (uint32_t i = 0; i < node->num_entries; i++)
       collect_all(disk, rec_handle, node->children[i], arr, count, cap);
   }
 
   // entries
-  for (int i = 0; i < node->num_entries; i++) {
+  for (uint32_t i = 0; i < node->num_entries; i++) {
     if (*count == *cap) {
       *cap = (*cap == 0) ? 64 : (*cap * 2);
       *arr = (rec_item_t *)realloc(*arr, *cap * sizeof(rec_item_t));
@@ -139,4 +139,3 @@ size_t rec_gc_purge_until(FILE *disk, superblock_t *sb, uint32_t needed_blocks,
   free(rec_handle);
   return freed;
 }
-

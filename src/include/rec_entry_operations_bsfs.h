@@ -135,4 +135,25 @@ int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree,
                           const char *name, rec_entry_t *out, size_t max,
                           size_t *out_count);
 
+/**
+ * @brief Permanently purge a deleted file from the filesystem.
+ *
+ * Reclaims all data blocks referenced by the snapshot @p rec (both direct
+ * spans and spans in the per-file data B-tree), removes the span records, and
+ * finally removes the metadata entry from the Recovery B-tree.
+ *
+ * Failure semantics:
+ *  - If deallocation of data or removal of span mappings fails, the recovery
+ *    entry is NOT removed and the function returns -1, allowing a retry.
+ *
+ * @param disk      Open filesystem image.
+ * @param sb        Loaded superblock.
+ * @param data_tree B-tree handle for file data spans (bspan_t mappings).
+ * @param rec_tree  B-tree handle for recovery entries (rec_entry_t).
+ * @param rec       The recovery entry describing the file to purge.
+ * @return 0 on success; -1 on error.
+ */
+int purge_file(FILE *disk, superblock_t *sb, btree_handle_t *data_tree,
+               btree_handle_t *rec_tree, const rec_entry_t *rec);
+
 #endif /* REC_ENTRY_OPERATIONS_BSFS_H */

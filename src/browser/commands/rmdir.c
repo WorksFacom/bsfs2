@@ -1,13 +1,11 @@
+#include <errno.h>
 /**
  * @file rmdir.c
  * @brief Implements the rmdir command for the BSFS filesystem.
  *
  * Provides functionality to remove directories within the BSFS filesystem.
  */
-#include <stdio.h>
-#include <string.h>
-#include "filesystem_bsfs.h"
-#include "api_bsfs.h"
+#include "../../include/api_bsfs.h"
 
 /**
  * @brief Removes an empty directory from the BSFS filesystem.
@@ -18,14 +16,15 @@
  * @return Returns 1 to continue browser loop on success or failure.
  */
 int rmdir(FILE *disk, superblock_t *sb, char **args) {
-    if (!args[1]) {
-        printf("Usage: rmdir <directory>\n");
-        return 1;
-    }
-    if (rmdir_bsfs(disk, sb, args[1]) != 0) {
-        printf("Error removing directory (must be empty): %s\n", args[1]);
-        return 1;
-    }
-    printf("Directory removed: %s\n", args[1]);
+  if (!args[1]) {
+    printf("Usage: rmdir <directory>\n");
     return 1;
+  }
+    if (rmdir_bsfs(disk, sb, args[1]) != 0) {
+        if (errno == EACCES) printf("Permission denied\n");
+        else printf("Error removing directory (must be empty): %s\n", args[1]);
+        return 1;
+    }
+  printf("Directory removed: %s\n", args[1]);
+  return 1;
 }

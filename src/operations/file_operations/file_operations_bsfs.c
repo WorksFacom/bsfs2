@@ -120,7 +120,7 @@ static int bspan_search_le(FILE *disk, btree_handle_t *handle, uint32_t key,
     if (!node)
       break;
     uint8_t *entries = node->entries;
-    int i = 0;
+    uint32_t i = 0;
     // find first entry with key >= target
     while (i < node->num_entries) {
       uint32_t ekey = handle->get_key(entries + i * handle->entry_size);
@@ -299,12 +299,12 @@ int truncate_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
     uint8_t *entries = node->entries;
     // push children first for post-order like
     if (!node->is_leaf) {
-      for (int i = 0; i <= node->num_entries; i++) {
+      for (uint32_t i = 0; i <= node->num_entries; i++) {
         if (top < (int)(sizeof(stack) / sizeof(stack[0])))
           stack[top++] = node->children[i];
       }
     }
-    for (int i = 0; i < node->num_entries; i++) {
+    for (uint32_t i = 0; i < node->num_entries; i++) {
       uint32_t ekey = bspan_tree->get_key(entries + i * bspan_tree->entry_size);
       if (ekey >= first_remove_blk) {
         if (kcount < sizeof(keys) / sizeof(keys[0])) {

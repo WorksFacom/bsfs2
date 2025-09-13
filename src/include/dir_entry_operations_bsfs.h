@@ -1,3 +1,11 @@
+/**
+ * @file dir_entry_operations_bsfs.h
+ * @brief Directory entry B-tree operations for BSFS (public interface).
+ *
+ * Provides the in-memory directory descriptor (@ref dir_t) and the set of
+ * operations for creating, removing, updating, looking up, and iterating
+ * directory entries backed by a B-tree stored in the filesystem image.
+ */
 #ifndef DIRECTORY_OPERATIONS
 #define DIRECTORY_OPERATIONS
 

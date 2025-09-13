@@ -283,6 +283,24 @@ int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block,
                  uint32_t key, void *output);
 
 /**
+ * @brief Searches for an entry in the B-tree using the handle's compare
+ *        function (full entry comparison), not just the numeric key.
+ *
+ * This is useful for data types whose ordering depends on a composite key
+ * (e.g., directory entries ordered by (hash(filename), filename)).
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle containing type/logic functions.
+ * @param node_block Block number of the node to begin searching from.
+ * @param needle Pointer to an in-memory entry (same type as tree entries)
+ *               used for comparison and navigation.
+ * @param output Pointer where the found entry will be copied if present.
+ * @return int 1 if found, 0 otherwise.
+ */
+int btree_search_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block,
+                       const void *needle, void *output);
+
+/**
  * @brief Updates an existing entry in the B-tree with new data.
  *
  * This function searches for an entry in the B-tree based on the key extracted

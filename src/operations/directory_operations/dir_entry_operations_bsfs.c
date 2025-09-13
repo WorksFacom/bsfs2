@@ -88,12 +88,20 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
     return -1;
   }
 
+  uint32_t old_root = handle->root_block;
+  fprintf(stderr,
+          "add_dir_entry: parent_ino=%u name='%s' old_root=%u\n",
+          dir->inode.inode_number, entry->filename, old_root);
+
   if (btree_insert(disk, sb, handle, entry) != 0) {
+    fprintf(stderr, "add_dir_entry: insert failed for name='%s'\n",
+            entry->filename);
     free(handle);
     return -1;
   }
 
-  if (dir->inode.btree_root == 0 && handle->root_block != 0) {
+  // Persist btree root changes (first insert or after a split)
+  if (handle->root_block != 0 && handle->root_block != dir->inode.btree_root) {
     dir->inode.btree_root = handle->root_block;
     btree_handle_t *inode_handle = btree_create_inode_handle();
     inode_handle->root_block = sb->inode_root;
@@ -101,8 +109,45 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
     free(inode_handle);
   }
 
+  fprintf(stderr,
+          "add_dir_entry: parent_ino=%u name='%s' new_root=%u\n",
+          dir->inode.inode_number, entry->filename, handle->root_block);
+
   free(handle);
   return 0;
+}
+
+/* Recursively scan the directory B-tree and try to find an entry by exact name. */
+static int scan_dir_tree_find(FILE *disk, btree_handle_t *handle,
+                              uint32_t node_block, const char *name,
+                              dir_entry_t *out) {
+  if (node_block == 0)
+    return 0;
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node)
+    return 0;
+
+  // Check current node entries first
+  for (uint32_t i = 0; i < node->num_entries; i++) {
+    dir_entry_t *e = (dir_entry_t *)((uint8_t *)node->entries +
+                                     i * handle->entry_size);
+    if (strncmp(e->filename, name, MAX_FILENAME) == 0) {
+      memcpy(out, e, sizeof(dir_entry_t));
+      btree_free_node(node);
+      return 1;
+    }
+  }
+
+  // Recurse into children if not a leaf
+  int found = 0;
+  if (!node->is_leaf) {
+    for (uint32_t i = 0; i <= node->num_entries && !found; i++) {
+      found = scan_dir_tree_find(disk, handle, node->children[i], name, out);
+    }
+  }
+
+  btree_free_node(node);
+  return found;
 }
 
 /**
@@ -121,18 +166,40 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
   btree_handle_t *handle = btree_create_dir_entry_handle();
   handle->root_block = dir->inode.btree_root;
 
-  uint32_t hash = hash_filename(filename);
+  fprintf(stderr, "remove_dir_entry: parent_ino=%u root=%u name='%s'\n",
+          dir->inode.inode_number, handle->root_block, filename);
+
+  dir_entry_t needle;
+  memset(&needle, 0, sizeof(needle));
+  strncpy(needle.filename, filename, MAX_FILENAME - 1);
+  needle.filename[MAX_FILENAME - 1] = '\0';
 
   dir_entry_t found;
-  if (!btree_search(disk, handle, handle->root_block, hash, &found)) {
+  int present = btree_search_entry(disk, handle, handle->root_block, &needle,
+                                   &found);
+  if (!present) {
+    // fallback scan
+    present = scan_dir_tree_find(disk, handle, handle->root_block, filename,
+                                 &found);
+  }
+  if (!present) {
     fprintf(stderr, "Directory entry '%s' not found.\n", filename);
     free(handle);
     return -1;
   }
 
+  uint32_t hash = hash_filename(found.filename);
   int ok = btree_remove(disk, sb, handle, hash);
+
+  if (handle->root_block != 0 && handle->root_block != dir->inode.btree_root) {
+    dir->inode.btree_root = handle->root_block;
+    btree_handle_t *inode_handle = btree_create_inode_handle();
+    inode_handle->root_block = sb->inode_root;
+    (void)update_inode(disk, inode_handle, &dir->inode);
+    free(inode_handle);
+  }
   free(handle);
-  return ok;
+  return ok ? 0 : -1;
 }
 
 /**
@@ -180,6 +247,7 @@ int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  */
 int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
                      dir_entry_t *result) {
+  (void)sb;
   btree_handle_t *handle = btree_create_dir_entry_handle();
   handle->root_block = dir->inode.btree_root;
 
@@ -187,9 +255,22 @@ int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
   strncpy(temp.filename, name, MAX_FILENAME);
   temp.filename[MAX_FILENAME - 1] = '\0';
 
-  uint32_t key = hash_filename(temp.filename);
+  // Try full-entry search using directory ordering (hash + name)
+  fprintf(stderr,
+          "lookup_dir_entry: parent_ino=%u root=%u name='%s'\n",
+          dir->inode.inode_number, handle->root_block, temp.filename);
+  int found = btree_search_entry(disk, handle, handle->root_block, &temp,
+                                 result);
 
-  int found = btree_search(disk, handle, handle->root_block, key, result);
+  if (!found) {
+    // Fallback: deep scan over the B-tree to find exact name
+    fprintf(stderr,
+            "lookup_dir_entry: fallback scan for name='%s' root=%u\n",
+            temp.filename, handle->root_block);
+    found = scan_dir_tree_find(disk, handle, handle->root_block,
+                               temp.filename, result);
+  }
+
   free(handle);
   return found ? 0 : -1;
 }
@@ -242,7 +323,7 @@ static int btree_find_successor_entry(FILE *disk, btree_handle_t *handle,
   int found = 0;
   uint8_t *entries = node->entries;
 
-  for (int i = 0; i < node->num_entries && !found; i++) {
+  for (uint32_t i = 0; i < node->num_entries && !found; i++) {
     uint32_t ekey = handle->get_key(entries + i * handle->entry_size);
     if (ekey > after_key) {
       if (!node->is_leaf) {

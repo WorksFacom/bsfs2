@@ -228,16 +228,16 @@ int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
     entry->retention_until = entry->deleted_at + DEFAULT_RECOVERY_TTL;
   }
 
-  // Insert the entry into the B-tree
-  int ok = btree_insert(disk, sb, rec_tree, entry);
+  // Insert the entry into the B-tree (btree_insert returns 0 on success)
+  int ok0 = btree_insert(disk, sb, rec_tree, entry);
 
   // Best-effort: if we just created a root and the SB has not persisted it yet
-  if (ok && sb->recovery_root == 0 && rec_tree->root_block != 0) {
+  if (ok0 == 0 && sb->recovery_root == 0 && rec_tree->root_block != 0) {
     sb->recovery_root = rec_tree->root_block;
     (void)write_superblock(disk, sb);
   }
 
-  return ok;
+  return (ok0 == 0) ? 1 : 0;
 }
 
 /**
@@ -268,7 +268,7 @@ static int rec_tree_collect_by_name(FILE *disk, btree_handle_t *handle,
   rec_entry_t *entries = (rec_entry_t *)node->entries;
   int ok = 1;
 
-  for (int i = 0; i < node->num_entries && ok; i++) {
+  for (uint32_t i = 0; i < node->num_entries && ok; i++) {
     if (!node->is_leaf) {
       ok = rec_tree_collect_by_name(disk, handle, node->children[i], name, out,
                                     max, count);
