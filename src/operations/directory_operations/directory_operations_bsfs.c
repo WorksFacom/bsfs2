@@ -8,23 +8,17 @@
  */
 
 #include "../../include/directory_operations_bsfs.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 /**
  * @brief Creates a new directory at the given path.
  *
- * This function allocates a new inode of type directory and inserts it
- * into the parent directory. It also initializes the new directory
- * with "." and ".." entries pointing to itself and its parent.
+ * This function allocates a new inode of type directory and inserts it as an
+ * entry into the parent directory determined by the path.
  *
- * @param disk Pointer to the open filesystem image.
+ * @param disk Pointer to the disk file.
  * @param sb Pointer to the loaded superblock.
  * @param path Absolute or relative path for the new directory.
- * @param cwd Pointer to the current working directory (used for relative
- * resolution).
+ * @param cwd Current working directory (for resolving relative paths).
  * @return 0 on success, -1 on error.
  */
 int create_directory(FILE *disk, superblock_t *sb, const char *path,
@@ -124,18 +118,17 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
 }
 
 /**
- * @brief Removes an empty directory at the specified path.
+ * @brief Deletes a directory at the given path, if it is empty.
  *
- * This function checks whether the directory exists and is empty, then removes
- * it from the parent directory and deletes its inode.
+ * This function removes the directory entry and deallocates the associated
+ * inode.
  *
- * @param disk Pointer to the open filesystem image.
+ * @param disk Pointer to the disk file.
  * @param sb Pointer to the loaded superblock.
- * @param path Absolute or relative path to the directory to remove.
- * @param cwd Current working directory for resolving relative paths.
- * @return 0 on success, -1 on failure.
+ * @param path Absolute or relative path of the directory to remove.
+ * @param cwd Current working directory (for resolving relative paths).
+ * @return 0 on success, -1 if the directory is not empty or cannot be removed.
  */
-
 int remove_directory(FILE *disk, superblock_t *sb, const char *path,
                      dir_t *cwd) {
   dir_t parent;
@@ -247,7 +240,7 @@ int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
   // 3. Update name if needed
   if (strcmp(src_name, dest_name) != 0) {
     strncpy(entry.filename, dest_name, MAX_FILENAME);
-    entry.filename[MAX_FILENAME - 1] = '\0'; // Garantir terminação
+    entry.filename[MAX_FILENAME - 1] = '\0'; // Ensure NUL termination
   }
 
   // 4. Add to destination directory
@@ -259,6 +252,17 @@ int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
   return 0;
 }
 
+/**
+ * @brief Initialize and persist the root directory ("/") on a fresh image.
+ *
+ * Creates the root inode with default ownership and permissions, allocates
+ * a directory B-tree for entries, inserts the mandatory "." and ".." entries,
+ * and ensures the inode tree contains the root inode.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (root inode and tree roots may be updated).
+ * @return 0 on success; -1 on error.
+ */
 int create_root_directory(FILE *disk, superblock_t *sb) {
   uint32_t root_inode_number = sb->root_inode;
 

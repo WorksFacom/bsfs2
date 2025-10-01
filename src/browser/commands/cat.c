@@ -7,12 +7,13 @@
 #include "../../include/api_bsfs.h"
 
 /**
- * @brief Displays the contents of a file in the BSFS filesystem.
+ * @brief Display file contents.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Command arguments array, expects the filename at args[1].
- * @return Returns 1 to continue browser loop on success or failure.
+ * Usage: cat &lt;path&gt;
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args File path in args[1].
+ * @return 1 to continue the REPL.
  */
 int cat(FILE *disk, superblock_t *sb, char **args) {
   if (!args[1]) {

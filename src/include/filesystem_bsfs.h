@@ -37,6 +37,7 @@
 #ifndef FILESYSTEM_BSFS
 #define FILESYSTEM_BSFS
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,7 @@
  *
  * Represents the ASCII string "BSFS" encoded as hexadecimal.
  */
+/** Magic number used to identify a BSFS image ("BSFS" in hex). */
 #define MAGIC_NUMBER 0x53465342
 
 /**
@@ -55,6 +57,7 @@
  *
  * All operations in the file system are based on fixed-size blocks.
  */
+/** Logical block size in bytes. */
 #define BLOCK_SIZE 4096
 
 /**
@@ -62,6 +65,7 @@
  *
  * Does not include the null terminator.
  */
+/** Maximum filename length (bytes, excluding NUL). */
 #define MAX_FILENAME 255
 
 /**
@@ -69,6 +73,7 @@
  *
  * Used when allocating or reading inodes from disk.
  */
+/** Size of an inode on disk (bytes). */
 #define INODE_SIZE 512
 
 /**
@@ -76,6 +81,7 @@
  *
  * Used for indexing and pointer arrays inside blocks.
  */
+/** Helper: number of 32-bit addresses per block. */
 #define ADDRESSES_PER_BLOCK (BLOCK_SIZE / sizeof(uint32_t))
 
 /**
@@ -83,15 +89,20 @@
  *
  * The last 4 bytes of the block are reserved for the next block pointer.
  */
+/** Usable bytes in a bitmap block (reserve 4B for next pointer). */
 #define BITMAP_BLOCK_BYTES (BLOCK_SIZE - sizeof(uint32_t))
 
 /**
  * @brief Special value representing an invalid or null block reference.
  */
+/** Sentinel for an invalid or absent block address. */
 #define INVALID_BLOCK 0xFFFFFFFF
 
+/** File type code: directory. */
 #define FILE_TYPE_DIR 1
-#define FILE_TYPE_FILE 0
+/** File type code: regular file. */
+#define FILE_TYPE_FILE 2
+/** Default retention period for recovery entries (seconds). */
 #define DEFAULT_RECOVERY_TTL (30ULL * 24ULL * 60ULL * 60ULL)
 
 /**
@@ -115,8 +126,10 @@ typedef struct {
 
   /**
    * Total size (in bytes) of the file system image or device.
+   *
+   * 64-bit to support large devices/images beyond 4 GiB.
    */
-  uint32_t fs_size;
+  uint64_t fs_size;
 
   /**
    * The total number of blocks available in the file system.
@@ -214,7 +227,7 @@ typedef struct {
  * @brief Represents an inode in the BSFS file system.
  *
  * The inode stores metadata and block mapping information for a file or
- * directory. It has a fixed size of 256 bytes and supports both direct block
+ * directory. It has a fixed size of 512 bytes and supports both direct block
  * spans and a B-tree reference for additional data blocks.
  */
 typedef struct {

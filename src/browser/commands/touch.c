@@ -1,4 +1,3 @@
-#include <errno.h>
 /**
  * @file touch.c
  * @brief Implements the touch command for the BSFS filesystem.
@@ -8,12 +7,13 @@
 #include "../../include/api_bsfs.h"
 
 /**
- * @brief Creates a new empty file in the BSFS filesystem.
+ * @brief Create an empty regular file.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Command arguments array, expects the filename at args[1].
- * @return Returns 1 to continue browser loop on success or failure.
+ * Usage: touch &lt;filename&gt;
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args Target filename in args[1].
+ * @return 1 to continue the REPL.
  */
 int touch(FILE *disk, superblock_t *sb, char **args) {
   if (!args[1]) {
@@ -23,8 +23,10 @@ int touch(FILE *disk, superblock_t *sb, char **args) {
 
   int result = create_file_bsfs(disk, sb, args[1]);
   if (result != 0) {
-    if (errno == EACCES) printf("Permission denied\n");
-    else printf("Error creating file: %s\n", args[1]);
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("Error creating file: %s\n", args[1]);
     return 1;
   }
 

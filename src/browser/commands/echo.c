@@ -1,4 +1,3 @@
-#include <errno.h>
 /**
  * @file echo.c
  * @brief Implements the echo command for the BSFS filesystem.
@@ -8,17 +7,13 @@
 #include "../../include/api_bsfs.h"
 
 /**
- * @brief Writes text to a file or displays text on screen.
+ * @brief Write text or append text to a file, or echo to screen.
  *
- * Supports two modes:
- * - echo "text" > filename (write to file, overwrite)
- * - echo "text" >> filename (append to file)
- * - echo "text" (display on screen)
- *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Command arguments array containing text and optional redirection.
- * @return Returns 1 to continue browser loop on success or failure.
+ * Usage: echo "text" [&gt; file | &gt;&gt; file]
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args Text tokens and optional redirection operator + filename.
+ * @return 1 to continue the REPL.
  */
 int echo(FILE *disk, superblock_t *sb, char **args) {
   if (!args[1]) {
@@ -67,50 +62,59 @@ int echo(FILE *disk, superblock_t *sb, char **args) {
 
   const char *filename = args[redirect_pos + 1];
 
-    // Handle file redirection
-    if (!append_mode) {
-        // Overwrite mode: if file does not exist, create it; then truncate and write
-        inode_t inode;
-        if (stat_bsfs(disk, sb, filename, &inode) != 0) {
-            if (create_file_bsfs(disk, sb, filename) != 0) {
-                if (errno == EACCES) printf("Permission denied\n");
-                else printf("Error creating file: %s\n", filename);
-                return 1;
-            }
-        }
-        size_t n = overwrite_bsfs(disk, sb, filename, text, (uint32_t)strlen(text));
-        if (n != strlen(text)) {
-            if (errno == EACCES) printf("Permission denied\n");
-            else printf("Error writing to file: %s\n", filename);
-            return 1;
-        }
-        printf("Text written to file: %s\n", filename);
-        return 1;
-    }
-
-    // Append mode: open, seek to end, write
-    file_t file;
-    if (open_bsfs(disk, sb, filename, &file) != 0) {
-        if (errno == EACCES) printf("Permission denied\n");
-        else printf("Error opening file: %s\n", filename);
-        return 1;
-    }
-
-    // Get file size and seek to end
+  // Handle file redirection
+  if (!append_mode) {
+    // Overwrite mode: if file does not exist, create it; then truncate and
+    // write
     inode_t inode;
-    if (stat_bsfs(disk, sb, filename, &inode) == 0) {
-        seek_bsfs(&file, inode.file_size);
-    }
-
-    size_t bytes_written = write_bsfs(disk, sb, &file, text, strlen(text));
-    if (bytes_written != strlen(text)) {
-        if (errno == EACCES) printf("Permission denied\n");
-        else printf("Error writing to file: %s\n", filename);
-        close_bsfs(&file);
+    if (stat_bsfs(disk, sb, filename, &inode) != 0) {
+      if (create_file_bsfs(disk, sb, filename) != 0) {
+        if (errno == EACCES)
+          printf("Permission denied\n");
+        else
+          printf("Error creating file: %s\n", filename);
         return 1;
+      }
     }
-
-    close_bsfs(&file);
+    size_t n = overwrite_bsfs(disk, sb, filename, text, (uint32_t)strlen(text));
+    if (n != strlen(text)) {
+      if (errno == EACCES)
+        printf("Permission denied\n");
+      else
+        printf("Error writing to file: %s\n", filename);
+      return 1;
+    }
     printf("Text written to file: %s\n", filename);
     return 1;
+  }
+
+  // Append mode: open, seek to end, write
+  file_t file;
+  if (open_bsfs(disk, sb, filename, &file) != 0) {
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("Error opening file: %s\n", filename);
+    return 1;
+  }
+
+  // Get file size and seek to end
+  inode_t inode;
+  if (stat_bsfs(disk, sb, filename, &inode) == 0) {
+    seek_bsfs(&file, inode.file_size);
+  }
+
+  size_t bytes_written = write_bsfs(disk, sb, &file, text, strlen(text));
+  if (bytes_written != strlen(text)) {
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("Error writing to file: %s\n", filename);
+    close_bsfs(&file);
+    return 1;
+  }
+
+  close_bsfs(&file);
+  printf("Text written to file: %s\n", filename);
+  return 1;
 }

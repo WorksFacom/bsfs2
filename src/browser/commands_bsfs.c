@@ -7,12 +7,15 @@
 #include "../include/commands_bsfs.h"
 
 /**
- * @brief Exits the BSFS browser.
+ * @brief Exit the BSFS browser loop.
  *
- * @param file Unused parameter.
- * @param sb Unused parameter.
- * @param args Unused parameter.
- * @return Always returns 0 to exit the browser loop.
+ * Usage: exit
+ *
+ * Prints a farewell message and returns 0 so the main loop terminates.
+ * @param file Open filesystem image (unused).
+ * @param sb   Loaded superblock (unused).
+ * @param args Tokenized arguments (unused).
+ * @return 0 to signal the REPL to exit.
  */
 int bsfs_cmd_exit(FILE *file, superblock_t *sb, char **args) {
   (void)file;
@@ -23,19 +26,24 @@ int bsfs_cmd_exit(FILE *file, superblock_t *sb, char **args) {
 }
 
 /**
- * @brief Displays filesystem information from the superblock.
+ * @brief Print filesystem information from the superblock.
  *
- * @param file Unused parameter.
- * @param sb Pointer to the superblock structure containing filesystem metadata.
- * @param args Unused parameter.
- * @return Always returns 1 to continue the browser loop.
+ * Usage: info
+ *
+ * Dumps key fields such as magic, block size, total blocks, bitmap layout,
+ * inode and recovery roots, and the root inode number.
+ * @param file Open filesystem image (unused).
+ * @param sb   Loaded superblock.
+ * @param args Tokenized arguments (unused).
+ * @return 1 to continue the REPL.
  */
 int bsfs_cmd_info(FILE *file, superblock_t *sb, char **args) {
   (void)file;
   (void)args;
   fprintf(stdout, "Magic Number: %u\n", sb->magic_number);
   fprintf(stdout, "Block size (bytes): %u\n", sb->block_size);
-  fprintf(stdout, "File System Size (bytes): %u\n", sb->fs_size);
+  fprintf(stdout, "File System Size (bytes): %llu\n",
+          (unsigned long long)sb->fs_size);
   fprintf(stdout, "Total Blocks: %u\n", sb->total_blocks);
   fprintf(stdout, "Block Bitmap Start: %u\n", sb->block_bitmap_start);
   fprintf(stdout, "Block Bitmap Total: %u\n", sb->block_bitmap_total);
@@ -47,12 +55,16 @@ int bsfs_cmd_info(FILE *file, superblock_t *sb, char **args) {
 }
 
 /**
- * @brief Displays help information about available commands.
+ * @brief Display a help summary for available commands.
  *
- * @param file Unused parameter.
- * @param sb Unused parameter.
- * @param args Unused parameter.
- * @return Always returns 1 to continue the browser loop.
+ * Usage: help
+ *
+ * Prints categories and usage examples for navigation, file, directory,
+ * recovery and system commands available in the browser.
+ * @param file Open filesystem image (unused).
+ * @param sb   Loaded superblock (unused).
+ * @param args Tokenized arguments (unused).
+ * @return 1 to continue the REPL.
  */
 int bsfs_cmd_help(FILE *file, superblock_t *sb, char **args) {
   (void)file;
@@ -77,11 +89,17 @@ int bsfs_cmd_help(FILE *file, superblock_t *sb, char **args) {
   fprintf(stdout, "\n");
   fprintf(stdout, "File Operations:\n");
   fprintf(stdout, "  touch <filename>   - Create an empty file\n");
-  fprintf(stdout, "  rm <filename>      - Remove a file\n");
+  fprintf(stdout,
+          "  rm <filename>      - Remove a file (rm --all [dir] sweeps files with timing)\n");
   fprintf(stdout, "  cp <src> <dest>    - Copy a file\n");
   fprintf(stdout, "  mv <src> <dest>    - Move/rename a file or directory\n");
   fprintf(stdout, "  cat <filename>     - Display file contents\n");
-  fprintf(stdout, "  chmod <mode> <path>- Change permissions (octal, e.g., 755)\n");
+  fprintf(stdout,
+          "  fill <count> <size> [prefix] [bs=<n>] [pattern=index|zero|random]\n");
+  fprintf(stdout,
+          "       Create many files and print elapsed time (size/bs accept K/M/G)\n");
+  fprintf(stdout,
+          "  chmod <mode> <path>- Change permissions (octal, e.g., 755)\n");
   fprintf(stdout, "  chown <uid> <path> - Change file owner (root only)\n");
   fprintf(stdout, "  chgrp <gid> <path> - Change file group (root only)\n");
   fprintf(stdout, "  echo <text>        - Display text or write to file\n");
@@ -101,7 +119,8 @@ int bsfs_cmd_help(FILE *file, superblock_t *sb, char **args) {
                   "filter by name)\n");
   fprintf(stdout, "  restore <id|name> [dir] - Restore a deleted file by "
                   "recovery id or by original name (optional dest dir)\n");
-  fprintf(stdout, "  purge [id|oldest N|expired] - Purge recovery entries (default: older than ~30 days)\n");
+  fprintf(stdout, "  purge [id|oldest N|expired] - Purge recovery entries "
+                  "(default: older than ~30 days)\n");
   fprintf(stdout, "  help               - Display this help message\n");
   fprintf(stdout, "  exit               - Exit the BSFS browser\n");
 

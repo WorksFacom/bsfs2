@@ -12,14 +12,30 @@
 #include "../../include/allocate_bsfs.h"
 #include "../../include/btree_bsfs.h"
 #include "../../include/rec_entry_operations_bsfs.h"
-#include "../../include/superblock_operations_bsfs.h"
-#include <stdlib.h>
-#include <string.h>
 
+/**
+ * @brief Internal item wrapper used during Recovery GC traversals.
+ *
+ * Carries a copy of a recovery entry while collecting and sorting
+ * candidates for purging.
+ */
 typedef struct {
-  rec_entry_t entry;
+  rec_entry_t entry; /**< Snapshot copied from the Recovery B-tree. */
 } rec_item_t;
 
+/**
+ * @brief Collect all recovery entries from the Recovery tree into a dynamic array.
+ *
+ * Performs an in-order traversal starting at @p node_block, appending each
+ * rec_entry_t to an array that grows as needed by doubling its capacity.
+ *
+ * @param disk        Open filesystem image.
+ * @param rec_handle  Recovery B-tree handle.
+ * @param node_block  Block number of the current node to traverse.
+ * @param arr         In/out: pointer to the dynamic array buffer.
+ * @param count       In/out: number of valid items currently stored.
+ * @param cap         In/out: current capacity of @p arr (in items).
+ */
 static void collect_all(FILE *disk, btree_handle_t *rec_handle,
                         uint32_t node_block, rec_item_t **arr, size_t *count,
                         size_t *cap) {
@@ -54,6 +70,13 @@ static void collect_all(FILE *disk, btree_handle_t *rec_handle,
   btree_free_node(node);
 }
 
+/**
+ * @brief qsort comparator for ascending deleted_at (and recovery_id as tiebreaker).
+ *
+ * @param a Pointer to the first rec_item_t.
+ * @param b Pointer to the second rec_item_t.
+ * @return Negative if a<b, positive if a>b, 0 if equal by the ordering.
+ */
 static int cmp_deleted_at(const void *a, const void *b) {
   const rec_item_t *ra = (const rec_item_t *)a;
   const rec_item_t *rb = (const rec_item_t *)b;
@@ -64,8 +87,21 @@ static int cmp_deleted_at(const void *a, const void *b) {
   return 0;
 }
 
-static size_t purge_one(FILE *disk, superblock_t *sb, btree_handle_t *rec_handle,
-                        const rec_entry_t *e) {
+/**
+ * @brief Purge a single recovery entry and reclaim its data blocks.
+ *
+ * Deallocates all direct spans and, if present, traverses the per-file bspan
+ * tree to deallocate the remaining spans. Removes the metadata from the
+ * Recovery B-tree.
+ *
+ * @param disk        Open filesystem image.
+ * @param sb          Loaded superblock.
+ * @param rec_handle  Recovery B-tree handle.
+ * @param e           Recovery entry describing the deleted file.
+ * @return Number of blocks freed by this purge operation.
+ */
+static size_t purge_one(FILE *disk, superblock_t *sb,
+                        btree_handle_t *rec_handle, const rec_entry_t *e) {
   size_t freed = 0;
 
   // free direct spans
@@ -94,6 +130,25 @@ static size_t purge_one(FILE *disk, superblock_t *sb, btree_handle_t *rec_handle
   return freed;
 }
 
+/**
+ * @brief Purge Recovery entries until at least a target number of blocks are freed.
+ *
+ * Attempts to reclaim space by first removing expired entries (those with
+ * retention_until <= now). If that is insufficient, continues by removing the
+ * oldest remaining entries (ascending deleted_at) until at least
+ * @p needed_blocks have been freed or there are no more entries.
+ *
+ * For each purged entry, this routine deallocates blocks described by its 16
+ * direct spans and, if present, traverses the per-file bspan B-tree to
+ * deallocate the remaining spans. Finally, it removes the metadata entry from
+ * the Recovery B-tree.
+ *
+ * @param disk          Open filesystem image.
+ * @param sb            Loaded superblock (used for bitmap updates and recovery root).
+ * @param needed_blocks Minimum number of blocks to free.
+ * @param now           Current timestamp used for retention checks.
+ * @return Number of blocks actually freed (can be less than requested).
+ */
 size_t rec_gc_purge_until(FILE *disk, superblock_t *sb, uint32_t needed_blocks,
                           uint64_t now) {
   if (!disk || !sb || needed_blocks == 0)

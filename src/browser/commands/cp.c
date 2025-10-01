@@ -1,4 +1,3 @@
-#include <errno.h>
 /**
  * @file cp.c
  * @brief Implements the cp command for the BSFS filesystem.
@@ -6,18 +5,15 @@
  * Copies files within the filesystem.
  */
 #include "../../include/api_bsfs.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /**
- * @brief Copies a file from source to destination in the BSFS filesystem.
+ * @brief Copy a file.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Command arguments array, expects source at args[1] and
- * destination at args[2].
- * @return Returns 1 to continue browser loop on success or failure.
+ * Usage: cp &lt;src&gt; &lt;dst&gt;
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args Source path in args[1], destination path in args[2].
+ * @return 1 to continue the REPL.
  */
 int cp(FILE *disk, superblock_t *sb, char **args) {
   if (!args[1] || !args[2]) {
@@ -31,12 +27,14 @@ int cp(FILE *disk, superblock_t *sb, char **args) {
     return 1;
   }
 
-    if (create_file_bsfs(disk, sb, args[2]) != 0) {
-        if (errno == EACCES) printf("Permission denied\n");
-        else printf("Error creating destination file: %s\n", args[2]);
-        close_bsfs(&source_file);
-        return 1;
-    }
+  if (create_file_bsfs(disk, sb, args[2]) != 0) {
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("Error creating destination file: %s\n", args[2]);
+    close_bsfs(&source_file);
+    return 1;
+  }
 
   file_t dest_file;
   if (open_bsfs(disk, sb, args[2], &dest_file) != 0) {
@@ -51,14 +49,16 @@ int cp(FILE *disk, superblock_t *sb, char **args) {
 
   while ((bytes_read =
               read_bsfs(disk, sb, &source_file, buffer, sizeof(buffer))) > 0) {
-        size_t wrote = write_bsfs(disk, sb, &dest_file, buffer, bytes_read);
-        if (wrote != bytes_read) {
-            if (errno == EACCES) printf("Permission denied\n");
-            else printf("Error writing to destination file: %s\n", args[2]);
-            close_bsfs(&source_file);
-            close_bsfs(&dest_file);
-            return 1;
-        }
+    size_t wrote = write_bsfs(disk, sb, &dest_file, buffer, bytes_read);
+    if (wrote != bytes_read) {
+      if (errno == EACCES)
+        printf("Permission denied\n");
+      else
+        printf("Error writing to destination file: %s\n", args[2]);
+      close_bsfs(&source_file);
+      close_bsfs(&dest_file);
+      return 1;
+    }
   }
 
   close_bsfs(&source_file);

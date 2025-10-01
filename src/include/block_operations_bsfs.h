@@ -56,17 +56,16 @@ int read_block(FILE *disk, uint32_t block_number, void *data, size_t size);
 /**
  * @brief Marks a block as free in the file system.
  *
- * This function marks the specified block as free in the bitmap and
- * saves the updated bitmap back to the disk. The block is marked by
- * clearing the corresponding bit in the bitmap.
+ * Clears the bit corresponding to @p block_number in the allocation bitmap and
+ * writes the updated bitmap to disk. The bitmap region location is obtained
+ * from the superblock (sb->block_bitmap_start).
  *
  * @param disk Pointer to the disk file where the block is located.
+ * @param sb   Pointer to the superblock providing bitmap location metadata.
  * @param block_number The block number to be marked as free.
- * @param bitmap Pointer to the bitmap that tracks the allocation of blocks.
- * @param bitmap_start_block The starting block of the bitmap on the disk.
- * @param bitmap_total_blocks The total number of blocks allocated for the
- * bitmap.
- * @return 0 on success, -1 if there is an error during the process.
+ * @param bitmap Pointer to the in-memory bitmap buffer to update and write.
+ * @param bitmap_size Unused parameter (reserved for future validation).
+ * @return 0 on success, -1 on failure.
  */
 int free_block(FILE *disk, superblock_t *sb, uint32_t block_number,
                uint8_t *bitmap, uint32_t bitmap_size);

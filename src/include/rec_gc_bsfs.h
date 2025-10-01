@@ -15,25 +15,25 @@
 #include <stdio.h>
 
 /**
- * @brief Purge recovery entries until at least @p needed_blocks are freed.
+ * @brief Purge Recovery entries until at least a target number of blocks are freed.
  *
- * Attempts to reclaim space by removing expired recovery entries first
- * (retention_until <= @p now). If insufficient, continues purging the oldest
- * entries (ascending deleted_at) until @p needed_blocks have been freed or no
- * entries remain.
+ * Attempts to reclaim space by first removing expired entries (those with
+ * retention_until <= now). If that is insufficient, continues by removing the
+ * oldest remaining entries (ascending deleted_at) until at least
+ * @p needed_blocks have been freed or there are no more entries.
  *
- * For each purged entry, data blocks referenced in direct spans and in the
- * bspan B-tree (if any) are deallocated, and the recovery entry is removed
- * from the Recovery B-tree.
+ * For each purged entry, this routine deallocates blocks described by its 16
+ * direct spans and, if present, traverses the per-file bspan B-tree to
+ * deallocate the remaining spans. Finally, it removes the metadata entry from
+ * the Recovery B-tree.
  *
- * @param disk Open filesystem image.
- * @param sb   Loaded superblock (used for bitmap updates and recovery root).
+ * @param disk          Open filesystem image.
+ * @param sb            Loaded superblock (used for bitmap updates and recovery root).
  * @param needed_blocks Minimum number of blocks to free.
- * @param now  Current timestamp for retention checks.
+ * @param now           Current timestamp used for retention checks.
  * @return Number of blocks actually freed (can be less than requested).
  */
 size_t rec_gc_purge_until(FILE *disk, superblock_t *sb, uint32_t needed_blocks,
                           uint64_t now);
 
 #endif /* REC_GC_BSFS_H */
-

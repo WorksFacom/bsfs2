@@ -15,7 +15,7 @@
 #include "filesystem_bsfs.h"
 
 /**
- * @struct bspan_node_t
+ * @struct bspan_node
  * @brief Node structure for a BSpan queue.
  *
  * Represents a single element in a FIFO queue of `bspan_t` entries,

@@ -24,23 +24,29 @@
 #include <stdio.h>
 
 /**
- * @brief Opens a file by reading its inode into memory.
+ * @brief Opens a file by loading its inode into memory.
+ *
+ * This function looks up the specified inode number in the inode B-tree,
+ * and populates the `file_t` structure with its contents.
  *
  * @param disk Pointer to the open disk file.
- * @param inode_tree Pointer to the inode B-tree handle.
- * @param inode_number The number of the inode to open.
+ * @param inode_tree Pointer to the B-tree of inodes.
+ * @param inode_number The inode number of the file to open.
  * @param out_file Pointer to the file_t structure to populate.
- * @return 0 on success, -1 on failure.
+ * @return 0 on success, -1 on failure (e.g., inode not found).
  */
 int open_file(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number,
               file_t *out_file);
 
 /**
- * @brief Closes a file and writes back any inode metadata changes.
+ * @brief Closes an open file and writes back its inode.
+ *
+ * This function persists any changes made to the file's inode
+ * (e.g., size updates) by writing it back into the inode B-tree.
  *
  * @param disk Pointer to the open disk file.
- * @param inode_tree Pointer to the inode B-tree handle.
- * @param file Pointer to the open file to close.
+ * @param inode_tree Pointer to the B-tree of inodes.
+ * @param file Pointer to the file_t structure representing the open file.
  * @return 0 on success, -1 on failure.
  */
 int close_file(FILE *disk, btree_handle_t *inode_tree, file_t *file);
@@ -64,16 +70,21 @@ int close_file(FILE *disk, btree_handle_t *inode_tree, file_t *file);
 int32_t seek_file(file_t *file, int32_t offset, int whence);
 
 /**
- * @brief Reads data from the file into the provided buffer.
+ * @brief Reads data from an open file into a buffer.
  *
- * @param disk Pointer to the open disk file.
- * @param bspan_tree Pointer to the B-tree for block span lookup.
- * @param file Pointer to the open file.
- * @param buffer Output buffer where data will be stored.
+ * Reads up to `size` bytes from the current position in the file into `buffer`.
+ * The function checks direct `bspan_t` spans in the inode first, then falls
+ * back to the B-tree for additional block mappings. If a block is not mapped,
+ * it is treated as zeroed.
+ *
+ * @param disk Pointer to the disk image file.
+ * @param handle B-tree handle used for indirect block mapping.
+ * @param file Open file structure (with inode and current position).
+ * @param buffer Buffer to read data into.
  * @param size Number of bytes to read.
- * @return Number of bytes successfully read, or -1 on error.
+ * @return Number of bytes successfully read.
  */
-int read_file(FILE *disk, btree_handle_t *bspan_tree, file_t *file,
+int read_file(FILE *disk, btree_handle_t *handle, file_t *file,
               uint8_t *buffer, uint32_t size);
 
 /**

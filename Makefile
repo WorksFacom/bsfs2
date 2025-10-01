@@ -31,6 +31,7 @@ COMMAND_FILES = $(SRC_DIR)/browser/commands/cd.c \
                 $(SRC_DIR)/browser/commands/chown.c \
                 $(SRC_DIR)/browser/commands/chgrp.c \
                 $(SRC_DIR)/browser/commands/echo.c \
+                $(SRC_DIR)/browser/commands/fill.c \
                 $(SRC_DIR)/browser/commands/dd.c \
                 $(SRC_DIR)/browser/commands/stat.c \
                 $(SRC_DIR)/browser/commands/recovery.c \

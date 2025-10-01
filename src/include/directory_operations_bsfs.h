@@ -65,4 +65,17 @@ int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
                    const char *src_name, dir_t *dest_dir,
                    const char *dest_name);
 
+/**
+ * @brief Initialize and persist the root directory ("/") on a fresh image.
+ *
+ * Creates the root inode with default ownership and permissions, allocates
+ * a directory B-tree for entries, inserts the mandatory "." and ".." entries,
+ * and ensures the inode tree contains the root inode.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (root inode and tree roots may be updated).
+ * @return 0 on success; -1 on error.
+ */
+int create_root_directory(FILE *disk, superblock_t *sb);
+
 #endif // DIRECTORY_OPERATIONS_BSFS_H

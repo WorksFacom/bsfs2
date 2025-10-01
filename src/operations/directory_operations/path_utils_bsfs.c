@@ -9,8 +9,8 @@
 
 #include "../../include/path_utils_bsfs.h"
 #include "../../include/permissions_bsfs.h"
-#include <stdlib.h>
-#include <string.h>
+#include "../../include/inode_operations_bsfs.h"
+#include <errno.h>
 
 /**
  * @brief Resolves a path to its parent directory and the final component name.
@@ -56,7 +56,14 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
     current.inode = temp_inode;
     current.current_index = 0;
   } else {
-    current = *cwd;
+    // Refresh CWD inode from the inode tree to ensure we see updated
+    // directory B-tree root after previous operations (e.g., splits/rebuilds)
+    if (!read_inode(disk, inode_handle, cwd->inode.inode_number, &temp_inode)) {
+      free(inode_handle);
+      return -1;
+    }
+    current.inode = temp_inode;
+    current.current_index = 0;
   }
 
   token = strtok(rest, "/");
@@ -140,16 +147,24 @@ int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
   char name[MAX_FILENAME];
 
   if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
-    fprintf(stderr, "lookup_file: resolve_path failed for '%s'\n", path);
+    fprintf(stderr, "[LOOKUP] resolve_path failed for '%s'\n", path);
+    errno = ENOENT;
     return -1;
   }
 
   dir_entry_t entry;
   if (lookup_dir_entry(disk, sb, &parent, name, &entry) != 0) {
-    fprintf(stderr,
-            "lookup_file: entry not found. parent ino=%u name='%s'\n",
-            parent.inode.inode_number, name);
-    return -1;
+    // Fallback: deep scan to tolerate internal-node ordering differences
+    btree_handle_t *dir_h = btree_create_dir_entry_handle();
+    dir_h->root_block = parent.inode.btree_root;
+    if (!scan_dir_tree_find(disk, dir_h, dir_h->root_block, name, &entry)) {
+      fprintf(stderr, "[LOOKUP] entry not found name='%s' root=%u\n", name,
+              parent.inode.btree_root);
+      errno = ENOENT;
+      free(dir_h);
+      return -1;
+    }
+    free(dir_h);
   }
 
   btree_handle_t *inode_handle = btree_create_inode_handle();
@@ -416,8 +431,20 @@ int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path,
 
   /* 3) Resolve parent */
   if (parent_path[0] == '\0') {
-    /* No explicit parent → use cwd */
-    *out_parent = *cwd;
+    /* No explicit parent → use cwd, but refresh its inode from the inode tree
+       to pick up updated btree_root after splits */
+    btree_handle_t *inode_handle = btree_create_inode_handle();
+    inode_handle->root_block = sb->inode_root;
+    inode_t fresh;
+    if (read_inode(disk, inode_handle, cwd->inode.inode_number, &fresh)) {
+      memset(out_parent, 0, sizeof(*out_parent));
+      out_parent->inode = fresh;
+      out_parent->current_index = 0;
+    } else {
+      /* fallback to snapshot if read fails */
+      *out_parent = *cwd;
+    }
+    free(inode_handle);
   } else {
     inode_t pinode;
     if (lookup_file(disk, sb, parent_path, cwd, &pinode) != 0) {

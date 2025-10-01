@@ -1,20 +1,25 @@
-#include <errno.h>
 /**
  * @file dd.c
- * @brief Implementation of dd command for BSFS
+ * @brief Implementation of dd command for BSFS.
  *
  * Creates files of specified size to test filesystem capacity and
- * functionality. Usage: dd if=<input> of=<output> bs=<block_size>
- * count=<blocks> Special inputs: /dev/zero (fills with zeros), /dev/random
- * (random data)
+ * functionality.
+ *
+ * Usage: dd if=&lt;input&gt; of=&lt;output&gt; bs=&lt;block_size&gt;
+ * count=&lt;blocks&gt;
+ *  - if: input source (e.g., /dev/zero, /dev/random)
+ *  - of: output path (destination file)
+ *  - bs: block size (supports K/M/G suffixes)
+ *  - count: number of blocks to write
  */
 
 #include "../../include/api_bsfs.h"
 #include "../../include/commands_bsfs.h"
 
-#define DEFAULT_BLOCK_SIZE 512
-#define MAX_BUFFER_SIZE (64 * 1024)
+#define DEFAULT_BLOCK_SIZE 512      /**< Default block size in bytes. */
+#define MAX_BUFFER_SIZE (64 * 1024) /**< Maximum allowed buffer size. */
 
+/// Current working directory text (provided by the browser prompt)
 extern char current_path[];
 
 /**
@@ -144,11 +149,13 @@ static ssize_t fill_buffer(const char *input_file, void *buffer, size_t size) {
 }
 
 /**
- * @brief Implementation of dd command
- * @param disk File pointer to the disk
- * @param sb Superblock structure
- * @param args Command arguments
- * @return 0 on success, -1 on error
+ * @brief Copy a file.
+ *
+ * Usage: cp &lt;src&gt; &lt;dst&gt;
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args Source path in args[1], destination path in args[2].
+ * @return 1 to continue the REPL.
  */
 int dd(FILE *disk, superblock_t *sb, char **args) {
   char *input_file, *output_file;
@@ -176,15 +183,19 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
   }
 
   if (create_file_bsfs(disk, sb, absolute_path) != 0) {
-    if (errno == EACCES) printf("Permission denied\n");
-    else printf("dd: cannot create file '%s'\n", output_file);
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("dd: cannot create file '%s'\n", output_file);
     return -1;
   }
 
   file_t file;
   if (open_bsfs(disk, sb, absolute_path, &file) != 0) {
-    if (errno == EACCES) printf("Permission denied\n");
-    else printf("dd: cannot open file '%s'\n", output_file);
+    if (errno == EACCES)
+      printf("Permission denied\n");
+    else
+      printf("dd: cannot open file '%s'\n", output_file);
     remove_file_bsfs(disk, sb, absolute_path);
     return -1;
   }
@@ -209,10 +220,13 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
       break;
     }
 
-    size_t bytes_written = write_bsfs(disk, sb, &file, buffer, (uint32_t)bytes_read);
+    size_t bytes_written =
+        write_bsfs(disk, sb, &file, buffer, (uint32_t)bytes_read);
     if (bytes_written == 0) {
-      if (errno == EACCES) printf("Permission denied\n");
-      else printf("dd: write failed - filesystem may be full\n");
+      if (errno == EACCES)
+        printf("Permission denied\n");
+      else
+        printf("dd: write failed - filesystem may be full\n");
       break;
     }
 

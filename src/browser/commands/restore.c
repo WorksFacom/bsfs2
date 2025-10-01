@@ -1,4 +1,3 @@
-#include <errno.h>
 /**
  * @file restore.c
  * @brief Implements the restore command for the BSFS filesystem.
@@ -6,19 +5,23 @@
  * Restores a deleted file from the Recovery tree by its recovery ID.
  *
  * Usage:
- *  - restore <recovery_id>
- *  - restore <recovery_id> <dest_dir>
+ *  - restore &lt;recovery_id&gt;
+ *  - restore &lt;recovery_id&gt; &lt;dest_dir&gt;
  */
 
 #include "../../include/api_bsfs.h"
 
+/* See header (commands_bsfs.h) for command documentation. */
 /**
- * @brief Restore a file from the Recovery tree by ID.
+ * @brief Format a POSIX timestamp into a fixed-size buffer.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Command arguments: args[1] = recovery_id, args[2] optional dest.
- * @return Always returns 1 to continue the browser loop.
+ * Writes a human-readable string "YYYY-mm-dd HH:MM:SS" to @p buf when @p ts
+ * is non-zero. When @p ts is 0, writes a single dash ("-"). Uses
+ * localtime_r for thread-safe conversion.
+ *
+ * @param ts  POSIX time (seconds since epoch).
+ * @param buf Output buffer to receive the formatted string.
+ * @param cap Capacity of @p buf in bytes.
  */
 static void fmt_time(uint64_t ts, char *buf, size_t cap) {
   if (!buf || cap == 0)
@@ -33,6 +36,19 @@ static void fmt_time(uint64_t ts, char *buf, size_t cap) {
   strftime(buf, cap, "%Y-%m-%d %H:%M:%S", &tm);
 }
 
+/**
+ * @brief Restore a deleted file by recovery ID or original name.
+ *
+ * If the first argument parses as a numeric ID, restores that snapshot.
+ * Otherwise treats it as a name and disambiguates if multiple snapshots share
+ * the same name, printing a table of candidates with deletion timestamps.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args argv‑like vector; id or name in args[1], optional dest dir in
+ * args[2].
+ * @return 1 to continue the browser loop.
+ */
 int restore(FILE *disk, superblock_t *sb, char **args) {
   if (!args[1]) {
     printf("Usage: restore <recovery_id|name> [dest_dir]\n");
@@ -47,8 +63,10 @@ int restore(FILE *disk, superblock_t *sb, char **args) {
     if (args[2] && args[2][0] != '\0')
       dest = args[2];
     if (restore_bsfs(disk, sb, (uint32_t)val, dest) != 0) {
-      if (errno == EACCES) printf("Permission denied\n");
-      else printf("Error restoring recovery entry: %s\n", args[1]);
+      if (errno == EACCES)
+        printf("Permission denied\n");
+      else
+        printf("Error restoring recovery entry: %s\n", args[1]);
       return 1;
     }
     if (dest)
@@ -86,8 +104,10 @@ int restore(FILE *disk, superblock_t *sb, char **args) {
     char idbuf[32];
     snprintf(idbuf, sizeof(idbuf), "%u", matches[0].recovery_id);
     if (restore_bsfs(disk, sb, matches[0].recovery_id, dest) != 0) {
-      if (errno == EACCES) printf("Permission denied\n");
-      else printf("Error restoring '%s' (id %s).\n", name, idbuf);
+      if (errno == EACCES)
+        printf("Permission denied\n");
+      else
+        printf("Error restoring '%s' (id %s).\n", name, idbuf);
       return 1;
     }
     if (dest)

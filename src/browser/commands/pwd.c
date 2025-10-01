@@ -7,18 +7,19 @@
 #include "../../include/api_bsfs.h"
 
 #ifndef PATH_MAX
-#define PATH_MAX 4096
+#define PATH_MAX 4096 /**< Fallback maximum path length. */
 #endif
 
 extern char current_path[PATH_MAX];
 
 /**
- * @brief Prints the current working directory path.
+ * @brief Print the current working directory.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock structure.
- * @param args Unused parameter.
- * @return Always returns 1 to continue the browser loop.
+ * Usage: pwd
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param args Unused.
+ * @return 1 to continue the REPL.
  */
 int pwd(FILE *disk, superblock_t *sb, char **args) {
   (void)args;

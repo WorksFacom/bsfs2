@@ -19,24 +19,32 @@
 #include "rec_entry_operations_bsfs.h"
 
 /**
- * @brief Logically remove a file, moving it into the recovery tree.
+ * @brief Logically remove a file and snapshot it into the Recovery tree.
+ *
+ * Unlinks the directory entry for @p path, removes the file's inode from the
+ * inode tree (without freeing its data blocks), and inserts a snapshot of the
+ * file metadata into the Recovery B-tree to enable later restoration or purge.
  *
  * Steps:
- *  - Resolve parent directory and basename from @p path.
- *  - Look up the file's inode.
- *  - Build a @ref rec_entry_t snapshot of the file at deletion time.
- *  - Insert the recovery entry into the Recovery B-tree.
- *  - Remove the directory entry from the parent directory.
- *  - Remove the inode from the inode B-tree (data blocks remain allocated).
+ *  1) Resolve the parent directory and basename from @p path.
+ *  2) Lookup the file inode (must not be a directory).
+ *  3) Build and insert a @ref rec_entry_t snapshot into the Recovery tree.
+ *  4) Remove the directory entry from its parent.
+ *  5) Remove the inode from the inode tree.
+ *  6) Update parent directory timestamps.
+ *
+ * Rollback: If step 4 or 5 fails, the inserted recovery entry is removed to
+ * keep metadata consistent.
  *
  * @param disk       Open filesystem image.
  * @param sb         Loaded superblock.
- * @param inode_tree Handle for the inode B-tree.
- * @param rec_tree   Handle for the Recovery B-tree.
+ * @param inode_tree Inode B-tree handle.
+ * @param rec_tree   Recovery B-tree handle.
  * @param path       Absolute or relative path of the file to remove.
- * @param cwd        Current working directory for resolving relative paths.
- * @param uid        User ID of the calling process (for permission checks).
- * @return 0 on success; -1 on failure.
+ * @param cwd        Current working directory (for resolving relative paths).
+ * @param uid        Caller user id (currently unused; permission checks may use
+ * it).
+ * @return 0 on success; -1 on error.
  */
 int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
                 btree_handle_t *rec_tree, const char *path, dir_t *cwd,

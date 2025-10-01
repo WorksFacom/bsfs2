@@ -66,10 +66,9 @@ uint8_t *load_bitmap(FILE *disk, uint32_t bitmap_start_block);
  * @param disk The file pointer to the filesystem image.
  * @param bitmap The pointer to the bitmap to be saved.
  * @param bitmap_start_block The block where the bitmap starts.
- * @param bitmap_total_blocks The total number of blocks in the bitmap.
  * @return 0 on success, or -1 if saving the bitmap fails.
  */
-int write_bitmap(FILE *file, uint8_t *bitmap, uint32_t bitmap_start_block);
+int write_bitmap(FILE *disk, uint8_t *bitmap, uint32_t bitmap_start_block);
 
 /**
  * @brief Checks if a given block is free in the bitmap.

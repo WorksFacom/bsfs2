@@ -4,16 +4,10 @@
  *
  * Allows users to reclaim space by removing Recovery snapshots:
  *  - purge                  -> remove entries older than ~30 days
- *  - purge <id>             -> remove a specific snapshot by Recovery ID
- *  - purge oldest <count>   -> remove the <count> oldest snapshots
+ *  - purge &lt;id&gt;             -> remove a specific snapshot by Recovery ID
+ *  - purge oldest &lt;count&gt;   -> remove the &lt;count&gt; oldest snapshots
  */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
-#include "api_bsfs.h"
+#include "../../include/api_bsfs.h"
 
 static const uint64_t SECS_30D = 30ULL * 24ULL * 60ULL * 60ULL;
 
@@ -92,16 +86,17 @@ static int cmp_deleted_at(const void *a, const void *b) {
   return 0;
 }
 
+/* Internal helper; see browser command header for public docs. */
 /**
- * @brief Purge a single Recovery entry identified by its ID.
+ * @brief Purge a specific Recovery snapshot by its ID.
  *
- * Finds the snapshot in the Recovery tree and reclaims its data blocks using
- * @ref purge_file, then removes the metadata record.
+ * Looks up the recovery entry with the given @p id and removes it, reclaiming
+ * its data blocks (both direct spans and spans in the per-file bspan tree).
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param id   Recovery ID to purge.
- * @return 0 on success, -1 if not found or on failure.
+ * @param id   Recovery entry ID to purge.
+ * @return 0 on success; -1 if the entry is not found or on error.
  */
 static int purge_by_id(FILE *disk, superblock_t *sb, uint32_t id) {
   btree_handle_t rec_h;
@@ -152,7 +147,8 @@ static int purge_oldest_n(FILE *disk, superblock_t *sb, size_t n) {
   }
   free(bspan);
   free(items);
-  printf("purge: removed %zu oldest entr%s\n", purged, purged == 1 ? "y" : "ies");
+  printf("purge: removed %zu oldest entr%s\n", purged,
+         purged == 1 ? "y" : "ies");
   return 0;
 }
 
@@ -243,8 +239,8 @@ static int purge_expired(FILE *disk, superblock_t *sb) {
  *
  * Usage:
  *  - purge                  -> remove entries older than ~30 days
- *  - purge <id>             -> remove a specific snapshot by Recovery ID
- *  - purge oldest <count>   -> remove the <count> oldest snapshots
+ *  - purge &lt;id&gt;             -> remove a specific snapshot by Recovery ID
+ *  - purge oldest &lt;count&gt;   -> remove the &lt;count&gt; oldest snapshots
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
@@ -252,8 +248,12 @@ static int purge_expired(FILE *disk, superblock_t *sb) {
  * @return Always 1 to continue the browser loop.
  */
 int purge(FILE *disk, superblock_t *sb, char **args) {
-  uint16_t uid=0,gid=0; get_identity_bsfs(&uid,&gid);
-  if (uid != 0) { printf("Permission denied\n"); return 1; }
+  uint16_t uid = 0, gid = 0;
+  get_identity_bsfs(&uid, &gid);
+  if (uid != 0) {
+    printf("Permission denied\n");
+    return 1;
+  }
   // No args: default policy
   if (!args[1]) {
     (void)purge_older_than_30d(disk, sb);

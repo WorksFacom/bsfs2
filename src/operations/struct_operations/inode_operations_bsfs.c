@@ -51,10 +51,12 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
 
   inode_t copy;
   memcpy(&copy, inode, sizeof(inode_t));
-  uint32_t prev_root = handle->root_block;
   int rc = btree_insert(disk, sb, handle, &copy);
-  if (rc == 0 && prev_root == 0 && handle->root_block != 0 &&
-      sb->inode_root == 0) {
+  /* Persist inode root whenever it changes (e.g., after a split). */
+  if (rc == 0 && handle->root_block != 0 &&
+      sb->inode_root != handle->root_block) {
+    fprintf(stderr, "[INODE ROOT] update sb inode_root %u -> %u\n",
+            sb->inode_root, handle->root_block);
     sb->inode_root = handle->root_block;
     (void)write_superblock(disk, sb);
   }
@@ -72,8 +74,15 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
 int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode) {
   if (!handle || !inode)
     return -1;
-
-  return btree_update(disk, handle, handle->root_block, (void *)inode);
+  int ok = btree_update(disk, handle, handle->root_block, (void *)inode);
+  if (!ok) {
+    fprintf(stderr, "[INODE UPD] not found ino=%u in inode root=%u\n",
+            inode->inode_number, handle->root_block);
+  } else {
+    fprintf(stderr, "[INODE UPD] updated ino=%u in inode root=%u\n",
+            inode->inode_number, handle->root_block);
+  }
+  return ok;
 }
 
 /**
@@ -92,7 +101,14 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                  uint32_t inode_number) {
   if (!handle || handle->type != BTREE_TYPE_INODE)
     return -1;
-  return btree_remove(disk, sb, handle, inode_number);
+  int removed = btree_remove(disk, sb, handle, inode_number);
+  if (removed && sb->inode_root != handle->root_block) {
+    fprintf(stderr, "[INODE ROOT] update sb inode_root %u -> %u\n",
+            sb->inode_root, handle->root_block);
+    sb->inode_root = handle->root_block;
+    (void)write_superblock(disk, sb);
+  }
+  return removed;
 }
 
 /**

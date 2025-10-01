@@ -412,14 +412,16 @@ int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
         f->inode.btree_root = bspan_tree->root_block;
     }
 
+    uint32_t phys_block = bspan.disk_blk + (logical_block - bspan.file_blk);
+
     // Partial read
     uint8_t temp[BLOCK_SIZE] = {0};
     if (block_offset != 0 || to_write < block_size) {
-      read_block(disk, bspan.disk_blk, temp, BLOCK_SIZE);
+      read_block(disk, phys_block, temp, BLOCK_SIZE);
     }
 
     memcpy(temp + block_offset, buffer + bytes_written, to_write);
-    write_block(disk, bspan.disk_blk, temp, BLOCK_SIZE);
+    write_block(disk, phys_block, temp, BLOCK_SIZE);
 
     pos += to_write;
     bytes_written += to_write;

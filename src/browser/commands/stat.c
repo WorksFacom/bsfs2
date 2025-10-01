@@ -43,20 +43,15 @@ static void print_time(const char *label, uint32_t t) {
 }
 
 /**
- * @brief BSFS browser command: show metadata for a file or directory.
+ * @brief Show inode metadata for a path.
  *
- * Usage: stat <path>
- *
- * Looks up the inode associated with the provided path and prints common
- * metadata fields (type, inode, size, block count, ownership, permissions,
- * and timestamps).
- *
+ * Usage: stat &lt;path&gt;
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Tokenized arguments; expects a path in args[1].
- * @return Always 1 to continue the browser loop.
+ * @param args Path in args[1].
+ * @return 1 to continue the REPL.
  */
-int stat_cmd(FILE *disk, superblock_t *sb, char **args) {
+int stat(FILE *disk, superblock_t *sb, char **args) {
   const char *path = args[1];
   if (!path) {
     printf("Usage: stat <path>\n");

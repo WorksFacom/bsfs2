@@ -347,6 +347,16 @@ int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                  uint32_t key);
 
 /**
+ * @brief Remove an entry using the handle's comparator (exact-match).
+ *
+ * Suitable for trees where ordering is defined by a comparator (e.g.,
+ * directory entries ordered by hash+name). Returns 1 if the entry was
+ * found and removed, 0 if not found, -1 on error.
+ */
+int btree_remove_entry(FILE *disk, superblock_t *sb, btree_handle_t *handle,
+                       const void *entry);
+
+/**
  * @brief Writes a B-tree node to disk.
  *
  * Serializes the in-memory B-tree node structure into a fixed-size block

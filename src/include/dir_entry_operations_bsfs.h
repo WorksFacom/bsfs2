@@ -25,8 +25,8 @@ typedef struct {
   uint32_t current_index; ///< The logical position of the next entry to read
   btree_handle_t *btree;  ///< Handle to the B-tree storing directory entries
   /* Iteration state for in-order traversal */
-  uint32_t iter_key;      ///< Last returned key (filename hash)
-  int iter_started;       ///< 0 if iteration not started, 1 otherwise
+  uint32_t iter_key; ///< Last returned key (filename hash)
+  int iter_started;  ///< 0 if iteration not started, 1 otherwise
 } dir_t;
 
 /**
@@ -56,14 +56,16 @@ int close_dir(dir_t *dir);
 /**
  * @brief Adds a new entry to a directory.
  *
- * This function inserts a new dir_entry_t into the directory's B-tree
- * structure.
+ * Inserts a new @ref dir_entry_t into the directory's B-tree. If this is the
+ * first insertion in the directory (i.e., the directory had no B-tree root),
+ * the function persists the newly created root into the directory inode.
  *
  * @param disk Pointer to the filesystem image file.
  * @param sb Pointer to the loaded superblock.
  * @param dir Pointer to the open directory structure.
  * @param entry Pointer to the directory entry to insert.
- * @return 0 on success, -1 if an entry with the same name already exists.
+ * @return 0 on success, -1 if an entry with the same name already exists or on
+ *         write error.
  */
 int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, dir_entry_t *entry);
 
@@ -76,7 +78,7 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, dir_entry_t *entry);
  * @param sb Pointer to the loaded superblock.
  * @param dir Pointer to the open directory structure.
  * @param filename Name of the entry to remove.
- * @return 0 on success, -1 if the entry was not found.
+ * @return 0 on success, -1 if the entry was not found or on write error.
  */
 int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                      const char *filename);
@@ -84,14 +86,14 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
 /**
  * @brief Updates an existing directory entry in the B-tree.
  *
- * This function searches for an existing directory entry using the hash of the
- * filename and replaces its contents with the new data.
+ * Searches for an existing directory entry using the hash of the filename and
+ * replaces its contents with @p entry.
  *
  * @param disk Pointer to the filesystem image.
- * @param sb Pointer to the superblock.
+ * @param sb Pointer to the superblock (unused).
  * @param dir Pointer to the open directory structure.
  * @param entry Pointer to the updated directory entry.
- * @return 0 on success, -1 if the entry was not found.
+ * @return 1 on success; -1 if the entry was not found.
  */
 int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                      dir_entry_t *entry);
@@ -125,5 +127,14 @@ int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
  */
 int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                    btree_handle_t *handle, dir_entry_t *out);
+
+/**
+ * @brief Deep-scan a directory B-tree to find an entry by exact name.
+ *
+ * Exported for advanced callers (e.g., fallback removal).
+ */
+int scan_dir_tree_find(FILE *disk, btree_handle_t *handle,
+                       uint32_t node_block, const char *name,
+                       dir_entry_t *out);
 
 #endif // !DIRECTORY_OPERATIONS

@@ -3,8 +3,8 @@
  * @brief Implements the recovery listing command for the BSFS filesystem.
  *
  * Usage:
- *  - recovery           -> list all recovery entries
- *  - recovery <name>    -> list entries filtered by original filename
+ *  - recovery           	     -> list all recovery entries
+ *  - recovery &lt;name&gt;    -> list entries filtered by original filename
  */
 #include "../../include/api_bsfs.h"
 
@@ -91,16 +91,13 @@ static int list_recovery_inorder(FILE *disk, btree_handle_t *handle,
 }
 
 /**
- * @brief BSFS browser command: list deleted file snapshots (Recovery).
+ * @brief List Recovery snapshots, optionally filtered by original name.
  *
- * Usage:
- *  - recovery            -> list all snapshots
- *  - recovery <name>     -> list snapshots filtered by original filename
- *
+ * Usage: recovery [name]
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Tokenized arguments; optional filter name in args[1].
- * @return Always 1 to continue the browser loop.
+ * @param args Optional name filter in args[1].
+ * @return 1 to continue the REPL.
  */
 int recovery(FILE *disk, superblock_t *sb, char **args) {
   (void)args;
