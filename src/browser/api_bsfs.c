@@ -71,6 +71,33 @@ static void ensure_cwd(FILE *disk, superblock_t *sb) {
 }
 
 /**
+ * @brief Refresh the cached CWD inode from the inode B-tree.
+ *
+ * Directory operations such as large batch removals may rebalance or rebuild
+ * the directory B-tree, changing the root block stored in the inode. Because
+ * the browser keeps an in-memory snapshot of the CWD inode, we need to reload
+ * it periodically so subsequent path resolutions see the latest root pointer.
+ */
+static void refresh_cwd_inode(FILE *disk, superblock_t *sb) {
+  if (!s_cwd_initialized) {
+    ensure_cwd(disk, sb);
+    return;
+  }
+
+  btree_handle_t *inode_h = btree_create_inode_handle();
+  if (!inode_h)
+    return;
+
+  inode_h->root_block = sb->inode_root;
+  inode_t fresh;
+  if (read_inode(disk, inode_h, s_cwd.inode.inode_number, &fresh)) {
+    s_cwd.inode = fresh;
+    s_cwd.current_index = 0;
+  }
+  free(inode_h);
+}
+
+/**
  * @brief Update the textual CWD string given a target path.
  *
  * Applies simple shell‑like semantics to the internal string path:
@@ -328,6 +355,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
+  refresh_cwd_inode(disk, sb);
   btree_handle_t *inode_h = btree_create_inode_handle();
   inode_h->root_block = sb->inode_root;
   btree_handle_t rec_h;
@@ -344,8 +372,12 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   // This avoids path lookup issues when the directory B-tree root changed.
   // Only supports relative names in the CWD (as in our test workflow).
   const char *fname = path;
+  const char *leaf = fname;
+  const char *slash = strrchr(fname, '/');
+  if (slash)
+    leaf = slash + 1;
   // If absolute path, we cannot safely fallback here
-  if (fname[0] == '/')
+  if (fname[0] == '/' || *leaf == '\0')
     return rc;
 
   // Open CWD and scan entries
@@ -359,9 +391,9 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
 
   // Find matching entry by name
   dir_entry_t ent;
-  int found = scan_dir_tree_find(disk, dir_h, dir_h->root_block, fname, &ent);
+  int found = scan_dir_tree_find(disk, dir_h, dir_h->root_block, leaf, &ent);
   if (!found) {
-    fprintf(stderr, "[FALLBACK] not found in scan: %s\n", fname);
+    fprintf(stderr, "[FALLBACK] not found in scan: %s\n", leaf);
     free(dir_h);
     return rc;
   }
@@ -370,10 +402,19 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   btree_handle_t *inode_h2 = btree_create_inode_handle();
   inode_h2->root_block = sb->inode_root;
   inode_t ino;
-  if (!read_inode(disk, inode_h2, ent.inode_number, &ino)) {
+  int have_inode = read_inode(disk, inode_h2, ent.inode_number, &ino);
+  if (!have_inode) {
+    fprintf(stderr,
+            "[FALLBACK] inode %u missing for %s; removing entry without "
+            "recovery snapshot.\n",
+            ent.inode_number, leaf);
     free(dir_h);
     free(inode_h2);
-    return rc;
+    if (remove_dir_entry(disk, sb, &cwd_snapshot, leaf) != 0) {
+      fprintf(stderr, "[FALLBACK] remove_dir_entry failed for %s\n", leaf);
+      return rc;
+    }
+    return 0;
   }
 
   // Insert Recovery snapshot
@@ -387,7 +428,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   memset(&rec, 0, sizeof(rec));
   rec.deleted_at = (uint64_t)time(NULL);
   rec.original_parent_ino = cwd_snapshot.inode.inode_number;
-  strncpy(rec.original_name, fname, sizeof(rec.original_name) - 1);
+  strncpy(rec.original_name, leaf, sizeof(rec.original_name) - 1);
   rec.inode_number = ino.inode_number;
   rec.file_type = ino.file_type;
   rec.uid = ino.uid;
@@ -399,15 +440,15 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   rec.btree_root = ino.btree_root;
   rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
   if (!rec_tree_add(disk, sb, &rec_h2, &rec)) {
-    fprintf(stderr, "[FALLBACK] rec add failed for %s\n", fname);
+    fprintf(stderr, "[FALLBACK] rec add failed for %s\n", leaf);
     free(dir_h);
     free(inode_h2);
     return rc;
   }
 
   // Remove directory entry via rebuild
-  if (remove_dir_entry(disk, sb, &cwd_snapshot, fname) != 0) {
-    fprintf(stderr, "[FALLBACK] remove_dir_entry failed for %s\n", fname);
+  if (remove_dir_entry(disk, sb, &cwd_snapshot, leaf) != 0) {
+    fprintf(stderr, "[FALLBACK] remove_dir_entry failed for %s\n", leaf);
     // keep Recovery snapshot if directory removal fails to meet UX goal
     free(dir_h);
     free(inode_h2);
