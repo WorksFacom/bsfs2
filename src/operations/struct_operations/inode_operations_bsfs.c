@@ -55,8 +55,6 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
   /* Persist inode root whenever it changes (e.g., after a split). */
   if (rc == 0 && handle->root_block != 0 &&
       sb->inode_root != handle->root_block) {
-    fprintf(stderr, "[INODE ROOT] update sb inode_root %u -> %u\n",
-            sb->inode_root, handle->root_block);
     sb->inode_root = handle->root_block;
     (void)write_superblock(disk, sb);
   }
@@ -75,13 +73,6 @@ int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode) {
   if (!handle || !inode)
     return -1;
   int ok = btree_update(disk, handle, handle->root_block, (void *)inode);
-  if (!ok) {
-    fprintf(stderr, "[INODE UPD] not found ino=%u in inode root=%u\n",
-            inode->inode_number, handle->root_block);
-  } else {
-    fprintf(stderr, "[INODE UPD] updated ino=%u in inode root=%u\n",
-            inode->inode_number, handle->root_block);
-  }
   return ok;
 }
 
@@ -103,8 +94,6 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
     return -1;
   int removed = btree_remove(disk, sb, handle, inode_number);
   if (removed && sb->inode_root != handle->root_block) {
-    fprintf(stderr, "[INODE ROOT] update sb inode_root %u -> %u\n",
-            sb->inode_root, handle->root_block);
     sb->inode_root = handle->root_block;
     (void)write_superblock(disk, sb);
   }
@@ -166,6 +155,16 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree,
 
 /**
  * @brief Initialize (or load) the inode B-tree handle.
+ *
+ * If the inode root does not exist yet in the superblock, this function
+ * allocates a fresh root node on disk (empty leaf), persists it, and stores the
+ * block number in both the handle and the superblock (via write_superblock).
+ * If the root already exists, the handle is configured to point to it.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (may be updated/persisted if creating root).
+ * @param out  Output: initialized inode B-tree handle (by value).
+ * @return 1 on success, 0 on failure.
  */
 int inode_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
   if (!disk || !sb || !out)
@@ -180,8 +179,8 @@ int inode_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
     btree_node_t node;
     node.is_leaf = 1;
     node.num_entries = 0;
-    node.entries = calloc((size_t)(2 * tmp->min_degree - 1),
-                          (size_t)tmp->entry_size);
+    node.entries =
+        calloc((size_t)(2 * tmp->min_degree - 1), (size_t)tmp->entry_size);
     node.children = calloc((size_t)(2 * tmp->min_degree), sizeof(uint32_t));
     if (!node.entries || !node.children) {
       free(node.entries);

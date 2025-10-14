@@ -149,12 +149,12 @@ static ssize_t fill_buffer(const char *input_file, void *buffer, size_t size) {
 }
 
 /**
- * @brief Copy a file.
+ * @brief Generate a file by copying blocks from /dev/zero or /dev/random.
  *
- * Usage: cp &lt;src&gt; &lt;dst&gt;
+ * Usage: dd if=/dev/zero of=&lt;file&gt; bs=&lt;size&gt; count=&lt;n&gt;
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Source path in args[1], destination path in args[2].
+ * @param args Key-value args (if/of/bs/count) parsed by the command.
  * @return 1 to continue the REPL.
  */
 int dd(FILE *disk, superblock_t *sb, char **args) {

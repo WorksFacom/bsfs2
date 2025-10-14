@@ -48,14 +48,12 @@ int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
   char basename[256] = {0};
   if (resolve_parent_dir(disk, sb, path, cwd, &parent_dir, basename,
                          sizeof(basename)) != 0) {
-    fprintf(stderr, "[RM] resolve_parent_dir failed for %s\n", path);
     return -1;
   }
 
   /* 2) Look up the file inode */
   inode_t target_inode;
   if (lookup_file(disk, sb, path, cwd, &target_inode) != 0) {
-    fprintf(stderr, "[RM] lookup_file failed for %s\n", path);
     return -1;
   }
 
@@ -92,7 +90,6 @@ int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
    * Only if this succeeds do we proceed to unlink and remove inode.
    */
   if (!rec_tree_add(disk, sb, rec_tree, &rec)) {
-    fprintf(stderr, "[RM] rec_tree_add failed for %s\n", basename);
     return -1;
   }
 
@@ -100,7 +97,6 @@ int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
    * On failure, rollback the Recovery insertion to leave the system unchanged.
    */
   if (remove_dir_entry(disk, sb, &parent_dir, basename) != 0) {
-    fprintf(stderr, "[RM] remove_dir_entry failed for %s\n", basename);
     (void)rec_tree_remove(disk, sb, rec_tree, rec.recovery_id);
     return -1;
   }
@@ -111,7 +107,7 @@ int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
    */
   if (!remove_inode(disk, sb, inode_tree, target_inode.inode_number)) {
     fprintf(stderr,
-            "[RM] WARNING: remove_inode failed for ino=%u (%s); keeping "
+            "WARNING: remove_inode failed for ino=%u (%s); keeping "
             "Recovery snapshot and proceeding.\n",
             target_inode.inode_number, basename);
     /* Proceed without rolling back the Recovery entry to ensure that the file

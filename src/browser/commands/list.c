@@ -7,12 +7,12 @@
 #include "../../include/api_bsfs.h"
 
 /**
- * @brief List Recovery snapshots, optionally filtered by original name.
+ * @brief List contents of a directory.
  *
- * Usage: recovery [name]
+ * Usage: ls [path]  or  list [path]
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Optional name filter in args[1].
+ * @param args Optional directory path in args[1]; defaults to ".".
  * @return 1 to continue the REPL.
  */
 int list(FILE *disk, superblock_t *sb, char **args) {

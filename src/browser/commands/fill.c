@@ -130,7 +130,24 @@ static int resolve_path(const char *input, char *absolute, size_t cap) {
 }
 
 /**
- * @brief Fill command implementation.
+ * @brief Implements the fill command for the BSFS browser.
+ *
+ * The fill command creates a number of files with a given size, measuring the
+ * elapsed time for the operation. Files are created sequentially using the
+ * high-level API and filled with a predictable byte pattern.
+ *
+ * Usage:
+ *   fill <count> <size> [prefix] [bs=<block>] [pattern=index|zero|random]
+ *
+ * Parameters:
+ *   - count   : number of files to create (positive integer)
+ *   - size    : file size (supports K/M/G suffixes)
+ *   - prefix  : optional basename/path (default: "fill") used to build
+ *               <prefix>_<NNN>.bin
+ *   - bs=     : optional block size for writes (default 64 KiB, supports
+ *               suffixes)
+ *   - pattern : optional fill pattern: "index" (default, byte = file id),
+ *               "zero" (all zeros) or "random" (pseudo-random bytes)
  */
 int fill_cmd(FILE *disk, superblock_t *sb, char **args) {
   if (!disk || !sb) {

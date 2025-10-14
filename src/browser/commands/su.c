@@ -9,11 +9,11 @@
  *
  * Changes the API session uid (and optionally gid) used for permission checks.
  * Accepts decimal values. Intended for testing permission behavior in the
- * browser; no OS‑level identity is changed.
+ * browser; no OS-level identity is changed.
  *
  * @param disk Open filesystem image (unused).
  * @param sb   Loaded superblock (unused).
- * @param args argv‑like vector; expects uid in args[1], optional gid in
+ * @param args argv-like vector; expects uid in args[1], optional gid in
  * args[2].
  * @return 1 to continue the browser loop.
  */

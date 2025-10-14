@@ -58,15 +58,16 @@ int init_bitmap_list(FILE *disk, uint32_t start_block, uint32_t num_blocks);
 uint8_t *load_bitmap(FILE *disk, uint32_t bitmap_start_block);
 
 /**
- * @brief Saves the bitmap to the specified disk.
+ * @brief Writes the bitmap to disk starting at the given block.
  *
- * This function writes the bitmap to the disk at the specified position,
- * ensuring that the bitmap is correctly stored in the filesystem.
+ * This function traverses the linked list of bitmap blocks on disk and writes
+ * the corresponding segments of the bitmap array to each block. It ensures the
+ * updated bitmap is persisted for future allocations.
  *
- * @param disk The file pointer to the filesystem image.
- * @param bitmap The pointer to the bitmap to be saved.
- * @param bitmap_start_block The block where the bitmap starts.
- * @return 0 on success, or -1 if saving the bitmap fails.
+ * @param disk File pointer to the filesystem image.
+ * @param bitmap Pointer to the in-memory bitmap data.
+ * @param bitmap_start_block Logical block number where the bitmap begins.
+ * @return 0 on success, or -1 if an error occurs during reading or writing.
  */
 int write_bitmap(FILE *disk, uint8_t *bitmap, uint32_t bitmap_start_block);
 

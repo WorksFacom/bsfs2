@@ -129,9 +129,18 @@ int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                    btree_handle_t *handle, dir_entry_t *out);
 
 /**
- * @brief Deep-scan a directory B-tree to find an entry by exact name.
+ * @brief Recursively search a directory B-tree for an exact filename match.
  *
- * Exported for advanced callers (e.g., fallback removal).
+ * Traverses the directory entries B-tree in depth-first order starting at
+ * @p node_block, comparing each entry's name against @p name. Copies the
+ * first matching entry into @p out and returns 1 when found.
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle B-tree handle for directory entries.
+ * @param node_block Root block of the subtree to scan.
+ * @param name Null-terminated filename to match exactly.
+ * @param out Output parameter to receive the matching entry on success.
+ * @return 1 if found; 0 otherwise.
  */
 int scan_dir_tree_find(FILE *disk, btree_handle_t *handle,
                        uint32_t node_block, const char *name,

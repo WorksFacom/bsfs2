@@ -18,23 +18,23 @@
  * Usage: `mkfs.bsfs &lt;partition_file&gt;`
  */
 
-// System headers first to avoid redefining macros from kernel headers later
 #include <inttypes.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-// linux/fs.h defines BLOCK_SIZE as 1024; ensure our filesystem's BLOCK_SIZE prevails
+// linux/fs.h defines BLOCK_SIZE as 1024; ensure our filesystem's BLOCK_SIZE
+// prevails
 #ifdef BLOCK_SIZE
 #undef BLOCK_SIZE
 #endif
 
-#include "../include/mkfs_bsfs.h"
 #include "../include/bitmap_operations_bsfs.h"
 #include "../include/btree_bsfs.h"
 #include "../include/filesystem_bsfs.h"
 #include "../include/inode_operations_bsfs.h"
+#include "../include/mkfs_bsfs.h"
 #include "../include/superblock_operations_bsfs.h"
 
 /**
@@ -145,6 +145,19 @@ static int get_fs_size_bytes(FILE *disk, uint64_t *out_size) {
   return -1;
 }
 
+/**
+ * @brief Format an already opened partition file as a BSFS filesystem.
+ *
+ * This function expects the file size to be a multiple of the block size
+ * (4096 bytes). It computes the on-disk layout, writes the superblock,
+ * initializes and persists the bitmap, ensures the inode B-tree exists,
+ * creates the root directory entries ("." and ".."), and writes the root
+ * inode into the inode B-tree. On success, the file is a valid BSFS image.
+ *
+ * @param disk Opened FILE* corresponding to the partition image (opened in
+ *             read/write mode).
+ * @return 0 on success; -1 on failure.
+ */
 int mkfs_bsfs_format_open(FILE *disk) {
   if (!disk)
     return -1;
@@ -164,9 +177,11 @@ int mkfs_bsfs_format_open(FILE *disk) {
       die("file size is not a multiple of block size (4096)");
       return -1;
     }
-    fprintf(stderr,
-            "mkfs.bsfs: warning: size not multiple of %u; truncating to %" PRIu64 " bytes\n",
-            BLOCK_SIZE, aligned);
+    fprintf(
+        stderr,
+        "mkfs.bsfs: warning: size not multiple of %u; truncating to %" PRIu64
+        " bytes\n",
+        BLOCK_SIZE, aligned);
     fsz = aligned;
   }
 
@@ -178,7 +193,8 @@ int mkfs_bsfs_format_open(FILE *disk) {
   }
 
   if (total_blocks > 0xFFFFFFFFULL) {
-    die("filesystem too large for 32-bit block addressing (limit ~16 TiB at 4K)");
+    die("filesystem too large for 32-bit block addressing (limit ~16 TiB at "
+        "4K)");
     return -1;
   }
   uint32_t bitmap_blocks = compute_bitmap_blocks(total_blocks);

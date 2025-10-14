@@ -110,10 +110,6 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
   // Persist btree root changes (first insert or after a split)
   if (dir_handle->root_block != 0 &&
       dir_handle->root_block != dir->inode.btree_root) {
-    fprintf(stderr,
-            "[DIR ROOT] root changed inode=%u from %u to %u (persist)\n",
-            dir->inode.inode_number, dir->inode.btree_root,
-            dir_handle->root_block);
     dir->inode.btree_root = dir_handle->root_block;
     btree_handle_t *inode_handle = btree_create_inode_handle();
     inode_handle->root_block = sb->inode_root;
@@ -143,9 +139,8 @@ int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  * @param out Output parameter to receive the matching entry on success.
  * @return 1 if found; 0 otherwise.
  */
-int scan_dir_tree_find(FILE *disk, btree_handle_t *handle,
-                              uint32_t node_block, const char *name,
-                              dir_entry_t *out) {
+int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block,
+                       const char *name, dir_entry_t *out) {
   if (node_block == 0)
     return 0;
   btree_node_t *node = btree_read_node(disk, handle, node_block);
@@ -198,11 +193,9 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
 
   // Locate the exact entry by name first
   dir_entry_t found;
-  int present = scan_dir_tree_find(disk, handle, handle->root_block, filename,
-                                   &found);
+  int present =
+      scan_dir_tree_find(disk, handle, handle->root_block, filename, &found);
   if (!present) {
-    fprintf(stderr, "[DIR RM] entry '%s' not found (root=%u)\n", filename,
-            handle->root_block);
     free(handle);
     return -1;
   }
@@ -215,8 +208,6 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
   uint32_t before_root = handle->root_block;
   int ok = btree_remove_entry(disk, sb, handle, &needle);
   if (!ok) {
-    fprintf(stderr, "[DIR RM] btree_remove_entry failed for '%s' (root=%u)\n",
-            filename, before_root);
     free(handle);
     return -1;
   }
@@ -244,7 +235,7 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  * @param dir Pointer to the open directory structure.
  * @param entry Pointer to the updated directory entry.
  * @return 1 on success; -1 if the entry was not found.
-*/
+ */
 int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
                      dir_entry_t *entry) {
   (void)sb;
@@ -285,7 +276,8 @@ int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
   // Robust path: deep scan the directory B-tree to match exact name.
   // This avoids relying on strict key-order invariants after complex updates
   // (e.g., rebuilds/merges) and ensures correctness for exact lookups.
-  int found = scan_dir_tree_find(disk, handle, handle->root_block, name, result);
+  int found =
+      scan_dir_tree_find(disk, handle, handle->root_block, name, result);
 
   // Optional fast path (disabled): if needed in the future, try
   // btree_search_entry first and fall back to scan on miss.
@@ -317,11 +309,6 @@ static int btree_find_min_entry(FILE *disk, btree_handle_t *handle,
   if (node->is_leaf) {
     if (node->num_entries > 0) {
       memcpy(out_entry, node->entries, handle->entry_size);
-      if (handle->type == BTREE_TYPE_DIR_ENTRY) {
-        dir_entry_t *e = (dir_entry_t *)out_entry;
-        fprintf(stderr, "[DIR ITER] min entry: %s (key=%u)\n", e->filename,
-                hash_filename(e->filename));
-      }
       ok = 1;
     } else {
       ok = 0;
@@ -370,11 +357,6 @@ static int btree_find_successor_entry(FILE *disk, btree_handle_t *handle,
       }
       // Current entry is the successor
       memcpy(out_entry, entries + i * handle->entry_size, handle->entry_size);
-      if (handle->type == BTREE_TYPE_DIR_ENTRY) {
-        dir_entry_t *e = (dir_entry_t *)out_entry;
-        fprintf(stderr, "[DIR ITER] succ after %u -> %s (key=%u)\n", after_key,
-                e->filename, hash_filename(e->filename));
-      }
       found = 1;
       break;
     }
@@ -423,15 +405,11 @@ int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
     if (ok) {
       dir->iter_started = 1;
       dir->iter_key = hash_filename(out->filename);
-      fprintf(stderr, "[DIR ITER] start key=%u (%s)\n", dir->iter_key,
-              out->filename);
     }
   } else {
     ok = btree_find_successor_entry(disk, dir_handle, dir_handle->root_block,
                                     dir->iter_key, out);
     if (ok) {
-      fprintf(stderr, "[DIR ITER] next from key=%u -> %u (%s)\n", dir->iter_key,
-              hash_filename(out->filename), out->filename);
       dir->iter_key = hash_filename(out->filename);
     }
   }

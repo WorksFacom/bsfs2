@@ -242,19 +242,17 @@ int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
   }
 
   // Insert the entry into the B-tree (btree_insert returns 0 on success)
-  int ok0 = btree_insert(disk, sb, rec_tree, entry);
-  fprintf(stderr, "[REC ADD] id=%u name=%s ok=%d root=%u\n", entry->recovery_id,
-          entry->original_name, (ok0 == 0), rec_tree->root_block);
+  int ok = btree_insert(disk, sb, rec_tree, entry);
 
   // Persist Recovery root whenever it changes (e.g., after a split creating a
   // new root). This ensures future sessions/loaders see the correct root.
-  if (ok0 == 0 && rec_tree->root_block != 0 &&
+  if (ok == 0 && rec_tree->root_block != 0 &&
       sb->recovery_root != rec_tree->root_block) {
     sb->recovery_root = rec_tree->root_block;
     (void)write_superblock(disk, sb);
   }
 
-  return (ok0 == 0) ? 1 : 0;
+  return (ok == 0) ? 1 : 0;
 }
 
 /**
@@ -343,7 +341,24 @@ int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree,
                                   out, cap, out_count);
 }
 
-/* See header (rec_entry_operations_bsfs.h) for documentation. */
+/**
+ * @brief Permanently purge a deleted file from the filesystem.
+ *
+ * Reclaims all data blocks referenced by the snapshot @p rec (both direct
+ * spans and spans in the per-file data B-tree), removes the span records, and
+ * finally removes the metadata entry from the Recovery B-tree.
+ *
+ * Failure semantics:
+ *  - If deallocation of data or removal of span mappings fails, the recovery
+ *    entry is NOT removed and the function returns -1, allowing a retry.
+ *
+ * @param disk      Open filesystem image.
+ * @param sb        Loaded superblock.
+ * @param data_tree B-tree handle for file data spans (bspan_t mappings).
+ * @param rec_tree  B-tree handle for recovery entries (rec_entry_t).
+ * @param rec       The recovery entry describing the file to purge.
+ * @return 0 on success; -1 on error.
+ */
 int purge_file(FILE *disk, superblock_t *sb, btree_handle_t *data_tree,
                btree_handle_t *rec_tree, const rec_entry_t *rec) {
   if (!disk || !sb || !data_tree || !rec_tree || !rec) {

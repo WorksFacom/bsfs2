@@ -11,9 +11,6 @@
  * and deletion operations, ensuring the tree remains balanced across writes.
  */
 #include "../../include/btree_bsfs.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /*
  * Static functions prototypes
@@ -468,27 +465,6 @@ int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
   memcpy(buffer + offset, node->children,
          sizeof(uint32_t) * (2 * handle->min_degree));
 
-  if (handle->type == BTREE_TYPE_DIR_ENTRY) {
-    const dir_entry_t *first = NULL;
-    if (node->num_entries > 0) {
-      first = (const dir_entry_t *)node->entries;
-    }
-    fprintf(stderr, "btree_write_node: DIR block=%u leaf=%u n=%u first='%s'\n",
-            block, (unsigned)node->is_leaf, node->num_entries,
-            first ? first->filename : "");
-  }
-  if (handle->type == BTREE_TYPE_RECOVERY) {
-    const rec_entry_t *first = NULL;
-    if (node->num_entries > 0) {
-      first = (const rec_entry_t *)node->entries;
-    }
-    fprintf(stderr,
-            "btree_write_node: REC block=%u leaf=%u n=%u first_id=%u first_name='%s'\n",
-            block, (unsigned)node->is_leaf, node->num_entries,
-            first ? first->recovery_id : 0,
-            first ? first->original_name : "");
-  }
-
   if (write_block(disk, block, buffer, sizeof(buffer)) != 0) {
     fprintf(stderr, "Failed to write B-tree node at block %u\n", block);
     return -1;
@@ -496,6 +472,7 @@ int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block,
 
   return 0;
 }
+
 /**
  * @brief Reads and deserializes a B-tree node from disk.
  *
@@ -535,26 +512,6 @@ btree_node_t *btree_read_node(FILE *disk, btree_handle_t *handle,
   memcpy(node->children, buffer + offset,
          sizeof(uint32_t) * (2 * handle->min_degree));
 
-  if (handle->type == BTREE_TYPE_DIR_ENTRY) {
-    const dir_entry_t *first = NULL;
-    if (node->num_entries > 0) {
-      first = (const dir_entry_t *)node->entries;
-    }
-    fprintf(stderr, "btree_read_node: DIR block=%u leaf=%u n=%u first='%s'\n",
-            block, (unsigned)node->is_leaf, node->num_entries,
-            first ? first->filename : "");
-  }
-  if (handle->type == BTREE_TYPE_RECOVERY) {
-    const rec_entry_t *first = NULL;
-    if (node->num_entries > 0) {
-      first = (const rec_entry_t *)node->entries;
-    }
-    fprintf(stderr,
-            "btree_read_node: REC block=%u leaf=%u n=%u first_id=%u first_name='%s'\n",
-            block, (unsigned)node->is_leaf, node->num_entries,
-            first ? first->recovery_id : 0,
-            first ? first->original_name : "");
-  }
   return node;
 }
 
@@ -632,6 +589,21 @@ int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block,
   return btree_search(disk, handle, child_block, key, output);
 }
 
+/**
+ * @brief Searches for an entry in the B-tree using the handle's compare
+ *        function (full entry comparison), not just the numeric key.
+ *
+ * This is useful for data types whose ordering depends on a composite key
+ * (e.g., directory entries ordered by (hash(filename), filename)).
+ *
+ * @param disk Pointer to the open disk file.
+ * @param handle Pointer to the B-tree handle containing type/logic functions.
+ * @param node_block Block number of the node to begin searching from.
+ * @param needle Pointer to an in-memory entry (same type as tree entries)
+ *               used for comparison and navigation.
+ * @param output Pointer where the found entry will be copied if present.
+ * @return int 1 if found, 0 otherwise.
+ */
 int btree_search_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block,
                        const void *needle, void *output) {
   if (node_block == 0)
@@ -675,7 +647,8 @@ int btree_search_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block,
 
   // Otherwise, key is less than entries[i] (or i == num_entries): go to child i
   uint32_t child_block = node->children[(uint32_t)i];
-  (void)i; (void)child_block;
+  (void)i;
+  (void)child_block;
   btree_free_node(node);
   return btree_search_entry(disk, handle, child_block, needle, output);
 }
@@ -722,7 +695,8 @@ int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
       return -1;
     }
 
-    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
+    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root,
+                             entry) != 0 ||
         btree_write_node(disk, handle, handle->root_block, root) != 0) {
       btree_free_node(root);
       return -1;
@@ -762,7 +736,8 @@ int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
     new_root->children[0] = handle->root_block;
 
     if (btree_split_child(disk, sb, handle, new_root_block, new_root, 0) != 0 ||
-        btree_insert_nonfull(disk, sb, handle, new_root_block, new_root, entry) != 0 ||
+        btree_insert_nonfull(disk, sb, handle, new_root_block, new_root,
+                             entry) != 0 ||
         btree_write_node(disk, handle, new_root_block, new_root) != 0) {
       btree_free_node(new_root);
       btree_free_node(root);
@@ -772,7 +747,8 @@ int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle,
     handle->root_block = new_root_block;
     btree_free_node(new_root);
   } else {
-    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
+    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root,
+                             entry) != 0 ||
         btree_write_node(disk, handle, handle->root_block, root) != 0) {
       btree_free_node(root);
       return -1;
@@ -859,7 +835,8 @@ static int btree_insert_nonfull(FILE *disk, superblock_t *sb,
         return -1;
     }
 
-    int result = btree_insert_nonfull(disk, sb, handle, child_block, child, entry);
+    int result =
+        btree_insert_nonfull(disk, sb, handle, child_block, child, entry);
     if (result == 0) {
       // persist child and updated parent
       if (btree_write_node(disk, handle, child_block, child) != 0)
@@ -968,8 +945,7 @@ static int btree_split_child(FILE *disk, superblock_t *sb,
  * @brief Removes an entry from the B-tree based on its key.
  *
  * This is the public interface for removing an entry from a B-tree. It
- * initiates a recursive deletion process starting from the node specified by
- * `node_block`.
+ * initiates a recursive deletion process starting from the tree root.
  *
  * Internally, the actual logic is handled by `btree_remove_internal`, which
  * updates the tree structure, balances nodes if necessary, and writes changes
@@ -1134,7 +1110,8 @@ static int btree_find_max_entry(FILE *disk, btree_handle_t *handle,
   if (node->is_leaf) {
     if (node->num_entries > 0) {
       memcpy(out_entry,
-             (uint8_t *)node->entries + (node->num_entries - 1) * handle->entry_size,
+             (uint8_t *)node->entries +
+                 (node->num_entries - 1) * handle->entry_size,
              handle->entry_size);
       ok = 1;
     } else {
@@ -1151,8 +1128,8 @@ static int btree_find_max_entry(FILE *disk, btree_handle_t *handle,
 /** Entry-based remove (comparator-driven). */
 static void btree_remove_entry_internal(FILE *disk, superblock_t *sb,
                                         btree_handle_t *handle,
-                                        uint32_t node_block,
-                                        const void *needle, int *success) {
+                                        uint32_t node_block, const void *needle,
+                                        int *success) {
   btree_node_t *node = btree_read_node(disk, handle, node_block);
   if (!node) {
     *success = 0;
@@ -1327,6 +1304,13 @@ static void btree_remove_entry_internal(FILE *disk, superblock_t *sb,
   btree_free_node(node);
 }
 
+/**
+ * @brief Remove an entry using the handle's comparator (exact-match).
+ *
+ * Suitable for trees where ordering is defined by a comparator (e.g.,
+ * directory entries ordered by hash+name). Returns 1 if the entry was
+ * found and removed, 0 if not found, -1 on error.
+ */
 int btree_remove_entry(FILE *disk, superblock_t *sb, btree_handle_t *handle,
                        const void *entry) {
   if (!handle || handle->root_block == 0)
@@ -1355,7 +1339,6 @@ int btree_remove_entry(FILE *disk, superblock_t *sb, btree_handle_t *handle,
   }
   return success;
 }
-
 
 /**
  * @brief Merges two child nodes of a parent in a B-tree.

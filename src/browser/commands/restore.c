@@ -45,7 +45,7 @@ static void fmt_time(uint64_t ts, char *buf, size_t cap) {
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args argv‑like vector; id or name in args[1], optional dest dir in
+ * @param args argv-like vector; id or name in args[1], optional dest dir in
  * args[2].
  * @return 1 to continue the browser loop.
  */

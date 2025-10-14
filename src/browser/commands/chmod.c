@@ -7,12 +7,12 @@
 /**
  * @brief Change permission bits of a path.
  *
- * Parses the octal mode and calls the high‑level API to update permission
+ * Parses the octal mode and calls the high-level API to update permission
  * bits. Prints usage on invalid input and a concise error on failure.
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects mode in args[1], path in
+ * @param args Command argv-like vector; expects mode in args[1], path in
  * args[2].
  * @return 1 to continue the browser loop.
  */

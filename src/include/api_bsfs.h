@@ -21,139 +21,314 @@
 #include "permissions_bsfs.h"           // DAC helpers
 
 /**
- * @brief Open a file given a path and load its inode into a file_t.
+ * @brief Open a file by path and load its inode into a file_t.
+ *
+ * Resolves @p path against the API's CWD, verifies that the target is a file
+ * or directory (permission checks for reading/writing are enforced later in
+ * read/write), and loads its inode into @p file with position set to 0.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock (inode tree root is used for lookups).
+ * @param path Absolute or relative path to the file.
+ * @param file Output: populated file descriptor snapshot.
  * @return 0 on success; -1 on failure.
  */
 int open_bsfs(FILE *disk, superblock_t *sb, const char *path, file_t *file);
 
 /**
- * @brief Close an open file (no-op; metadata is persisted by write_bsfs).
- * @return 0 on success; -1 on failure.
+ * @brief Close an open file descriptor (no-op in this API).
+ *
+ * Metadata persistence is handled by write operations; closing does not flush
+ * any state and always succeeds.
+ *
+ * @param file Open file descriptor (unused).
+ * @return 0.
  */
 int close_bsfs(file_t *file);
 
 /**
- * @brief Set the current file position (absolute).
- * @return 0 on success; -1 on invalid position.
+ * @brief Set the current file position (absolute) within the open file.
+ *
+ * Fails if @p pos exceeds the current logical file size.
+ *
+ * @param file Open file descriptor.
+ * @param pos  New absolute byte position from the start of file.
+ * @return 0 on success; -1 on invalid arguments or position.
  */
 int seek_bsfs(file_t *file, uint32_t pos);
 
 /**
- * @brief Read up to length bytes from current file position into data.
- * @return Number of bytes read (0 at EOF or on error).
+ * @brief Read up to @p length bytes from the current file position.
+ *
+ * Performs a permission check (read) for the current session identity and
+ * reads data spanning direct and indirect block spans. Advances the file
+ * position by the number of bytes read.
+ *
+ * @param disk   Open filesystem image.
+ * @param sb     Loaded superblock.
+ * @param file   Open file descriptor.
+ * @param data   Output buffer.
+ * @param length Maximum number of bytes to read.
+ * @return Number of bytes read (0 on EOF or error).
  */
 size_t read_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
                  uint32_t length);
 
 /**
- * @brief Write length bytes from data into file at current position.
+ * @brief Write @p length bytes from @p data at the current file position.
+ *
+ * Allocates block spans as needed, writes the data, advances the file
+ * position, and persists the inode metadata update in the inode tree.
+ * Requires write permission for the current session identity.
+ *
+ * @param disk   Open filesystem image.
+ * @param sb     Loaded superblock (used for allocation and inode updates).
+ * @param file   Open file descriptor.
+ * @param data   Input buffer containing bytes to write.
+ * @param length Number of bytes to write.
  * @return Number of bytes written (0 on error).
  */
 size_t write_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
                   uint32_t length);
 
 /**
- * @brief Overwrite a file with the provided data (truncate to zero, then write).
- * @return Number of bytes written (0 on error).
+ * @brief Overwrite an entire file with the provided buffer.
+ *
+ * Opens @p path, seeks to 0, truncates to zero, and writes @p length bytes
+ * from @p data. Updates the inode metadata accordingly.
+ *
+ * @param disk   Open filesystem image.
+ * @param sb     Loaded superblock.
+ * @param path   Target file path.
+ * @param data   Buffer to write from.
+ * @param length Number of bytes to write.
+ * @return Number of bytes written (0 on failure).
  */
 size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path,
                       const void *data, uint32_t length);
 
 /**
- * @brief Create an empty regular file at the given path.
- * @return 0 on success; -1 on failure.
+ * @brief Create an empty regular file at @p path.
+ *
+ * Resolves the parent directory, checks modify permissions there, and creates
+ * a zero-length inode with owner/mode derived from the current session identity
+ * and umask.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Absolute or relative file path.
+ * @return 0 on success; -1 on error (permissions, duplicates, or I/O).
  */
 int create_file_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
- * @brief Logically remove a file: unlink + move snapshot into Recovery tree.
- * @return 0 on success; -1 on failure.
+ * @brief Logically remove a file and move its snapshot into the Recovery tree.
+ *
+ * Performs parent directory permissions and sticky-bit checks before unlinking
+ * the directory entry, removing the inode from the inode tree, and inserting a
+ * snapshot into the Recovery B-tree to allow later restore.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target file path.
+ * @return 0 on success; -1 on error.
  */
 int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
- * @brief Move or rename a file (or directory) from one path to another.
- * @return 0 on success; -1 on failure.
+ * @brief Move or rename an entry from @p old_path to @p new_path.
+ *
+ * Resolves source/destination parents, checks modify permissions on both and
+ * sticky-bit semantics on the source, then relinks the entry with the new
+ * name/location.
+ *
+ * @param disk      Open filesystem image.
+ * @param sb        Loaded superblock.
+ * @param old_path  Source path.
+ * @param new_path  Destination path (may include a new basename).
+ * @return 0 on success; -1 on error.
  */
 int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path,
               const char *new_path);
 
 /**
- * @brief Retrieve the inode associated with a path.
- * @return 0 on success; -1 on failure (not found).
+ * @brief Resolve @p path and return its inode metadata.
+ *
+ * @param disk  Open filesystem image.
+ * @param sb    Loaded superblock.
+ * @param path  Absolute or relative path.
+ * @param inode Output: filled with the target's inode on success.
+ * @return 0 on success; -1 if not found or invalid args.
  */
 int stat_bsfs(FILE *disk, superblock_t *sb, const char *path, inode_t *inode);
 
 /**
  * @brief Open a directory for iteration.
- * @return 0 on success; -1 on failure.
+ *
+ * If @p dirname is NULL or ".", opens the current CWD after checking traverse
+ * and list permissions. Otherwise resolves @p dirname and verifies it is a
+ * directory and accessible.
+ *
+ * @param disk    Open filesystem image.
+ * @param sb      Loaded superblock.
+ * @param dirname Directory path (NULL or "." means CWD).
+ * @param dir     Output: directory descriptor snapshot.
+ * @return 0 on success; -1 on error.
  */
 int opendir_bsfs(FILE *disk, superblock_t *sb, const char *dirname, dir_t *dir);
 
 /**
- * @brief Close a directory (no-op).
- * @return 0 on success.
+ * @brief Close a directory descriptor (no-op for this API).
+ * @param dir Directory descriptor (unused).
+ * @return 0.
  */
 int closedir_bsfs(dir_t *dir);
 
 /**
- * @brief Read next directory entry.
- * @return 1 on success, 0 on end of directory, -1 on error.
+ * @brief Read the next directory entry in key order.
+ *
+ * Uses the underlying B-tree iteration. Returns 1 when an entry is produced,
+ * 0 on end of directory, and -1 on invalid arguments.
+ *
+ * @param disk   Open filesystem image.
+ * @param sb     Loaded superblock.
+ * @param dir    Open directory descriptor.
+ * @param entry  Output: next directory entry.
+ * @return 1 on success, 0 on end, -1 on error.
  */
 int readdir_bsfs(FILE *disk, superblock_t *sb, dir_t *dir, dir_entry_t *entry);
 
 /**
- * @brief Create a new directory at path.
- * @return 0 on success; -1 on failure.
+ * @brief Create a new directory at @p path.
+ *
+ * Checks modify permissions on the parent and creates an empty directory with
+ * entries for "." and "..". Owner and mode are set from session identity and
+ * umask.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Directory path (absolute or relative).
+ * @return 0 on success; -1 on error.
  */
 int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
- * @brief Remove an empty directory at path.
- * @return 0 on success; -1 on failure.
+ * @brief Remove an empty directory at @p path.
+ *
+ * Verifies the target is a directory, checks parent modify permission and
+ * sticky-bit semantics, then removes the directory if it is empty.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Directory path to remove.
+ * @return 0 on success; -1 on error.
  */
 int rmdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
- * @brief Change current working directory to path.
- * @return 0 on success; -1 on failure.
+ * @brief Change the current working directory to @p path.
+ *
+ * Resolves the path, verifies it is a directory, and checks traverse
+ * permission for the current session identity.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Directory path.
+ * @return 0 on success; -1 on error.
  */
 int chdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
- * @brief Get textual path of current working directory.
- * @return 0 on success; -1 on failure.
+ * @brief Get the textual representation of the current working directory.
+ *
+ * @param disk         Unused.
+ * @param sb           Unused.
+ * @param path_buffer  Output buffer to receive the path.
+ * @param buffer_size  Capacity of @p path_buffer (bytes).
+ * @return 0 on success; -1 on invalid arguments.
  */
 int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer,
                 size_t buffer_size);
 
 /**
- * @brief Restore a file from the Recovery tree by recovery ID.
+ * @brief Restore a deleted file by recovery ID.
  *
- * Loads the snapshot identified by @p recovery_id from the Recovery B-tree,
- * chooses a destination directory (explicit @p dest_dir if provided, otherwise
- * attempts the original parent recorded in the snapshot, falling back to the
- * current working directory), recreates the inode and directory entry, and
- * removes the snapshot on success.
+ * Loads the snapshot from the Recovery B-tree, chooses the destination
+ * directory (explicit, original parent, or CWD), recreates the inode and
+ * directory entry, and removes the snapshot. Restricted to root by default.
  *
- * @param disk        Open filesystem image.
- * @param sb          Loaded superblock.
- * @param recovery_id Unique ID of the recovery snapshot.
- * @param dest_dir    Optional destination directory path (may be NULL).
- * @return 0 on success; -1 on failure.
+ * @param disk         Open filesystem image.
+ * @param sb           Loaded superblock.
+ * @param recovery_id  Recovery entry identifier.
+ * @param dest_dir     Optional destination directory path.
+ * @return 0 on success; -1 on error or insufficient permission.
  */
 int restore_bsfs(FILE *disk, superblock_t *sb, uint32_t recovery_id,
                  const char *dest_dir);
 
-/* Session identity and umask (used by permission checks) */
+/**
+ * @brief Set the current session identity (uid,gid) for permission checks.
+ * @param uid New user id.
+ * @param gid New group id.
+ * @return 0.
+ */
 int set_identity_bsfs(uint16_t uid, uint16_t gid);
+
+/**
+ * @brief Get the current session identity (uid,gid).
+ * @param uid Output: current user id (nullable).
+ * @param gid Output: current group id (nullable).
+ * @return 0.
+ */
 int get_identity_bsfs(uint16_t *uid, uint16_t *gid);
+
+/**
+ * @brief Set the current session umask (000..777).
+ * @param umask New umask in octal (lowest 9 bits are honored).
+ * @return 0.
+ */
 int set_umask_bsfs(uint16_t umask);
+
+/**
+ * @brief Get the current session umask.
+ * @param umask Output: current umask (nullable).
+ * @return 0.
+ */
 int get_umask_bsfs(uint16_t *umask);
 
-/* Metadata operations with permission checks */
+/**
+ * @brief Change permission bits of a path (octal 0000..7777).
+ *
+ * Allowed to root or file owner.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target path.
+ * @param mode New mode bits (lowest 12 bits are honored).
+ * @return 0 on success; -1 on error or permission denied.
+ */
 int chmod_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t mode);
+
+/**
+ * @brief Change the owner (uid) of a path (root only).
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target path.
+ * @param uid  New owner user id.
+ * @return 0 on success; -1 on error or permission denied.
+ */
 int chown_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t uid);
+
+/**
+ * @brief Change the group (gid) of a path (root only).
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target path.
+ * @param gid  New group id.
+ * @return 0 on success; -1 on error or permission denied.
+ */
 int chgrp_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t gid);
 
 #endif // API_BSFS_H

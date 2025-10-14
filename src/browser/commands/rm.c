@@ -57,13 +57,33 @@ static int join_child_path(const char *dir_path, const char *name, char *out,
   return 0;
 }
 
+/**
+ * @struct rm_task_t
+ * @brief Prepared removal record used by the bulk rm implementation.
+ *
+ * Each task captures the absolute path and the inode snapshot for a file that
+ * will be deleted, along with metadata needed to create a Recovery entry if the
+ * removal succeeds.
+ */
 typedef struct {
-  char *path;
-  inode_t inode_snapshot;
-  uint32_t parent_ino;
-  int has_snapshot;
+  char *path;             /**< Absolute path of the file scheduled for removal. */
+  inode_t inode_snapshot; /**< Inode contents captured before unlinking. */
+  uint32_t parent_ino;    /**< Inode number of the parent directory. */
+  int has_snapshot; /**< Flag indicating whether inode_snapshot is populated. */
 } rm_task_t;
 
+/**
+ * @brief Remove a file while preserving a Recovery snapshot.
+ *
+ * Opens the parent directory, records the file's metadata into the Recovery
+ * tree, removes the directory entry, and finally deletes the inode from the
+ * inode B-tree. On failure, the recovery entry is rolled back.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param task Prepared removal descriptor with full path and inode snapshot.
+ * @return 0 on success; -1 on error (no changes committed).
+ */
 static int remove_with_snapshot(FILE *disk, superblock_t *sb,
                                 const rm_task_t *task) {
   if (!task || !task->has_snapshot)
@@ -278,7 +298,7 @@ static int rm_bulk(FILE *disk, superblock_t *sb, const char *dir_path) {
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects target path in args[1].
+ * @param args Command argv-like vector; expects target path in args[1].
  * @return 1 to continue the browser loop.
  */
 int rm(FILE *disk, superblock_t *sb, char **args) {

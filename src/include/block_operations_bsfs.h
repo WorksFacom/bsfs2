@@ -61,7 +61,7 @@ int read_block(FILE *disk, uint32_t block_number, void *data, size_t size);
  * from the superblock (sb->block_bitmap_start).
  *
  * @param disk Pointer to the disk file where the block is located.
- * @param sb   Pointer to the superblock providing bitmap location metadata.
+ * @param sb Pointer to the superblock providing bitmap location metadata.
  * @param block_number The block number to be marked as free.
  * @param bitmap Pointer to the in-memory bitmap buffer to update and write.
  * @param bitmap_size Unused parameter (reserved for future validation).

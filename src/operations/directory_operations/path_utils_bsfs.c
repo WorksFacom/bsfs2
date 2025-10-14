@@ -8,9 +8,8 @@
  */
 
 #include "../../include/path_utils_bsfs.h"
-#include "../../include/permissions_bsfs.h"
 #include "../../include/inode_operations_bsfs.h"
-#include <errno.h>
+#include "../../include/permissions_bsfs.h"
 
 /**
  * @brief Resolves a path to its parent directory and the final component name.
@@ -147,7 +146,6 @@ int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
   char name[MAX_FILENAME];
 
   if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
-    fprintf(stderr, "[LOOKUP] resolve_path failed for '%s'\n", path);
     errno = ENOENT;
     return -1;
   }
@@ -158,8 +156,6 @@ int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
     btree_handle_t *dir_h = btree_create_dir_entry_handle();
     dir_h->root_block = parent.inode.btree_root;
     if (!scan_dir_tree_find(disk, dir_h, dir_h->root_block, name, &entry)) {
-      fprintf(stderr, "[LOOKUP] entry not found name='%s' root=%u\n", name,
-              parent.inode.btree_root);
       errno = ENOENT;
       free(dir_h);
       return -1;

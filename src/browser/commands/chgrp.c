@@ -12,7 +12,7 @@
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects gid in args[1], path in
+ * @param args Command argv-like vector; expects gid in args[1], path in
  * args[2].
  * @return 1 to continue the browser loop.
  */

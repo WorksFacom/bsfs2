@@ -138,7 +138,7 @@ int touch(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects target path in args[1].
+ * @param args Command argv-like vector; expects target path in args[1].
  * @return 1 to continue the browser loop.
  */
 int rm(FILE *disk, superblock_t *sb, char **args);
@@ -210,9 +210,24 @@ int stat(FILE *disk, superblock_t *sb, char **args);
 int dd(FILE *disk, superblock_t *sb, char **args);
 
 /**
- * @brief Bulk-create files of a given size and report elapsed time.
+ * @brief Implements the fill command for the BSFS browser.
  *
- * Usage: fill <count> <size> [prefix]
+ * The fill command creates a number of files with a given size, measuring the
+ * elapsed time for the operation. Files are created sequentially using the
+ * high-level API and filled with a predictable byte pattern.
+ *
+ * Usage:
+ *   fill <count> <size> [prefix] [bs=<block>] [pattern=index|zero|random]
+ *
+ * Parameters:
+ *   - count   : number of files to create (positive integer)
+ *   - size    : file size (supports K/M/G suffixes)
+ *   - prefix  : optional basename/path (default: "fill") used to build
+ *               <prefix>_<NNN>.bin
+ *   - bs=     : optional block size for writes (default 64 KiB, supports
+ *               suffixes)
+ *   - pattern : optional fill pattern: "index" (default, byte = file id),
+ *               "zero" (all zeros) or "random" (pseudo-random bytes)
  */
 int fill_cmd(FILE *disk, superblock_t *sb, char **args);
 
@@ -223,7 +238,7 @@ int fill_cmd(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image (unused).
  * @param sb   Loaded superblock (unused).
- * @param args argv‑like vector (unused).
+ * @param args argv-like vector (unused).
  * @return 1 to continue the browser loop.
  */
 int whoami_cmd(FILE *disk, superblock_t *sb, char **args);
@@ -233,11 +248,11 @@ int whoami_cmd(FILE *disk, superblock_t *sb, char **args);
  *
  * Changes the API session uid (and optionally gid) used for permission checks.
  * Accepts decimal values. Intended for testing permission behavior in the
- * browser; no OS‑level identity is changed.
+ * browser; no OS-level identity is changed.
  *
  * @param disk Open filesystem image (unused).
  * @param sb   Loaded superblock (unused).
- * @param args argv‑like vector; expects uid in args[1], optional gid in
+ * @param args argv-like vector; expects uid in args[1], optional gid in
  * args[2].
  * @return 1 to continue the browser loop.
  */
@@ -251,7 +266,7 @@ int su(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image (unused).
  * @param sb   Loaded superblock (unused).
- * @param args argv‑like vector; optional octal value in args[1].
+ * @param args argv-like vector; optional octal value in args[1].
  * @return 1 to continue the browser loop.
  */
 int umask_cmd(FILE *disk, superblock_t *sb, char **args);
@@ -259,12 +274,12 @@ int umask_cmd(FILE *disk, superblock_t *sb, char **args);
 /**
  * @brief Change permission bits of a path.
  *
- * Parses the octal mode and calls the high‑level API to update permission
+ * Parses the octal mode and calls the high-level API to update permission
  * bits. Prints usage on invalid input and a concise error on failure.
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects mode in args[1], path in
+ * @param args Command argv-like vector; expects mode in args[1], path in
  * args[2].
  * @return 1 to continue the browser loop.
  */
@@ -278,7 +293,7 @@ int chmod(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects uid in args[1], path in
+ * @param args Command argv-like vector; expects uid in args[1], path in
  * args[2].
  * @return 1 to continue the browser loop.
  */
@@ -292,7 +307,7 @@ int chown(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args Command argv‑like vector; expects gid in args[1], path in
+ * @param args Command argv-like vector; expects gid in args[1], path in
  * args[2].
  * @return 1 to continue the browser loop.
  */
@@ -320,7 +335,7 @@ int recovery(FILE *disk, superblock_t *sb, char **args);
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
- * @param args argv‑like vector; id or name in args[1], optional dest dir in
+ * @param args argv-like vector; id or name in args[1], optional dest dir in
  * args[2].
  * @return 1 to continue the browser loop.
  */
@@ -331,8 +346,8 @@ int restore(FILE *disk, superblock_t *sb, char **args);
  *
  * Usage:
  *  - purge                  -> remove entries older than ~30 days
- *  - purge <id>             -> remove a specific snapshot by Recovery ID
- *  - purge oldest <count>   -> remove the <count> oldest snapshots
+ *  - purge &lt;id&gt;             -> remove a specific snapshot by Recovery ID
+ *  - purge oldest &lt;count&gt;   -> remove the &lt;count&gt; oldest snapshots
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.

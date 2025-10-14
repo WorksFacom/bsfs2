@@ -327,8 +327,7 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
  * @brief Removes an entry from the B-tree based on its key.
  *
  * This is the public interface for removing an entry from a B-tree. It
- * initiates a recursive deletion process starting from the node specified by
- * `node_block`.
+ * initiates a recursive deletion process starting from the tree root.
  *
  * Internally, the actual logic is handled by `btree_remove_internal`, which
  * updates the tree structure, balances nodes if necessary, and writes changes
@@ -338,8 +337,6 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block,
  * @param sb Pointer to the superblock, used for block deallocation if
  * necessary.
  * @param handle Pointer to the B-tree handle structure.
- * @param node_block The block number of the root (or subroot) node to start the
- * removal.
  * @param key The key of the entry to remove from the tree.
  * @return int 1 if the key was found and removed, 0 if the key was not found.
  */

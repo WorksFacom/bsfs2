@@ -37,10 +37,10 @@ static uint16_t s_uid = 0, s_gid = 0; // session identity (root by default)
 static uint16_t s_umask = 0022;       // default umask
 
 /**
- * @brief Ensure the in‑memory current working directory (CWD) is initialized.
+ * @brief Ensure the in-memory current working directory (CWD) is initialized.
  *
  * If not yet initialized, this loads the root directory inode from the inode
- * B‑tree recorded in the superblock and seeds the API session state with
+ * B-tree recorded in the superblock and seeds the API session state with
  * that directory as the CWD (both the dir_t snapshot and textual path).
  *
  * @param disk Open filesystem image.
@@ -100,16 +100,16 @@ static void refresh_cwd_inode(FILE *disk, superblock_t *sb) {
 /**
  * @brief Update the textual CWD string given a target path.
  *
- * Applies simple shell‑like semantics to the internal string path:
+ * Applies simple shell-like semantics to the internal string path:
  * - absolute: replaces the full path;
  * - ".": no change;
  * - "..": pop one component (if any);
  * - relative component: append to current path with a slash.
  *
- * This does not touch on‑disk state; it only updates the in‑memory text path
+ * This does not touch on-disk state; it only updates the in-memory text path
  * used for printing and convenience in the browser.
  *
- * @param target_path Path fragment provided to a chdir‑like operation.
+ * @param target_path Path fragment provided to a chdir-like operation.
  */
 static void cwd_update_text(const char *target_path) {
   if (!target_path || !*target_path)
@@ -158,7 +158,6 @@ int open_bsfs(FILE *disk, superblock_t *sb, const char *path, file_t *file) {
   inode_t inode;
   if (lookup_file(disk, sb, path, &s_cwd, &inode) != 0)
     return -1;
-  // For now, just load; read/write checks are enforced in read_bsfs/write_bsfs
   btree_handle_t *inode_h = btree_create_inode_handle();
   inode_h->root_block = sb->inode_root;
   int rc = open_file(disk, inode_h, inode.inode_number, file);
@@ -167,7 +166,7 @@ int open_bsfs(FILE *disk, superblock_t *sb, const char *path, file_t *file) {
 }
 
 /**
- * @brief Close an open file descriptor (no‑op in this API).
+ * @brief Close an open file descriptor (no-op in this API).
  *
  * Metadata persistence is handled by write operations; closing does not flush
  * any state and always succeeds.
@@ -309,7 +308,7 @@ size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path,
  * @brief Create an empty regular file at @p path.
  *
  * Resolves the parent directory, checks modify permissions there, and creates
- * a zero‑length inode with owner/mode derived from the current session identity
+ * a zero-length inode with owner/mode derived from the current session identity
  * and umask.
  *
  * @param disk Open filesystem image.
@@ -342,9 +341,9 @@ int create_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
 /**
  * @brief Logically remove a file and move its snapshot into the Recovery tree.
  *
- * Performs parent directory permissions and sticky‑bit checks before unlinking
+ * Performs parent directory permissions and sticky-bit checks before unlinking
  * the directory entry, removing the inode from the inode tree, and inserting a
- * snapshot into the Recovery B‑tree to allow later restore.
+ * snapshot into the Recovery B-tree to allow later restore.
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
@@ -467,7 +466,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @brief Move or rename an entry from @p old_path to @p new_path.
  *
  * Resolves source/destination parents, checks modify permissions on both and
- * sticky‑bit semantics on the source, then relinks the entry with the new
+ * sticky-bit semantics on the source, then relinks the entry with the new
  * name/location.
  *
  * @param disk      Open filesystem image.
@@ -596,7 +595,7 @@ int opendir_bsfs(FILE *disk, superblock_t *sb, const char *dirname,
 }
 
 /**
- * @brief Close a directory descriptor (no‑op for this API).
+ * @brief Close a directory descriptor (no-op for this API).
  * @param dir Directory descriptor (unused).
  * @return 0.
  */
@@ -608,7 +607,7 @@ int closedir_bsfs(dir_t *dir) {
 /**
  * @brief Read the next directory entry in key order.
  *
- * Uses the underlying B‑tree iteration. Returns 1 when an entry is produced,
+ * Uses the underlying B-tree iteration. Returns 1 when an entry is produced,
  * 0 on end of directory, and -1 on invalid arguments.
  *
  * @param disk   Open filesystem image.
@@ -677,7 +676,7 @@ int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @brief Remove an empty directory at @p path.
  *
  * Verifies the target is a directory, checks parent modify permission and
- * sticky‑bit semantics, then removes the directory if it is empty.
+ * sticky-bit semantics, then removes the directory if it is empty.
  *
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock.
@@ -767,7 +766,7 @@ int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer,
 /**
  * @brief Restore a deleted file by recovery ID.
  *
- * Loads the snapshot from the Recovery B‑tree, chooses the destination
+ * Loads the snapshot from the Recovery B-tree, chooses the destination
  * directory (explicit, original parent, or CWD), recreates the inode and
  * directory entry, and removes the snapshot. Restricted to root by default.
  *
