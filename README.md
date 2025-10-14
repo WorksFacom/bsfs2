@@ -1,6 +1,6 @@
 # BSFS
 
-BSFS (Basic Solution File System) is an educational, userspace file system that stores its data inside a regular file or directly on a block device. The project ships a formatter (`mkfs.bsfs`) that initializes the on-disk layout and an interactive browser that exposes a shell-like interface for exercising core file, directory, recovery, and permission operations.
+BSFS (Basic Solution File System) is an educational, userspace file system that stores its data inside a regular file or directly on a block device. The project ships a formatter (`mkfs.bsfs`) that initializes the on-disk layout and an interactive browser that exposes a shell-like interface for exercising core file, directory, recovery, and permission operations. Its standout capability is a built-in recovery subsystem that retains deleted files and lets you restore them selectively.
 
 ## Requirements
 
@@ -44,7 +44,12 @@ Launch the interactive browser, pointing it at the formatted image or device:
 ./bin/browser bsfs.img
 ```
 
-While inside the browser you can use the commands listed below (this matches the built-in `help` output):
+To inspect a formatted partition directly, pass the device path instead of a file:
+```sh
+sudo ./bin/browser /dev/sdaX
+```
+
+While inside the browser you can use the commands listed below (this matches the built-in `help` output). The recovery flow (`rm`, `recovery`, `restore`, `purge`) showcases the filesystem's flagship feature: deleted entries are staged into a recovery B-tree and can be restored by name or ID.
 ```text
 BSFS Browser Commands:
 ======================
@@ -99,13 +104,11 @@ echo "hello BSFS" > a.txt
 ls
 cat a.txt
 rm a.txt
-cd /
-rmdir demo
+recovery
+restore a.txt
 ls
 exit
 CMDS
 ```
-
-## Documentation
 
 To generate API documentation with Doxygen, run `doxygen Doxyfile` from the project root. The HTML output is written to `docs/html` and LaTeX sources to `docs/latex`.
