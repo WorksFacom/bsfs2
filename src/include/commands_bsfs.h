@@ -217,13 +217,13 @@ int dd(FILE *disk, superblock_t *sb, char **args);
  * high-level API and filled with a predictable byte pattern.
  *
  * Usage:
- *   fill <count> <size> [prefix] [bs=<block>] [pattern=index|zero|random]
+ *   fill &lt;count&gt; &lt;size&gt; [prefix] [bs=&lt;block&gt;] [pattern=index|zero|random]
  *
  * Parameters:
  *   - count   : number of files to create (positive integer)
  *   - size    : file size (supports K/M/G suffixes)
  *   - prefix  : optional basename/path (default: "fill") used to build
- *               <prefix>_<NNN>.bin
+ *               &lt;prefix&gt;_<NNN>.bin
  *   - bs=     : optional block size for writes (default 64 KiB, supports
  *               suffixes)
  *   - pattern : optional fill pattern: "index" (default, byte = file id),

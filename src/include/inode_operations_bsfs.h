@@ -72,10 +72,12 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
  * without reusing deleted ones.
  *
  * @param disk Pointer to the disk file.
+ * @param sb Pointer to the loaded superblock (used to persist root changes).
  * @param inode_tree Pointer to the B-tree handle for inodes.
  * @return The next available (unused) inode number.
  */
-uint32_t get_next_inode_number(FILE *disk, btree_handle_t *inode_tree);
+uint32_t get_next_inode_number(FILE *disk, superblock_t *sb,
+                               btree_handle_t *inode_tree);
 
 /**
  * @brief Checks if an inode with the given number exists in the inode B-tree.

@@ -27,13 +27,15 @@ int cat(FILE *disk, superblock_t *sb, char **args) {
     return 1;
   }
 
-  char buffer[1024];
+  unsigned char buffer[4096];
   size_t bytes_read;
 
-  while ((bytes_read = read_bsfs(disk, sb, &file, buffer, sizeof(buffer) - 1)) >
+  while ((bytes_read = read_bsfs(disk, sb, &file, buffer, sizeof(buffer))) >
          0) {
-    buffer[bytes_read] = '\0'; // Null-terminate for printing
-    printf("%s", buffer);
+    if (fwrite(buffer, 1, bytes_read, stdout) != bytes_read) {
+      printf("\ncat: write error to stdout\n");
+      break;
+    }
   }
 
   close_bsfs(&file);

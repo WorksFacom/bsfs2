@@ -92,6 +92,20 @@ size_t write_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
                   uint32_t length);
 
 /**
+ * @brief Truncate an open file to @p new_size bytes.
+ *
+ * Frees any blocks beyond @p new_size and updates the inode metadata.
+ *
+ * @param disk     Open filesystem image.
+ * @param sb       Loaded superblock.
+ * @param file     Open file descriptor (updated in place).
+ * @param new_size Target logical size in bytes.
+ * @return 0 on success; -1 on error.
+ */
+int truncate_file_bsfs(FILE *disk, superblock_t *sb, file_t *file,
+                       uint32_t new_size);
+
+/**
  * @brief Overwrite an entire file with the provided buffer.
  *
  * Opens @p path, seeks to 0, truncates to zero, and writes @p length bytes
@@ -134,6 +148,21 @@ int create_file_bsfs(FILE *disk, superblock_t *sb, const char *path);
  * @return 0 on success; -1 on error.
  */
 int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path);
+
+/**
+ * @brief Remove a file and immediately purge its Recovery snapshot.
+ *
+ * Performs the logical removal (same as @ref remove_file_bsfs) and then
+ * reclaims the file's data blocks by purging any Recovery entries that match
+ * the deleted file's basename and parent directory.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target file path.
+ * @return 0 on success; -1 on error.
+ */
+int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb,
+                                 const char *path);
 
 /**
  * @brief Move or rename an entry from @p old_path to @p new_path.

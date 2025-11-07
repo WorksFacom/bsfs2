@@ -23,6 +23,8 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef PATH_MAX
@@ -264,6 +266,43 @@ size_t write_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
 }
 
 /**
+ * @brief Truncate an open file to @p new_size bytes.
+ *
+ * Frees any blocks beyond @p new_size and updates the inode metadata.
+ *
+ * @param disk     Open filesystem image.
+ * @param sb       Loaded superblock.
+ * @param file     Open file descriptor (updated in place).
+ * @param new_size Target logical size in bytes.
+ * @return 0 on success; -1 on error.
+ */
+int truncate_file_bsfs(FILE *disk, superblock_t *sb, file_t *file,
+                       uint32_t new_size) {
+  if (!disk || !sb || !file)
+    return -1;
+  if (!bsfs_can_write_file(&file->inode, s_uid, s_gid)) {
+    errno = EACCES;
+    return -1;
+  }
+  btree_handle_t *bspan_h = btree_create_bspan_handle();
+  if (!bspan_h)
+    return -1;
+  bspan_h->root_block = file->inode.btree_root;
+  int rc = truncate_file(disk, sb, bspan_h, file, new_size);
+  file->inode.btree_root = bspan_h->root_block;
+  free(bspan_h);
+  if (rc != 0)
+    return -1;
+  btree_handle_t *inode_h = btree_create_inode_handle();
+  if (!inode_h)
+    return -1;
+  inode_h->root_block = sb->inode_root;
+  (void)update_inode(disk, inode_h, &file->inode);
+  free(inode_h);
+  return 0;
+}
+
+/**
  * @brief Overwrite an entire file with the provided buffer.
  *
  * Opens @p path, seeks to 0, truncates to zero, and writes @p length bytes
@@ -408,11 +447,15 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
             "recovery snapshot.\n",
             ent.inode_number, leaf);
     free(dir_h);
-    free(inode_h2);
     if (remove_dir_entry(disk, sb, &cwd_snapshot, leaf) != 0) {
       fprintf(stderr, "[FALLBACK] remove_dir_entry failed for %s\n", leaf);
+      free(inode_h2);
       return rc;
     }
+    /* Attempt to remove the inode directly to avoid dangling metadata. */
+    inode_h2->root_block = sb->inode_root;
+    (void)remove_inode(disk, sb, inode_h2, ent.inode_number);
+    free(inode_h2);
     return 0;
   }
 
@@ -460,6 +503,134 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   free(dir_h);
   free(inode_h2);
   return 0;
+}
+
+/**
+ * @brief Remove a file and immediately purge its Recovery snapshot.
+ *
+ * Performs the logical removal (same as @ref remove_file_bsfs) and then
+ * reclaims the file's data blocks by purging any Recovery entries that match
+ * the deleted file's basename and parent directory.
+ *
+ * @param disk Open filesystem image.
+ * @param sb   Loaded superblock.
+ * @param path Target file path.
+ * @return 0 on success; -1 on error.
+ */
+int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb,
+                                 const char *path) {
+  if (!disk || !sb || !path)
+    return -1;
+
+  ensure_cwd(disk, sb);
+  refresh_cwd_inode(disk, sb);
+
+  dir_t parent;
+  char basename[MAX_FILENAME] = {0};
+  if (resolve_parent_dir(disk, sb, path, &s_cwd, &parent, basename,
+                         sizeof(basename)) != 0)
+    return -1;
+  uint32_t parent_ino = parent.inode.inode_number;
+
+  inode_t target;
+  if (lookup_file(disk, sb, path, &s_cwd, &target) != 0)
+    return -1;
+  if (target.file_type != FILE_TYPE_FILE)
+    return -1;
+
+  if (remove_dir_entry(disk, sb, &parent, basename) != 0)
+    return -1;
+
+  int status = 0;
+  btree_handle_t *inode_h = btree_create_inode_handle();
+  if (inode_h) {
+    inode_h->root_block = sb->inode_root;
+    if (!remove_inode(disk, sb, inode_h, target.inode_number)) {
+      fprintf(stderr,
+              "WARNING: remove_inode failed for ino=%u (%s); inode queued for "
+              "GC.\n",
+              target.inode_number, basename);
+    }
+    free(inode_h);
+  } else {
+    status = -1;
+  }
+
+  for (int i = 0; i < 16; i++) {
+    if (target.direct_blocks[i].length == 0)
+      continue;
+    if (deallocate_bspan(disk, sb, &target.direct_blocks[i]) != 0) {
+      fprintf(stderr,
+              "WARNING: failed to release direct span %d for '%s' (disk=%u "
+              "len=%u)\n",
+              i, basename, target.direct_blocks[i].disk_blk,
+              target.direct_blocks[i].length);
+      status = -1;
+    }
+  }
+
+  if (target.btree_root != 0) {
+    btree_handle_t *span_h = btree_create_bspan_handle();
+    if (!span_h) {
+      status = -1;
+    } else {
+      span_h->root_block = target.btree_root;
+      if (btree_deallocate_all(disk, sb, span_h, span_h->root_block) != 0) {
+        fprintf(stderr,
+                "WARNING: failed to release span tree for '%s' (root=%u)\n",
+                basename, target.btree_root);
+        status = -1;
+      }
+      free(span_h);
+    }
+  }
+
+  uint32_t now = (uint32_t)time(NULL);
+  parent.inode.modified_at = now;
+  parent.inode.accessed_at = now;
+  btree_handle_t *parent_h = btree_create_inode_handle();
+  if (parent_h) {
+    parent_h->root_block = sb->inode_root;
+    (void)update_inode(disk, parent_h, &parent.inode);
+    free(parent_h);
+  } else {
+    status = -1;
+  }
+
+  btree_handle_t rec_h;
+  if (rec_tree_init(disk, sb, &rec_h)) {
+    size_t total = 0;
+    if (rec_tree_find_by_name(disk, &rec_h, basename, NULL, 0, &total) &&
+        total > 0) {
+      rec_entry_t *entries = (rec_entry_t *)malloc(total * sizeof(rec_entry_t));
+      if (!entries) {
+        status = -1;
+      } else {
+        size_t collected = 0;
+        if (rec_tree_find_by_name(disk, &rec_h, basename, entries, total,
+                                  &collected)) {
+          btree_handle_t *data_h = btree_create_bspan_handle();
+          if (!data_h) {
+            status = -1;
+          } else {
+            for (size_t i = 0; i < collected; i++) {
+              if (entries[i].original_parent_ino != parent_ino)
+                continue;
+              data_h->root_block = entries[i].btree_root;
+              if (purge_file(disk, sb, data_h, &rec_h, &entries[i]) != 0) {
+                status = -1;
+                break;
+              }
+            }
+            free(data_h);
+          }
+        }
+        free(entries);
+      }
+    }
+  }
+
+  return status;
 }
 
 /**

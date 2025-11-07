@@ -19,6 +19,7 @@
 #include <limits.h>
 
 #ifndef PATH_MAX
+/** Fallback path-length limit for the browser when the host doesn't define one. */
 #define PATH_MAX 4096
 #endif
 

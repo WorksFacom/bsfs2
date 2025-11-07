@@ -18,6 +18,74 @@
 #include "../../include/inode_operations_bsfs.h"
 #include "../../include/superblock_operations_bsfs.h"
 
+#include <stdio.h>
+
+static uint32_t s_next_inode_number = 1;
+static uint32_t s_cached_inode_root = INVALID_BLOCK;
+
+static int inode_tree_find_max(FILE *disk, btree_handle_t *handle,
+                               uint32_t node_block, inode_t *out_inode) {
+  if (!handle || node_block == 0 || !out_inode)
+    return 0;
+
+  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  if (!node)
+    return 0;
+
+  int ok = 0;
+  if (node->is_leaf) {
+    if (node->num_entries > 0) {
+      memcpy(out_inode,
+             (uint8_t *)node->entries +
+                 (node->num_entries - 1) * handle->entry_size,
+             handle->entry_size);
+      ok = 1;
+    }
+  } else {
+    uint32_t child_index = node->num_entries;
+    if (child_index >= (uint32_t)(2 * handle->min_degree)) {
+      child_index = (node->num_entries > 0) ? node->num_entries - 1 : 0;
+    }
+    uint32_t child_block = node->children[child_index];
+    if (child_block != 0 && child_block != INVALID_BLOCK)
+      ok = inode_tree_find_max(disk, handle, child_block, out_inode);
+    if (!ok && node->num_entries > 0) {
+      memcpy(out_inode,
+             (uint8_t *)node->entries +
+                 (node->num_entries - 1) * handle->entry_size,
+             handle->entry_size);
+      ok = 1;
+    }
+  }
+
+  btree_free_node(node);
+  return ok;
+}
+
+static void inode_sync_next(FILE *disk, superblock_t *sb,
+                            btree_handle_t *inode_tree) {
+  uint32_t root_block = inode_tree ? inode_tree->root_block : 0;
+  if (sb)
+    root_block = sb->inode_root;
+
+  if (root_block == s_cached_inode_root)
+    return;
+
+  if (root_block == 0 || !inode_tree) {
+    s_next_inode_number = 1;
+    s_cached_inode_root = root_block;
+    return;
+  }
+
+  inode_t max_inode;
+  if (inode_tree_find_max(disk, inode_tree, root_block, &max_inode)) {
+    s_next_inode_number = max_inode.inode_number + 1;
+  } else {
+    s_next_inode_number = 1;
+  }
+  s_cached_inode_root = root_block;
+}
+
 /**
  * @brief Reads an inode from the inode B-tree.
  *
@@ -58,6 +126,11 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
     sb->inode_root = handle->root_block;
     (void)write_superblock(disk, sb);
   }
+  if (rc == 0) {
+    if (inode->inode_number >= s_next_inode_number)
+      s_next_inode_number = inode->inode_number + 1;
+    s_cached_inode_root = handle->root_block;
+  }
   return rc;
 }
 
@@ -93,10 +166,28 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
   if (!handle || handle->type != BTREE_TYPE_INODE)
     return -1;
   int removed = btree_remove(disk, sb, handle, inode_number);
+  if (!removed && handle) {
+    inode_t tmp;
+    int present =
+        btree_search(disk, handle, handle->root_block, inode_number, &tmp);
+    if (present) {
+      if (btree_remove_entry(disk, sb, handle, &tmp)) {
+        removed = 1;
+      }
+    }
+    if (!removed) {
+      fprintf(stderr,
+              "remove_inode: failed to purge ino=%u (root=%u sb_root=%u present=%d)\n",
+              inode_number, handle->root_block, sb ? sb->inode_root : 0,
+              present);
+    }
+  }
   if (removed && sb->inode_root != handle->root_block) {
     sb->inode_root = handle->root_block;
     (void)write_superblock(disk, sb);
   }
+  if (removed)
+    inode_sync_next(disk, sb, handle);
   return removed;
 }
 
@@ -108,31 +199,21 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle,
  * without reusing deleted ones.
  *
  * @param disk Pointer to the disk file.
+ * @param sb Pointer to the loaded superblock (used to sync metadata changes).
  * @param inode_tree Pointer to the B-tree handle for inodes.
  * @return The next available (unused) inode number.
  */
-uint32_t get_next_inode_number(FILE *disk, btree_handle_t *inode_tree) {
-  if (!inode_tree || inode_tree->root_block == 0)
-    return 1;
+uint32_t get_next_inode_number(FILE *disk, superblock_t *sb,
+                               btree_handle_t *inode_tree) {
+  if (!sb)
+    return s_next_inode_number++;
 
-  uint32_t max_inode = 0;
-  btree_node_t *node =
-      btree_read_node(disk, inode_tree, inode_tree->root_block);
+  inode_sync_next(disk, sb, inode_tree);
 
-  while (!node->is_leaf) {
-    uint32_t last_child = node->children[node->num_entries];
-    btree_free_node(node);
-    node = btree_read_node(disk, inode_tree, last_child);
-  }
+  if (s_next_inode_number == 0)
+    s_next_inode_number = 1;
 
-  if (node->num_entries > 0) {
-    inode_t *entries = (inode_t *)node->entries;
-    inode_t *last_inode = &entries[node->num_entries - 1];
-    max_inode = last_inode->inode_number;
-  }
-
-  btree_free_node(node);
-  return max_inode + 1;
+  return s_next_inode_number++;
 }
 
 /**

@@ -379,6 +379,9 @@ int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
   init_bspan_queue(&queue);
   if (new_blocks > 0) {
     if (allocate_bspan_queue(disk, sb, &queue, new_blocks, hint_offset) != 0) {
+      fprintf(stderr,
+              "write_file: allocation failed (ino=%u, new_blocks=%u, size=%u)\n",
+              f->inode.inode_number, new_blocks, size);
       return -1;
     }
   }
@@ -398,14 +401,21 @@ int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
     if (!bspan_search_le(disk, bspan_tree, logical_block, &bspan) ||
         !(logical_block >= bspan.file_blk &&
           logical_block < bspan.file_blk + bspan.length)) {
-      if (is_bspan_queue_empty(&queue))
+      if (is_bspan_queue_empty(&queue)) {
+        fprintf(stderr,
+                "write_file: span queue empty (ino=%u, logical=%u, size=%u)\n",
+                f->inode.inode_number, logical_block, size);
         break;
+      }
 
       bspan = dequeue_bspan(&queue);
       bspan.file_blk = logical_block;
       if (btree_insert(disk, sb, bspan_tree, &bspan) != 0) {
-        fprintf(stderr, "Failed to insert bspan at file_blk=%u\n",
-                logical_block);
+        fprintf(stderr,
+                "write_file: btree_insert failed (ino=%u, logical=%u, disk=%u, "
+                "len=%u)\n",
+                f->inode.inode_number, logical_block, bspan.disk_blk,
+                bspan.length);
         break;
       }
       if (f->inode.btree_root == 0 && bspan_tree->root_block != 0)
@@ -430,6 +440,17 @@ int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
   // Update file size
   if (pos > f->inode.file_size)
     f->inode.file_size = pos;
+
+  if (bspan_tree->root_block != 0)
+    f->inode.btree_root = bspan_tree->root_block;
+
+  if (f->inode.file_size == 0) {
+    f->inode.block_count = 0;
+  } else {
+    uint32_t used_blocks =
+        (f->inode.file_size + block_size - 1) / block_size;
+    f->inode.block_count = used_blocks;
+  }
 
   f->pos = pos;
 

@@ -1098,7 +1098,19 @@ static void btree_remove_internal(FILE *disk, superblock_t *sb,
 
 /** Entry-based remove (uses comparator for exact-match ordering) */
 /* Removed entry-based remove (unstable); keeping key-based API only. */
-/** Find the maximum entry (rightmost) in a subtree. */
+/**
+ * @brief Retrieve the rightmost (maximum) entry in a subtree.
+ *
+ * Descends to the right-most child of @p node_block and copies the final
+ * entry into @p out_entry. This utility is used by the delete algorithm when
+ * replacing a key with its predecessor during merges/borrows.
+ *
+ * @param disk       Open disk file backing the tree.
+ * @param handle     B-tree handle describing node layout.
+ * @param node_block Subtree root to inspect.
+ * @param out_entry  Destination buffer for the maximum entry.
+ * @return 1 if a value was copied; 0 if the subtree is empty or unreadable.
+ */
 static int btree_find_max_entry(FILE *disk, btree_handle_t *handle,
                                 uint32_t node_block, void *out_entry) {
   if (node_block == 0)
@@ -1125,7 +1137,22 @@ static int btree_find_max_entry(FILE *disk, btree_handle_t *handle,
   return ok;
 }
 
-/** Entry-based remove (comparator-driven). */
+/**
+ * @brief Comparator-driven removal helper.
+ *
+ * Recursively locates and deletes @p needle from the subtree rooted at
+ * @p node_block, using the handle's comparator instead of key lookups. The
+ * routine mirrors the standard B-tree delete algorithm: for leaf nodes it
+ * shifts entries in-place; for internal nodes it borrows predecessors or
+ * successors, and performs merges/borrows to preserve the minimum degree.
+ *
+ * @param disk       Open disk file backing the tree.
+ * @param sb         Loaded superblock (needed for block deallocation).
+ * @param handle     B-tree handle that owns comparator/key hooks.
+ * @param node_block Current node to inspect.
+ * @param needle     Entry that must match via `handle->cmp`.
+ * @param success    Output flag set to 1 when the entry is removed.
+ */
 static void btree_remove_entry_internal(FILE *disk, superblock_t *sb,
                                         btree_handle_t *handle,
                                         uint32_t node_block, const void *needle,
@@ -1625,6 +1652,16 @@ int btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle,
   if (handle->type == BTREE_TYPE_BSPAN) {
     for (uint32_t i = 0; i < node->num_entries; i++) {
       bspan_t *entry = (bspan_t *)(node->entries + i * handle->entry_size);
+      if (entry->length == 0)
+        continue;
+      if (entry->disk_blk >= sb->total_blocks ||
+          entry->disk_blk + entry->length > sb->total_blocks) {
+        fprintf(stderr,
+                "btree_deallocate_all: skipping invalid span "
+                "(disk=%u len=%u total=%u)\n",
+                entry->disk_blk, entry->length, sb->total_blocks);
+        continue;
+      }
       if (deallocate_bspan(disk, sb, entry) != 0) {
         btree_free_node(node);
         return -1;

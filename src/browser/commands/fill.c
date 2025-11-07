@@ -7,13 +7,13 @@
  * high-level API and filled with a predictable byte pattern.
  *
  * Usage:
- *   fill <count> <size> [prefix] [bs=<block>] [pattern=index|zero|random]
+ *   fill &lt;count&gt; &lt;size&gt; [prefix] [bs=&lt;block&gt;] [pattern=index|zero|random]
  *
  * Parameters:
  *   - count   : number of files to create (positive integer)
  *   - size    : file size (supports K/M/G suffixes)
  *   - prefix  : optional basename/path (default: "fill") used to build
- *               <prefix>_<NNN>.bin
+ *               &lt;prefix&gt;_<NNN>.bin
  *   - bs=     : optional block size for writes (default 64 KiB, supports
  *               suffixes)
  *   - pattern : optional fill pattern: "index" (default, byte = file id),
@@ -34,6 +34,8 @@
 /// Current browser prompt path (defined in browser_bsfs.c)
 extern char current_path[];
 
+/** Default block size used when bs= is omitted (64 KiB). */
+/** Default block size used when bs= is omitted (64 KiB). */
 #define FILL_DEFAULT_BLOCK (64 * 1024)
 
 /**
@@ -137,13 +139,13 @@ static int resolve_path(const char *input, char *absolute, size_t cap) {
  * high-level API and filled with a predictable byte pattern.
  *
  * Usage:
- *   fill <count> <size> [prefix] [bs=<block>] [pattern=index|zero|random]
+ *   fill &lt;count&gt; &lt;size&gt; [prefix] [bs=&lt;block&gt;] [pattern=index|zero|random]
  *
  * Parameters:
  *   - count   : number of files to create (positive integer)
  *   - size    : file size (supports K/M/G suffixes)
  *   - prefix  : optional basename/path (default: "fill") used to build
- *               <prefix>_<NNN>.bin
+ *               &lt;prefix&gt;_<NNN>.bin
  *   - bs=     : optional block size for writes (default 64 KiB, supports
  *               suffixes)
  *   - pattern : optional fill pattern: "index" (default, byte = file id),
@@ -256,21 +258,34 @@ int fill_cmd(FILE *disk, superblock_t *sb, char **args) {
       break;
     }
 
+    file_t file;
+    int file_opened = 0;
+    int reused_existing = 0;
     inode_t existing;
     if (stat_bsfs(disk, sb, absolute_path, &existing) == 0) {
-      (void)remove_file_bsfs(disk, sb, absolute_path);
-    }
-
-    if (create_file_bsfs(disk, sb, absolute_path) != 0) {
-      printf("fill: cannot create '%s'\n", absolute_path);
-      break;
-    }
-
-    file_t file;
-    if (open_bsfs(disk, sb, absolute_path, &file) != 0) {
-      printf("fill: cannot open '%s'\n", absolute_path);
-      (void)remove_file_bsfs(disk, sb, absolute_path);
-      break;
+      if (open_bsfs(disk, sb, absolute_path, &file) != 0) {
+        printf("fill: cannot open '%s'\n", absolute_path);
+        break;
+      }
+      file_opened = 1;
+      reused_existing = 1;
+      if (truncate_file_bsfs(disk, sb, &file, 0) != 0) {
+        printf("fill: cannot truncate '%s'\n", absolute_path);
+        close_bsfs(&file);
+        break;
+      }
+      file.pos = 0;
+    } else {
+      if (create_file_bsfs(disk, sb, absolute_path) != 0) {
+        printf("fill: cannot create '%s'\n", absolute_path);
+        break;
+      }
+      if (open_bsfs(disk, sb, absolute_path, &file) != 0) {
+        printf("fill: cannot open '%s'\n", absolute_path);
+        (void)delete_file_permanently_bsfs(disk, sb, absolute_path);
+        break;
+      }
+      file_opened = 1;
     }
 
     size_t remaining = size_bytes;
@@ -298,14 +313,19 @@ int fill_cmd(FILE *disk, superblock_t *sb, char **args) {
       size_t written = write_bsfs(disk, sb, &file, buffer, (uint32_t)chunk);
       if (written != chunk) {
         printf("fill: write error on '%s'\n", absolute_path);
-        (void)remove_file_bsfs(disk, sb, absolute_path);
+        if (reused_existing) {
+          (void)truncate_file_bsfs(disk, sb, &file, 0);
+        } else {
+          (void)delete_file_permanently_bsfs(disk, sb, absolute_path);
+        }
         remaining = 0;
         break;
       }
       remaining -= written;
     }
 
-    close_bsfs(&file);
+    if (file_opened)
+      close_bsfs(&file);
 
     if (remaining == 0) {
       created++;

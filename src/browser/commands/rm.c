@@ -17,6 +17,7 @@
 #include <time.h>
 
 #ifndef PATH_MAX
+/** Maximum path length handled by rm (fallback when system PATH_MAX is absent). */
 #define PATH_MAX 4096
 #endif
 

@@ -7,7 +7,7 @@
  *
  * Usage: dd if=&lt;input&gt; of=&lt;output&gt; bs=&lt;block_size&gt;
  * count=&lt;blocks&gt;
- *  - if: input source (e.g., /dev/zero, /dev/random)
+ *  - if: input source ("zero", "random" or host file path)
  *  - of: output path (destination file)
  *  - bs: block size (supports K/M/G suffixes)
  *  - count: number of blocks to write
@@ -16,8 +16,10 @@
 #include "../../include/api_bsfs.h"
 #include "../../include/commands_bsfs.h"
 
-#define DEFAULT_BLOCK_SIZE 512      /**< Default block size in bytes. */
-#define MAX_BUFFER_SIZE (64 * 1024) /**< Maximum allowed buffer size. */
+#include <time.h>
+
+#define DEFAULT_BLOCK_SIZE 512            /**< Default block size in bytes. */
+#define MAX_BUFFER_SIZE (4 * 1024 * 1024) /**< Maximum allowed buffer size. */
 
 /// Current working directory text (provided by the browser prompt)
 extern char current_path[];
@@ -126,11 +128,22 @@ static int simple_resolve_path(const char *path, char *absolute_path) {
  * @param size Size to fill
  * @return Number of bytes filled, or -1 on error
  */
-static ssize_t fill_buffer(const char *input_file, void *buffer, size_t size) {
-  if (strcmp(input_file, "/dev/zero") == 0) {
+static int is_zero_source(const char *src) {
+  return src && (strcmp(src, "zero") == 0 || strcmp(src, "/dev/zero") == 0);
+}
+
+static int is_random_source(const char *src) {
+  return src && (strcmp(src, "random") == 0 || strcmp(src, "/dev/random") == 0);
+}
+
+static double monotonic_seconds(void);
+
+static ssize_t fill_buffer(const char *input_file, void *buffer, size_t size,
+                           FILE **stream) {
+  if (is_zero_source(input_file)) {
     memset(buffer, 0, size);
     return size;
-  } else if (strcmp(input_file, "/dev/random") == 0) {
+  } else if (is_random_source(input_file)) {
     static int seeded = 0;
     if (!seeded) {
       srand((unsigned int)time(NULL));
@@ -143,8 +156,22 @@ static ssize_t fill_buffer(const char *input_file, void *buffer, size_t size) {
     }
     return size;
   } else {
-    printf("dd: reading from files not yet implemented\n");
-    return -1;
+    if (!*stream) {
+      *stream = fopen(input_file, "rb");
+      if (!*stream) {
+        printf("dd: cannot open input file '%s'\n", input_file);
+        return -1;
+      }
+    }
+    size_t n = fread(buffer, 1, size, *stream);
+    if (n == 0) {
+      if (ferror(*stream)) {
+        printf("dd: error reading from input file '%s'\n", input_file);
+        return -1;
+      }
+      return 0; // EOF
+    }
+    return (ssize_t)n;
   }
 }
 
@@ -164,22 +191,22 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
   if (parse_dd_args(args, &input_file, &output_file, &block_size, &count) !=
       0) {
     printf("Usage: dd if=<input> of=<output> bs=<block_size> count=<blocks>\n");
-    printf("       input can be /dev/zero or /dev/random\n");
+    printf("       input can be 'zero', 'random' or a host file path\n");
     printf("       block_size can have K, M, G suffixes\n");
-    printf("Example: dd if=/dev/zero of=testfile bs=1M count=10\n");
-    return -1;
+    printf("Example: dd if=zero of=testfile bs=1M count=10\n");
+    return 1;
   }
 
   char absolute_path[1024];
   if (simple_resolve_path(output_file, absolute_path) != 0) {
     printf("dd: invalid output path '%s'\n", output_file);
-    return -1;
+    return 1;
   }
 
   inode_t inode;
   if (stat_bsfs(disk, sb, absolute_path, &inode) == 0) {
     printf("dd: file '%s' already exists\n", output_file);
-    return -1;
+    return 1;
   }
 
   if (create_file_bsfs(disk, sb, absolute_path) != 0) {
@@ -187,7 +214,7 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
       printf("Permission denied\n");
     else
       printf("dd: cannot create file '%s'\n", output_file);
-    return -1;
+    return 1;
   }
 
   file_t file;
@@ -197,7 +224,7 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
     else
       printf("dd: cannot open file '%s'\n", output_file);
     remove_file_bsfs(disk, sb, absolute_path);
-    return -1;
+    return 1;
   }
 
   void *buffer = malloc(block_size);
@@ -205,7 +232,7 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
     printf("dd: cannot allocate buffer of size %zu\n", block_size);
     close_bsfs(&file);
     remove_file_bsfs(disk, sb, absolute_path);
-    return -1;
+    return 1;
   }
 
   size_t total_bytes = 0;
@@ -213,10 +240,20 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
 
   printf("dd: copying %zu blocks of %zu bytes each...\n", count, block_size);
 
+  double start = monotonic_seconds();
+
+  FILE *src_stream = NULL;
+
   for (size_t i = 0; i < count; i++) {
-    ssize_t bytes_read = fill_buffer(input_file, buffer, block_size);
-    if (bytes_read <= 0) {
+    ssize_t bytes_read =
+        fill_buffer(input_file, buffer, block_size, &src_stream);
+
+    if (bytes_read < 0) {
       printf("dd: error reading from input source\n");
+      break;
+    }
+    if (bytes_read == 0) {
+      printf("dd: reached end of input data\n");
       break;
     }
 
@@ -246,14 +283,34 @@ int dd(FILE *disk, superblock_t *sb, char **args) {
 
   free(buffer);
   close_bsfs(&file);
+  if (src_stream)
+    fclose(src_stream);
+
+  double elapsed = monotonic_seconds() - start;
+  if (elapsed < 0)
+    elapsed = 0;
 
   printf("dd: %zu blocks (%zu bytes) copied\n", blocks_written, total_bytes);
+  if (elapsed > 0) {
+    double mib_per_s = (double)total_bytes / (1024.0 * 1024.0) / elapsed;
+    printf("dd: completed in %.3f ms (%.2f MiB/s)\n", elapsed * 1000.0,
+           mib_per_s);
+  }
 
   if (blocks_written < count) {
     printf("dd: warning - only %zu of %zu blocks were written\n",
            blocks_written, count);
-    return -1;
+    return 1;
   }
 
-  return 0;
+  return 1;
+}
+static double monotonic_seconds(void) {
+#ifdef CLOCK_MONOTONIC
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+#else
+  return (double)clock() / CLOCKS_PER_SEC;
+#endif
 }

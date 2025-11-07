@@ -77,7 +77,7 @@ int create_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
   inode_t ino;
   memset(&ino, 0, sizeof(ino));
 
-  uint32_t new_ino = get_next_inode_number(disk, inode_tree);
+  uint32_t new_ino = get_next_inode_number(disk, sb, inode_tree);
   if (new_ino == 0)
     return -1;
 

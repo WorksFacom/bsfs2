@@ -137,17 +137,18 @@ static int make_unique_name(FILE *disk, superblock_t *sb, dir_t *dest_dir,
  * @param out_inode   Output: constructed inode.
  * @return 0 on success; -1 on failure.
  */
-static int build_inode_from_snapshot(FILE *disk, btree_handle_t *inode_tree,
+static int build_inode_from_snapshot(FILE *disk, superblock_t *sb,
+                                     btree_handle_t *inode_tree,
                                      const rec_entry_t *rec,
                                      inode_t *out_inode) {
-  if (!disk || !inode_tree || !rec || !out_inode)
+  if (!disk || !sb || !inode_tree || !rec || !out_inode)
     return -1;
 
   memset(out_inode, 0, sizeof(*out_inode));
 
   uint32_t chosen_ino = rec->inode_number;
   if (!chosen_ino || inode_exists(disk, inode_tree, chosen_ino)) {
-    chosen_ino = get_next_inode_number(disk, inode_tree);
+    chosen_ino = get_next_inode_number(disk, sb, inode_tree);
     if (!chosen_ino)
       return -1;
   }
@@ -232,7 +233,7 @@ int restore_file_by_id(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
 
   // 4) Build inode from snapshot (choose inode number if needed)
   inode_t inode;
-  if (build_inode_from_snapshot(disk, inode_tree, &rec, &inode) != 0)
+  if (build_inode_from_snapshot(disk, sb, inode_tree, &rec, &inode) != 0)
     return -1;
 
   // 5) Insert inode into inode tree (persist root if created)

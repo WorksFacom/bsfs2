@@ -9,6 +9,8 @@
  */
 #include "../../include/api_bsfs.h"
 
+#include <stdio.h>
+
 static const uint64_t SECS_30D = 30ULL * 24ULL * 60ULL * 60ULL;
 
 /**
@@ -139,11 +141,21 @@ static int purge_oldest_n(FILE *disk, superblock_t *sb, size_t n) {
   for (size_t i = 0; i < count && purged < n; i++) {
     // Confirm still present (may have been removed concurrently)
     rec_entry_t tmp;
-    if (!rec_tree_search(disk, &rec_h, items[i].entry.recovery_id, &tmp))
+    if (!rec_tree_search(disk, &rec_h, items[i].entry.recovery_id, &tmp)) {
+      fprintf(stderr,
+              "purge oldest: snapshot %u vanished before purge\n",
+              items[i].entry.recovery_id);
       continue;
+    }
     bspan->root_block = items[i].entry.btree_root;
-    if (purge_file(disk, sb, bspan, &rec_h, &items[i].entry) == 0)
+    if (purge_file(disk, sb, bspan, &rec_h, &items[i].entry) == 0) {
       purged++;
+    } else {
+      fprintf(stderr,
+              "purge oldest: failed purging snapshot %u (deleted_at=%llu)\n",
+              (unsigned)items[i].entry.recovery_id,
+              (unsigned long long)items[i].entry.deleted_at);
+    }
   }
   free(bspan);
   free(items);

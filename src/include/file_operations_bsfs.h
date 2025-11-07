@@ -111,4 +111,7 @@ int read_file(FILE *disk, btree_handle_t *handle, file_t *file,
 int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
                file_t *f, const uint8_t *buffer, uint32_t size, int truncate);
 
+int truncate_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
+                  file_t *f, uint32_t new_size);
+
 #endif // FILE_OPERATIONS_BSFS_H

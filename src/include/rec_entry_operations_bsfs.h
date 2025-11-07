@@ -59,6 +59,19 @@ int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out);
  */
 int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
                  rec_entry_t *entry);
+/**
+ * @brief Fetch the next available recovery_id in the Recovery tree.
+ *
+ * Scans the tree (if needed) to keep the monotonic recovery_id counter in sync
+ * with the current root stored in @p sb. This mirrors get_next_inode_number.
+ *
+ * @param disk      Open filesystem image.
+ * @param sb        Loaded superblock (provides the recovery root and caches).
+ * @param rec_tree  Recovery B-tree handle used for traversals.
+ * @return Next unused recovery_id.
+ */
+uint32_t get_next_rec_id(FILE *disk, superblock_t *sb,
+                         btree_handle_t *rec_tree);
 
 /**
  * @brief Remove a recovery entry from the Recovery B-tree by ID.

@@ -42,7 +42,7 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
   // 3. Prepare inode handle and allocate inode number
   btree_handle_t *inode_tree = btree_create_inode_handle();
   inode_tree->root_block = sb->inode_root;
-  uint32_t new_inode_number = get_next_inode_number(disk, inode_tree);
+  uint32_t new_inode_number = get_next_inode_number(disk, sb, inode_tree);
   if (new_inode_number == INVALID_BLOCK) {
     fprintf(stderr, "Failed to allocate new inode number.\n");
     free(inode_tree);

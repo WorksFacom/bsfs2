@@ -104,6 +104,13 @@ static size_t purge_one(FILE *disk, superblock_t *sb,
                         btree_handle_t *rec_handle, const rec_entry_t *e) {
   size_t freed = 0;
 
+  if (!rec_tree_remove(disk, sb, rec_handle, e->recovery_id)) {
+    fprintf(stderr,
+            "rec_gc: failed to remove recovery id=%u; skipping purge for now.\n",
+            e->recovery_id);
+    return 0;
+  }
+
   // free direct spans
   for (int i = 0; i < 16; i++) {
     if (e->direct_blocks[i].length > 0) {
@@ -116,13 +123,14 @@ static size_t purge_one(FILE *disk, superblock_t *sb,
   if (e->btree_root != 0) {
     btree_handle_t *bspan = btree_create_bspan_handle();
     bspan->root_block = e->btree_root;
-    (void)btree_deallocate_all(disk, sb, bspan, bspan->root_block);
+    if (btree_deallocate_all(disk, sb, bspan, bspan->root_block) != 0) {
+      fprintf(stderr,
+              "rec_gc: partial purge for recovery id=%u (btree root=%u)\n",
+              e->recovery_id, e->btree_root);
+    }
     free(bspan);
     // Approximate using recorded block_count for total freed
   }
-
-  // Remove metadata entry from Recovery
-  (void)rec_tree_remove(disk, sb, rec_handle, e->recovery_id);
 
   // Trust recorded block_count as upper bound freed (covers direct + indirect)
   if (freed < e->block_count)

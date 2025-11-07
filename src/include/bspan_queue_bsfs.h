@@ -32,7 +32,7 @@ typedef struct bspan_node {
    * Pointer to the next node in the queue. If NULL, this is the last node.
    */
   struct bspan_node *next;
-} bspan_node_t;
+} bspan_node_t; /**< Node element used inside a BSpan FIFO queue. */
 
 /**
  * @struct bspan_queue_t
