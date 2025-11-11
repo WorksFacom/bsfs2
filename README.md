@@ -2,6 +2,8 @@
 
 BSFS (Basic Solution File System) is an educational, userspace file system that stores its data inside a regular file or directly on a block device. The project ships a formatter (`mkfs.bsfs`) that initializes the on-disk layout and an interactive browser that exposes a shell-like interface for exercising core file, directory, recovery, and permission operations. Its standout capability is a built-in recovery subsystem that retains deleted files and lets you restore them selectively.
 
+A more compreensive documentation about the code is online [here](https://facom.ufms.br/~brivaldo/bsfs/).
+
 ## Requirements
 
 - POSIX-compliant environment (tested on Linux)
