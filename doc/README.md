@@ -1,22 +1,21 @@
-# Documentação
+# Documentation
 
-A documentação do código-fonte está configurada para uso com Doxygen.
+The source code documentation is configured for use with Doxygen.
 
-## Gerar Documentação
+## Generate Documentation
 
-Certifique-se de ter o Doxygen instalado e execute:
+Make sure Doxygen is installed, them run:
 
 ```bash
 $ doxygen
 ```
 
-(O comando pressupõe que o arquivo de configuração se chama Doxyfile.)
+(This command assumes the configuration file is named `Doxyfile`)
 
-## Visualizar a Documentação
+## View the Documentation
 
-Após a geração, abra o seguinte arquivo no navegador:
+After generation, open the following file in your web browser:
 
 ```
 docs/html/index.html
 ```
-
