@@ -88,3 +88,5 @@ dkms.conf
 
 bin/
 docs/
+
+.ccls-cache
