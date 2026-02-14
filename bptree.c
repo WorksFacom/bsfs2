@@ -14,14 +14,12 @@
 typedef struct bpnode {
   int keys[MAX_KEYS];
   struct bpnode *children[MAX_KEYS + 1];
-  struct bpnode *next; // Link to next leaf (for B+ tree)
   int num_keys;
   int is_leaf;
 } bpnode;
 
-typedef struct {
+typedef struct bptree {
   bpnode *root;
-  bpnode *first_leaf; // Pointer to leftmost leaf
 } bptree;
 
 // Function prototypes
@@ -43,7 +41,6 @@ void print_linked_leaves(bptree *tree);
 bptree *bptree_init() {
   bptree *tree = (bptree *)malloc(sizeof(bptree));
   tree->root = create_node(true);
-  tree->first_leaf = tree->root;
   return tree;
 }
 
@@ -51,7 +48,6 @@ bpnode *create_node(int is_leaf) {
   bpnode *node = (bpnode *)malloc(sizeof(bpnode));
   node->is_leaf = is_leaf;
   node->num_keys = 0;
-  node->next = NULL;
   for (int i = 0; i <= MAX_KEYS; i++) {
     node->children[i] = NULL;
   }
@@ -93,10 +89,6 @@ bpnode *split_leaf_node(bpnode *leaf) {
   }
 
   leaf->num_keys = mid;
-
-  // Link the leaves
-  new_leaf->next = leaf->next;
-  leaf->next = new_leaf;
 
   return new_leaf;
 }
@@ -257,9 +249,6 @@ void merge_with_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent,
   }
   left_sibling->num_keys += leaf->num_keys;
 
-  // Update next pointer
-  left_sibling->next = leaf->next;
-
   // Remove key from parent
   for (int i = parent_key_idx; i < parent->num_keys - 1; i++) {
     parent->keys[i] = parent->keys[i + 1];
@@ -281,9 +270,6 @@ void merge_with_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent,
     leaf->keys[leaf->num_keys + i] = right_sibling->keys[i];
   }
   leaf->num_keys += right_sibling->num_keys;
-
-  // Update next pointer
-  leaf->next = right_sibling->next;
 
   // Remove key from parent
   for (int i = parent_key_idx; i < parent->num_keys - 1; i++) {
@@ -352,7 +338,6 @@ int borrow_from_right_internal(bpnode *node, bpnode *right_sibling,
   return true;
 }
 
-// Helper: Merge with left sibling (internal)
 void merge_with_left_internal(bpnode *node, bpnode *left_sibling,
                               bpnode *parent, int parent_key_idx) {
   // Move parent key down to left sibling
@@ -382,7 +367,6 @@ void merge_with_left_internal(bpnode *node, bpnode *left_sibling,
   free(node);
 }
 
-// Helper: Merge with right sibling (internal)
 void merge_with_right_internal(bpnode *node, bpnode *right_sibling,
                                bpnode *parent, int parent_key_idx) {
   // Move parent key down to node
@@ -448,10 +432,6 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
     // Merge with a sibling
     if (left_sibling) {
       merge_with_left_leaf(node, left_sibling, parent, child_idx);
-      // Update first_leaf if needed
-      if (tree->first_leaf == node) {
-        tree->first_leaf = left_sibling;
-      }
     } else if (right_sibling) {
       merge_with_right_leaf(node, right_sibling, parent, child_idx + 1);
     }
@@ -535,31 +515,6 @@ bpnode *bptree_search(bpnode *node, int key) {
   return bptree_search(node->children[i], key);
 }
 
-// Print all leaf values in order (showing B+ tree linked list property)
-void print_linked_leaves(bptree *tree) {
-  printf("Leaf values (linked list): ");
-  bpnode *leaf_node = tree->first_leaf;
-
-  int first = true;
-  while (leaf_node != NULL) {
-    if (!first)
-      printf(" -> ");
-    first = false;
-
-    printf("[");
-    for (int i = 0; i < leaf_node->num_keys; i++) {
-      printf("%d", leaf_node->keys[i]);
-      if (i < leaf_node->num_keys - 1)
-        printf(" ");
-    }
-    printf("]");
-
-    leaf_node = leaf_node->next;
-  }
-  printf("\n");
-}
-
-// Print the tree with ASCII art
 void print_tree(bpnode *node, int level, char *prefix, int is_last) {
   if (node == NULL)
     return;
@@ -614,7 +569,6 @@ void bptree_print_tree(bptree *tree) {
   printf("Note: Internal nodes guide search, all data stored in leaves\n");
   print_tree(tree->root, 0, "", true);
   printf("\n");
-  print_linked_leaves(tree);
   printf("\n");
 }
 
@@ -657,10 +611,7 @@ int main() {
   printf("  i <number> - Insert a number\n");
   printf("  d <number> - Delete a number\n");
   printf("  s <number> - Search for a number\n");
-  printf(
-      "  r <min> <max> - Range query (find all values between min and max)\n");
   printf("  p          - Print tree\n");
-  printf("  l          - Print leaf linked list\n");
   printf("  q          - Quit\n\n");
 
   char command[100];
@@ -673,9 +624,6 @@ int main() {
       break;
     } else if (command[0] == 'p') {
       bptree_print_tree(tree);
-    } else if (command[0] == 'l') {
-      print_linked_leaves(tree);
-      printf("\n");
     } else if (command[0] == 'i') {
       int key;
       if (sscanf(command + 2, "%d", &key) == 1) {
@@ -705,23 +653,6 @@ int main() {
         }
       } else {
         printf("Invalid number\n");
-      }
-    } else if (command[0] == 'r') {
-      int min, max;
-      if (sscanf(command + 2, "%d %d", &min, &max) == 2) {
-        printf("Range [%d, %d]: ", min, max);
-        bpnode *leaf = tree->first_leaf;
-        while (leaf != NULL) {
-          for (int i = 0; i < leaf->num_keys; i++) {
-            if (leaf->keys[i] >= min && leaf->keys[i] <= max) {
-              printf("%d ", leaf->keys[i]);
-            }
-          }
-          leaf = leaf->next;
-        }
-        printf("\n");
-      } else {
-        printf("Invalid range (use: r <min> <max>)\n");
       }
     } else {
       printf("Unknown command\n");
