@@ -12,8 +12,8 @@
 // 2t - 1 = 3
 
 typedef struct bpnode {
-  int keys[MAX_KEYS];
-  struct bpnode *children[MAX_KEYS + 1];
+  int keys[MAX_KEYS + 1];
+  struct bpnode *children[MAX_KEYS + 2];
   int num_keys;
   int is_leaf;
 } bpnode;
@@ -22,36 +22,16 @@ typedef struct bptree {
   bpnode *root;
 } bptree;
 
-// Function prototypes
-bptree *bptree_init();
-void bptree_destroy(bpnode *node);
-void bptree_insert(bptree *tree, int key);
-bpnode *bptree_search(bpnode *node, int key);
-void bptree_print_tree(bptree *tree);
-
-bpnode *create_node(int is_leaf);
-void insert_internal(bpnode *parent, int key, bpnode *child);
-int insert_in_leaf(bpnode *leaf, int key);
-bpnode *split_leaf_node(bpnode *leaf);
-bpnode *split_internal_node(bpnode *node);
-
-void print_tree(bpnode *node, int level, char *prefix, int is_last);
-void print_linked_leaves(bptree *tree);
+bpnode *create_node(int is_leaf) {
+  bpnode *node = (bpnode *)calloc(sizeof(bpnode), 1);
+  node->is_leaf = is_leaf;
+  return node;
+}
 
 bptree *bptree_init() {
   bptree *tree = (bptree *)malloc(sizeof(bptree));
   tree->root = create_node(true);
   return tree;
-}
-
-bpnode *create_node(int is_leaf) {
-  bpnode *node = (bpnode *)malloc(sizeof(bpnode));
-  node->is_leaf = is_leaf;
-  node->num_keys = 0;
-  for (int i = 0; i <= MAX_KEYS; i++) {
-    node->children[i] = NULL;
-  }
-  return node;
 }
 
 // bottom-up, needs to be converted to top-bottom
@@ -63,9 +43,8 @@ int insert_in_leaf(bpnode *leaf, int key) {
     }
   }
 
-  // Find position to insert
   int i = leaf->num_keys - 1;
-  while (i >= 0 && key < leaf->keys[i]) {
+  while (key < leaf->keys[i] && i < leaf->num_keys) {
     leaf->keys[i + 1] = leaf->keys[i];
     i--;
   }
@@ -93,32 +72,32 @@ bpnode *split_leaf_node(bpnode *leaf) {
   return new_leaf;
 }
 
-bpnode *split_internal_node(bpnode *node) {
+bpnode *split_internal_node(bpnode *node, int *split_key) {
   bpnode *new_node = create_node(false);
 
   int mid = (MAX_KEYS + 1) / 2;
 
-  // Copy second half to new node
-  new_node->num_keys = node->num_keys - mid;
-  for (int i = 0; i < new_node->num_keys; i++) {
-    new_node->keys[i] = node->keys[mid + i];
-    new_node->children[i] = node->children[mid + i];
+  new_node->num_keys = node->num_keys - mid - 1;
+  for (int i = 1; i <= new_node->num_keys; i++) {
+    new_node->keys[i - 1] = node->keys[mid + i];
+    new_node->children[i - 1] = node->children[mid + i];
   }
   new_node->children[new_node->num_keys] = node->children[node->num_keys];
 
-  node->num_keys = mid - 1;
+  node->num_keys = mid;
 
+  *split_key = node->keys[mid];
   return new_node;
 }
 
-void insert_in_parent(bptree *tree, bpnode *old_node, int key, bpnode *new_node,
-                      bpnode **path, int path_len) {
+void insert_in_parent(bptree *tree, bpnode *old_node, int key, bpnode *new_node, bpnode **path, int path_len) {
   if (path_len == 0) {
     // old_node was root, create new root
     bpnode *new_root = create_node(false);
     new_root->keys[0] = key;
     new_root->children[0] = old_node;
     new_root->children[1] = new_node;
+
     new_root->num_keys = 1;
     tree->root = new_root;
     return;
@@ -139,8 +118,8 @@ void insert_in_parent(bptree *tree, bpnode *old_node, int key, bpnode *new_node,
 
   // Check if parent needs to split
   if (parent->num_keys > MAX_KEYS) {
-    bpnode *new_parent = split_internal_node(parent);
-    int split_key = parent->keys[parent->num_keys];
+    int split_key;
+    bpnode *new_parent = split_internal_node(parent, &split_key);
     insert_in_parent(tree, parent, split_key, new_parent, path, path_len - 1);
   }
 }
@@ -199,8 +178,7 @@ int find_child_index(bpnode *parent, bpnode *child) {
   return -1;
 }
 
-int borrow_from_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent,
-                          int parent_key_idx) {
+int borrow_from_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent, int parent_key_idx) {
   if (left_sibling->num_keys <= MIN_KEYS) {
     return false;
   }
@@ -220,8 +198,7 @@ int borrow_from_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent,
   return true;
 }
 
-int borrow_from_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent,
-                           int parent_key_idx) {
+int borrow_from_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent, int parent_key_idx) {
   if (right_sibling->num_keys <= MIN_KEYS) {
     return false;
   }
@@ -241,8 +218,7 @@ int borrow_from_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent,
   return true;
 }
 
-void merge_with_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent,
-                          int parent_key_idx) {
+void merge_with_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent, int parent_key_idx) {
   // Copy all keys from leaf to left sibling
   for (int i = 0; i < leaf->num_keys; i++) {
     left_sibling->keys[left_sibling->num_keys + i] = leaf->keys[i];
@@ -263,8 +239,7 @@ void merge_with_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent,
   free(leaf);
 }
 
-void merge_with_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent,
-                           int parent_key_idx) {
+void merge_with_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent, int parent_key_idx) {
   // Copy all keys from right sibling to leaf
   for (int i = 0; i < right_sibling->num_keys; i++) {
     leaf->keys[leaf->num_keys + i] = right_sibling->keys[i];
@@ -285,8 +260,7 @@ void merge_with_right_leaf(bpnode *leaf, bpnode *right_sibling, bpnode *parent,
   free(right_sibling);
 }
 
-int borrow_from_left_internal(bpnode *node, bpnode *left_sibling,
-                              bpnode *parent, int parent_key_idx) {
+int borrow_from_left_internal(bpnode *node, bpnode *left_sibling, bpnode *parent, int parent_key_idx) {
   if (left_sibling->num_keys <= MIN_KEYS) {
     return false;
   }
@@ -305,15 +279,13 @@ int borrow_from_left_internal(bpnode *node, bpnode *left_sibling,
   node->num_keys++;
 
   // Move key from left sibling up to parent
-  parent->keys[parent_key_idx - 1] =
-      left_sibling->keys[left_sibling->num_keys - 1];
+  parent->keys[parent_key_idx - 1] = left_sibling->keys[left_sibling->num_keys - 1];
   left_sibling->num_keys--;
 
   return true;
 }
 
-int borrow_from_right_internal(bpnode *node, bpnode *right_sibling,
-                               bpnode *parent, int parent_key_idx) {
+int borrow_from_right_internal(bpnode *node, bpnode *right_sibling, bpnode *parent, int parent_key_idx) {
   if (right_sibling->num_keys <= MIN_KEYS) {
     return false;
   }
@@ -338,8 +310,7 @@ int borrow_from_right_internal(bpnode *node, bpnode *right_sibling,
   return true;
 }
 
-void merge_with_left_internal(bpnode *node, bpnode *left_sibling,
-                              bpnode *parent, int parent_key_idx) {
+void merge_with_left_internal(bpnode *node, bpnode *left_sibling, bpnode *parent, int parent_key_idx) {
   // Move parent key down to left sibling
   left_sibling->keys[left_sibling->num_keys] = parent->keys[parent_key_idx - 1];
   left_sibling->num_keys++;
@@ -349,8 +320,7 @@ void merge_with_left_internal(bpnode *node, bpnode *left_sibling,
     left_sibling->keys[left_sibling->num_keys + i] = node->keys[i];
     left_sibling->children[left_sibling->num_keys + i] = node->children[i];
   }
-  left_sibling->children[left_sibling->num_keys + node->num_keys] =
-      node->children[node->num_keys];
+  left_sibling->children[left_sibling->num_keys + node->num_keys] = node->children[node->num_keys];
   left_sibling->num_keys += node->num_keys;
 
   // Remove key from parent
@@ -367,8 +337,7 @@ void merge_with_left_internal(bpnode *node, bpnode *left_sibling,
   free(node);
 }
 
-void merge_with_right_internal(bpnode *node, bpnode *right_sibling,
-                               bpnode *parent, int parent_key_idx) {
+void merge_with_right_internal(bpnode *node, bpnode *right_sibling, bpnode *parent, int parent_key_idx) {
   // Move parent key down to node
   node->keys[node->num_keys] = parent->keys[parent_key_idx];
   node->num_keys++;
@@ -378,8 +347,7 @@ void merge_with_right_internal(bpnode *node, bpnode *right_sibling,
     node->keys[node->num_keys + i] = right_sibling->keys[i];
     node->children[node->num_keys + i] = right_sibling->children[i];
   }
-  node->children[node->num_keys + right_sibling->num_keys] =
-      right_sibling->children[right_sibling->num_keys];
+  node->children[node->num_keys + right_sibling->num_keys] = right_sibling->children[right_sibling->num_keys];
   node->num_keys += right_sibling->num_keys;
 
   // Remove key from parent
@@ -413,19 +381,15 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
     return; // Error: child not found
   }
 
-  bpnode *left_sibling =
-      (child_idx > 0) ? parent->children[child_idx - 1] : NULL;
-  bpnode *right_sibling =
-      (child_idx < parent->num_keys) ? parent->children[child_idx + 1] : NULL;
+  bpnode *left_sibling = (child_idx > 0) ? parent->children[child_idx - 1] : NULL;
+  bpnode *right_sibling = (child_idx < parent->num_keys) ? parent->children[child_idx + 1] : NULL;
 
   if (node->is_leaf) {
     // Try borrowing from siblings
-    if (left_sibling &&
-        borrow_from_left_leaf(node, left_sibling, parent, child_idx)) {
+    if (left_sibling && borrow_from_left_leaf(node, left_sibling, parent, child_idx)) {
       return;
     }
-    if (right_sibling &&
-        borrow_from_right_leaf(node, right_sibling, parent, child_idx + 1)) {
+    if (right_sibling && borrow_from_right_leaf(node, right_sibling, parent, child_idx + 1)) {
       return;
     }
 
@@ -437,12 +401,10 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
     }
   } else {
     // Internal node
-    if (left_sibling &&
-        borrow_from_left_internal(node, left_sibling, parent, child_idx)) {
+    if (left_sibling && borrow_from_left_internal(node, left_sibling, parent, child_idx)) {
       return;
     }
-    if (right_sibling &&
-        borrow_from_right_internal(node, right_sibling, parent, child_idx)) {
+    if (right_sibling && borrow_from_right_internal(node, right_sibling, parent, child_idx)) {
       return;
     }
 
@@ -552,8 +514,7 @@ void print_tree(bpnode *node, int level, char *prefix, int is_last) {
         if (level > 0) {
           strcat(new_prefix, is_last ? "    " : "│   ");
         }
-        print_tree(node->children[i], level + 1, new_prefix,
-                   i == node->num_keys);
+        print_tree(node->children[i], level + 1, new_prefix, i == node->num_keys);
       }
     }
   }
@@ -564,11 +525,7 @@ void bptree_print_tree(bptree *tree) {
     printf("Empty tree\n");
     return;
   }
-  printf("\nB+ Tree (order %d, max keys per node: %d):\n", MAX_KEYS + 1,
-         MAX_KEYS);
-  printf("Note: Internal nodes guide search, all data stored in leaves\n");
   print_tree(tree->root, 0, "", true);
-  printf("\n");
   printf("\n");
 }
 
@@ -585,26 +542,7 @@ void bptree_destroy(bpnode *node) {
   free(node);
 }
 
-int main() {
-  bptree *tree = bptree_init();
-
-  printf("B+ Tree Visualization Demo\n");
-  printf("==========================\n");
-  printf("B+ Tree properties:\n");
-  printf("  - All data stored in leaf nodes\n");
-  printf("  - Internal nodes only contain keys for navigation\n");
-  printf("  - Leaf nodes are linked for efficient range queries\n");
-  printf("  - Keys in internal nodes may duplicate keys in leaves\n\n");
-
-  // Demo: Insert some values
-  // int values[] = {10, 20, 5, 6, 12, 30, 7, 17, 3, 50, 40, 25, 35, 8, 9};
-  // int n = sizeof(values) / sizeof(values[0]);
-  // for (int i = 0; i < n; i++) {
-  //   printf("Inserting %d...\n", values[i]);
-  //   insert(tree, values[i]);
-  //   print_tree_wrapper(tree);
-  // }
-
+void print_help() {
   printf("\n\nInteractive Mode\n");
   printf("================\n");
   printf("Commands:\n");
@@ -613,6 +551,22 @@ int main() {
   printf("  s <number> - Search for a number\n");
   printf("  p          - Print tree\n");
   printf("  q          - Quit\n\n");
+}
+
+int main() {
+  print_help();
+
+  bptree *tree = bptree_init();
+
+  // Demo: Insert some values
+  // int values[] = {10, 20, 5, 6, 12, 30, 7, 17, 3, 50, 40, 25, 35, 8, 9};
+  // int values[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  // 18, 19, 20};
+  int values[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  int n = sizeof(values) / sizeof(values[0]);
+  for (int i = 0; i < n; i++) {
+    bptree_insert(tree, values[i]);
+  }
 
   char command[100];
   while (1) {
