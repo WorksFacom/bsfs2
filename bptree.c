@@ -150,7 +150,7 @@ void bptree_insert(bptree *tree, int key) {
   }
 }
 
-int remove_from_leaf(bpnode *leaf, int key) {
+int remove_from_leaf(bpnode *leaf, int key, int *is_leftmost) {
   int i = 0;
   while (i < leaf->num_keys && leaf->keys[i] != key) {
     i++;
@@ -160,22 +160,15 @@ int remove_from_leaf(bpnode *leaf, int key) {
     return 0; // error
   }
 
+  *is_leftmost = i == 0 ? 1 : 0;
+
   // Shift keys left
   for (int j = i; j < leaf->num_keys - 1; j++) {
     leaf->keys[j] = leaf->keys[j + 1];
   }
   leaf->num_keys--;
 
-  return 1; // removed
-}
-
-int find_child_index(bpnode *parent, bpnode *child) {
-  for (int i = 0; i <= parent->num_keys; i++) {
-    if (parent->children[i] == child) {
-      return i;
-    }
-  }
-  return -1;
+  return 1;
 }
 
 int borrow_from_left_leaf(bpnode *leaf, bpnode *left_sibling, bpnode *parent, int parent_key_idx) {
@@ -375,9 +368,16 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
   }
 
   bpnode *parent = path[path_len - 1];
-  int child_idx = find_child_index(parent, node);
+
+  int child_idx;
+  for (int i = 0; i <= parent->num_keys; i++) {
+    if (parent->children[i] == node) {
+      child_idx = i;
+    }
+  }
 
   if (child_idx == -1) {
+    printf("Error: child not found.\n");
     return; // Error: child not found
   }
 
@@ -442,9 +442,31 @@ void bptree_remove(bptree *tree, int key) {
     current = current->children[i];
   }
 
-  // parei aqui
-  if (!remove_from_leaf(current, key)) {
+  int is_leftmost;
+  if (!remove_from_leaf(current, key, &is_leftmost)) {
     return; // Key not found
+  }
+
+  if (is_leftmost) {
+    int new_leftmost = current->keys[0];
+
+    bpnode *node = NULL;
+    int found = 0;
+    int i = path_len - 1;
+    while (i >= 0) {
+      node = path[i--];
+
+      for (int j = 0; j < node->num_keys; j++) {
+        if (key == node->keys[j]) {
+          found = 1;
+          break;
+        }
+      }
+    }
+
+    if (found) {
+      node->keys[node->num_keys - 1] = new_leftmost;
+    }
   }
 
   if (path_len == 0 && tree->root->num_keys == 0 && !tree->root->is_leaf) {
@@ -560,9 +582,7 @@ int main() {
 
   // Demo: Insert some values
   // int values[] = {10, 20, 5, 6, 12, 30, 7, 17, 3, 50, 40, 25, 35, 8, 9};
-  // int values[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-  // 18, 19, 20};
-  int values[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+  int values[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
   int n = sizeof(values) / sizeof(values[0]);
   for (int i = 0; i < n; i++) {
     bptree_insert(tree, values[i]);
