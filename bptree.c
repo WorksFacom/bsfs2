@@ -11,6 +11,7 @@
 // t - 1 = 1
 // 2t - 1 = 3
 
+// TODO: Aqui não faltou o ponteiro de apontar para a proxima folha?
 typedef struct bpnode {
   int keys[MAX_KEYS + 1];
   struct bpnode *children[MAX_KEYS + 2];
@@ -43,6 +44,8 @@ int insert_in_leaf(bpnode *leaf, int key) {
     }
   }
 
+  // TODO: E se o num_keys = 0?
+  // while (i >= 0 && key < leaf->keys[i] < leaf->num_keys) {
   int i = leaf->num_keys - 1;
   while (key < leaf->keys[i] && i < leaf->num_keys) {
     leaf->keys[i + 1] = leaf->keys[i];
@@ -369,6 +372,11 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
 
   bpnode *parent = path[path_len - 1];
 
+  // TODO: Aqui não seria legal inicial o child_idx = -1
+  // para que se não encontrar nada no for ele cair naquele
+  // caso de erro if (child_idx == -1)
+
+  // int child_idx = -1;
   int child_idx;
   for (int i = 0; i <= parent->num_keys; i++) {
     if (parent->children[i] == node) {
@@ -455,6 +463,18 @@ void bptree_remove(bptree *tree, int key) {
     int i = path_len - 1;
     while (i >= 0) {
       node = path[i--];
+
+      // TODO: Aqui não deveria guardar o indice e fzr a substituição
+      // naquele indice?
+      // ex: remove o 13
+      //              [ 13 | 30 ]
+      //            /      |      \
+      //       [5 10 13] [20 25] [30 35]
+      // se vc não salvar o indice vc vai promover o indice no final do array
+      // deixando a arvore final assim:
+      //              [ 13 | 5 ]
+      //            /      |      \
+      //         [5 10] [20 25] [30 35]
 
       for (int j = 0; j < node->num_keys; j++) {
         if (key == node->keys[j]) {
