@@ -386,10 +386,10 @@ void fix_underflow(bptree *tree, bpnode *node, bpnode **path, int path_len) {
 
   if (node->is_leaf) {
     // Try borrowing from siblings
-    if (left_sibling && borrow_from_left_leaf(node, left_sibling, parent, child_idx)) {
+    if (left_sibling && borrow_from_left_leaf(node, left_sibling, parent, child_idx - 1)) {
       return;
     }
-    if (right_sibling && borrow_from_right_leaf(node, right_sibling, parent, child_idx + 1)) {
+    if (right_sibling && borrow_from_right_leaf(node, right_sibling, parent, child_idx)) {
       return;
     }
 
@@ -453,7 +453,7 @@ void bptree_remove(bptree *tree, int key) {
     bpnode *node = NULL;
     int index = -1;
     int i = path_len - 1;
-    while (i >= 0) {
+    while (i >= 0 && index == -1) {
       node = path[i--];
 
       for (int j = 0; j < node->num_keys; j++) {
