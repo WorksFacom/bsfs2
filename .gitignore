@@ -89,4 +89,8 @@ dkms.conf
 bin/
 docs/
 
+# LSP cache folders (clangd, ccls)
+.cache
 .ccls-cache
+
+.env
