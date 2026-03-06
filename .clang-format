@@ -1,0 +1,6 @@
+AllowShortFunctionsOnASingleLine: None
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AllowShortBlocksOnASingleLine: Never
+AllowAllParametersOfDeclarationOnNextLine: false
+ColumnLimit: 140
