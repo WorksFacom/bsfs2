@@ -18,7 +18,7 @@
  *
  * This file is part of the higher-level file management interface for BSFS.
  */
-#include "../../include/create_file_bsfs.h"
+#include "../../../include/create_file_bsfs.h"
 
 /**
  * @brief Creates an empty regular file at the given path.

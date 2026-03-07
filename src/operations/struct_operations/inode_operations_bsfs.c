@@ -15,8 +15,8 @@
  * for interacting with inodes without requiring direct manipulation of tree
  * internals.
  */
-#include "../../include/inode_operations_bsfs.h"
-#include "../../include/superblock_operations_bsfs.h"
+#include "../../../include/inode_operations_bsfs.h"
+#include "../../../include/superblock_operations_bsfs.h"
 
 #include <stdio.h>
 

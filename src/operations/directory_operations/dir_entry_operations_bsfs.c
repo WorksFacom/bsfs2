@@ -6,8 +6,8 @@
  * operations for creating, removing, updating, looking up, and iterating
  * directory entries backed by a B-tree stored in the filesystem image.
  */
-#include "../../include/dir_entry_operations_bsfs.h"
-#include "../../include/allocate_bsfs.h"
+#include "../../../include/dir_entry_operations_bsfs.h"
+#include "../../../include/allocate_bsfs.h"
 
 /**
  * @brief Opens a directory given its inode number.

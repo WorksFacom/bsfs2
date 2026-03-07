@@ -15,7 +15,7 @@
  *    comparison are adapted for the rec_entry key layout.
  */
 
-#include "../../include/rec_entry_operations_bsfs.h"
+#include "../../../include/rec_entry_operations_bsfs.h"
 
 #include <stdio.h>
 

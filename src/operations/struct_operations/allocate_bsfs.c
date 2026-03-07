@@ -2,8 +2,8 @@
  * @file allocate_bsfs.c
  * @brief Functions for allocating blocks in the BSFS file system.
  */
-#include "../../include/allocate_bsfs.h"
-#include "../../include/rec_gc_bsfs.h"
+#include "../../../include/allocate_bsfs.h"
+#include "../../../include/rec_gc_bsfs.h"
 #include <time.h>
 
 /**

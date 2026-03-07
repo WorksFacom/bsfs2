@@ -8,10 +8,10 @@
  * requested number of blocks is freed.
  */
 
-#include "../../include/rec_gc_bsfs.h"
-#include "../../include/allocate_bsfs.h"
-#include "../../include/btree_bsfs.h"
-#include "../../include/rec_entry_operations_bsfs.h"
+#include "../../../include/rec_gc_bsfs.h"
+#include "../../../include/allocate_bsfs.h"
+#include "../../../include/btree_bsfs.h"
+#include "../../../include/rec_entry_operations_bsfs.h"
 
 /**
  * @brief Internal item wrapper used during Recovery GC traversals.

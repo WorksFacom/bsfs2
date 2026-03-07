@@ -9,7 +9,7 @@
  * snapshot from the Recovery tree upon success.
  */
 
-#include "../../include/restore_file_bsfs.h"
+#include "../../../include/restore_file_bsfs.h"
 
 /**
  * @brief Determine a destination directory for restoration.

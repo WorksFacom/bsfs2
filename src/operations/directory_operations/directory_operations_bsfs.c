@@ -7,7 +7,7 @@
  * manipulation and inode handling provided by supporting modules.
  */
 
-#include "../../include/directory_operations_bsfs.h"
+#include "../../../include/directory_operations_bsfs.h"
 
 /**
  * @brief Creates a new directory at the given path.

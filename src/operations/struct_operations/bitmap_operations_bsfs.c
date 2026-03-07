@@ -6,7 +6,7 @@
  * This file provides functions for loading, saving, and manipulating the bitmap
  * which is used for managing free and allocated blocks in the filesystem.
  */
-#include "../../include/bitmap_operations_bsfs.h"
+#include "../../../include/bitmap_operations_bsfs.h"
 
 /**
  * @brief Initializes a linked list of bitmap blocks on disk.

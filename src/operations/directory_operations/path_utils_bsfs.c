@@ -7,9 +7,9 @@
  * retrieving inodes based on path strings.
  */
 
-#include "../../include/path_utils_bsfs.h"
-#include "../../include/inode_operations_bsfs.h"
-#include "../../include/permissions_bsfs.h"
+#include "../../../include/path_utils_bsfs.h"
+#include "../../../include/inode_operations_bsfs.h"
+#include "../../../include/permissions_bsfs.h"
 
 /**
  * @brief Resolves a path to its parent directory and the final component name.

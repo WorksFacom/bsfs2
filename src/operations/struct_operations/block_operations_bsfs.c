@@ -17,7 +17,7 @@
  * All access respects the `BLOCK_SIZE` defined in the superblock
  * and integrates with the bitmap for block availability tracking.
  */
-#include "../../include/block_operations_bsfs.h"
+#include "../../../include/block_operations_bsfs.h"
 
 /**
  * @brief Writes data to a single block.

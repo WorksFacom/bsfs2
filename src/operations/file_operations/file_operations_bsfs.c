@@ -7,7 +7,7 @@
  * B-tree-based address mapping. Files are loaded into memory as `file_t`
  * structures which manage stateful access.
  */
-#include "../../include/file_operations_bsfs.h"
+#include "../../../include/file_operations_bsfs.h"
 
 /**
  * @brief Opens a file by loading its inode into memory.

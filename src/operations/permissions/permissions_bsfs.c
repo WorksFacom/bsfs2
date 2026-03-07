@@ -3,7 +3,7 @@
  * @brief Implementation of POSIX-like permission checks for BSFS.
  */
 
-#include "../../include/permissions_bsfs.h"
+#include "../../../include/permissions_bsfs.h"
 
 /**
  * @brief Compute the effective rwx mode (3 bits) for a caller on an inode.

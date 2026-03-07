@@ -17,7 +17,7 @@
  * This abstraction simplifies memory management and ordering of block span
  * assignments during file writing or preallocation.
  */
-#include "../../include/bspan_queue_bsfs.h"
+#include "../../../include/bspan_queue_bsfs.h"
 
 /**
  * @brief Initializes a bspan queue.

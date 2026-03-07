@@ -7,7 +7,7 @@
  * is inserted into the Recovery tree to allow later restoration or purging.
  */
 
-#include "../../include/remove_file_bsfs.h"
+#include "../../../include/remove_file_bsfs.h"
 
 /**
  * @brief Logically remove a file and snapshot it into the Recovery tree.
