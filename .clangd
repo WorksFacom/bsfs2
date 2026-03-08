@@ -1,0 +1,25 @@
+CompileFlags:
+  Remove:
+    - -mrecord-mcount
+    - -mfentry
+    - -fconserve-stack
+    - -fmin-function-alignment=16
+    - -mindirect-branch=thunk-extern
+    - -mindirect-branch-register
+    - -mindirect-branch-cs-prefix
+    - -mfunction-return=thunk-extern
+    - -mharden-sls=all
+    - -mpreferred-stack-boundary=3
+    - -mstack-protector-guard-reg=gs
+    - -mstack-protector-guard-symbol=__ref_stack_chk_guard
+    - -fno-allow-store-data-races
+    - -fzero-init-padding-bits=all
+    - -mskip-rax-setup
+    - -fpatchable-function-entry=16,16
+
+    - -Wmissing-prototypes
+  Add:
+    - -Wno-unknown-warning-option
+    - -Wno-unused-command-line-argument
+
+    - -ferror-limit=0

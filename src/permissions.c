@@ -12,7 +12,7 @@
  * @param gid Caller group id.
  * @return 3-bit mask (r=4, w=2, x=1) for the caller class; root returns 7.
  */
-uint16_t bsfs_effective_mode(const inode_t *ino, uint16_t uid, uint16_t gid) {
+uint16_t bsfs_effective_mode(const bsfs_inode *ino, uint16_t uid, uint16_t gid) {
   if (!ino)
     return 0;
   if (uid == 0)
@@ -34,7 +34,7 @@ uint16_t bsfs_effective_mode(const inode_t *ino, uint16_t uid, uint16_t gid) {
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_traverse_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
+int bsfs_can_traverse_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid) {
   /* 'x' on directory means search/traverse */
   return (bsfs_effective_mode(dir, uid, gid) & 01) != 0;
 }
@@ -46,7 +46,7 @@ int bsfs_can_traverse_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_list_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
+int bsfs_can_list_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid) {
   /* 'r' on directory means list */
   return (bsfs_effective_mode(dir, uid, gid) & 04) != 0;
 }
@@ -58,7 +58,7 @@ int bsfs_can_list_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_modify_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
+int bsfs_can_modify_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid) {
   /* To modify entries within a directory: need w+x on the directory */
   uint16_t mode = bsfs_effective_mode(dir, uid, gid);
   return (mode & 03) == 03;
@@ -76,7 +76,7 @@ int bsfs_can_modify_dir(const inode_t *dir, uint16_t uid, uint16_t gid) {
  * @param gid   Caller group id (unused here).
  * @return 1 if allowed, 0 otherwise.
  */
-int bsfs_can_unlink_in_sticky(const inode_t *dir, const inode_t *entry,
+int bsfs_can_unlink_in_sticky(const bsfs_inode *dir, const bsfs_inode *entry,
                               uint16_t uid, uint16_t gid) {
   (void)gid;
   if (!dir || !entry)

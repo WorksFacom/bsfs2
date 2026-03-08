@@ -9,7 +9,7 @@
 #ifndef SUPERBLOCK_OPERATIONS_BSFS_H
 #define SUPERBLOCK_OPERATIONS_BSFS_H
 
-#include "fs.h"
+#include "bsfs.h"
 
 /**
  * @brief Writes the superblock to block 0 of the filesystem.
@@ -18,7 +18,7 @@
  * @param sb Pointer to the superblock structure to write.
  * @return 0 on success, -1 on failure.
  */
-int write_superblock(FILE *disk, const superblock_t *sb);
+int write_superblock(FILE *disk, const bsfs_super_block *sb);
 
 /**
  * @brief Reads the superblock from block 0 of the filesystem.
@@ -27,6 +27,6 @@ int write_superblock(FILE *disk, const superblock_t *sb);
  * @param sb Pointer to the superblock structure to populate.
  * @return 0 on success, -1 on failure.
  */
-int read_superblock(FILE *disk, superblock_t *sb);
+int read_superblock(FILE *disk, bsfs_super_block *sb);
 
 #endif // SUPERBLOCK_OPERATIONS_BSFS_H

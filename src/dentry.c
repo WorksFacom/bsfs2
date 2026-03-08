@@ -21,7 +21,7 @@
  * @return Pointer to an allocated dir_t on success, NULL on failure.
  */
 dir_t *open_dir(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
-  inode_t inode;
+  bsfs_inode inode;
   if (!read_inode(disk, inode_tree, inode_number, &inode)) {
     fprintf(stderr, "Failed to load directory inode.\n");
     return NULL;
@@ -81,7 +81,7 @@ int close_dir(dir_t *dir) {
  * @return 0 on success, -1 if an entry with the same name already exists or on
  *         write error.
  */
-int add_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
+int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir,
                   dir_entry_t *entry) {
   btree_handle_t *dir_handle = btree_create_dir_entry_handle();
   dir_handle->root_block = dir->inode.btree_root;
@@ -186,7 +186,7 @@ int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block,
  * @param filename Name of the entry to remove.
  * @return 0 on success, -1 if the entry was not found or on write error.
  */
-int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
+int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir,
                      const char *filename) {
   btree_handle_t *handle = btree_create_dir_entry_handle();
   handle->root_block = dir->inode.btree_root;
@@ -236,7 +236,7 @@ int remove_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  * @param entry Pointer to the updated directory entry.
  * @return 1 on success; -1 if the entry was not found.
  */
-int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
+int update_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir,
                      dir_entry_t *entry) {
   (void)sb;
   btree_handle_t *handle = btree_create_dir_entry_handle();
@@ -267,7 +267,7 @@ int update_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
  * @param result Output parameter: filled with the entry if found.
  * @return 0 if found, -1 if not found.
  */
-int lookup_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir, const char *name,
+int lookup_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *name,
                      dir_entry_t *result) {
   (void)sb;
   btree_handle_t *handle = btree_create_dir_entry_handle();
@@ -386,7 +386,7 @@ static int btree_find_successor_entry(FILE *disk, btree_handle_t *handle,
  * @return 0 if an entry was read successfully, -1 if end of directory is
  * reached.
  */
-int read_dir_entry(FILE *disk, superblock_t *sb, dir_t *dir,
+int read_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir,
                    btree_handle_t *handle, dir_entry_t *out) {
   (void)sb;
   (void)handle;

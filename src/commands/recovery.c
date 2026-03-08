@@ -99,7 +99,7 @@ static int list_recovery_inorder(FILE *disk, btree_handle_t *handle,
  * @param args Optional name filter in args[1].
  * @return 1 to continue the REPL.
  */
-int recovery(FILE *disk, superblock_t *sb, char **args) {
+int recovery(FILE *disk, bsfs_super_block *sb, char **args) {
   (void)args;
   btree_handle_t rec_h;
   if (!rec_tree_init(disk, sb, &rec_h)) {

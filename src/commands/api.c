@@ -48,12 +48,12 @@ static uint16_t s_umask = 0022;       // default umask
  * @param disk Open filesystem image.
  * @param sb   Loaded superblock (provides inode tree root and root inode).
  */
-static void ensure_cwd(FILE *disk, superblock_t *sb) {
+static void ensure_cwd(FILE *disk, bsfs_super_block *sb) {
   if (s_cwd_initialized)
     return;
   btree_handle_t *inode_h = btree_create_inode_handle();
   inode_h->root_block     = sb->inode_root;
-  inode_t root;
+  bsfs_inode root;
   if (!read_inode(disk, inode_h, sb->root_inode, &root)) {
     // fallback: zero init
     memset(&s_cwd, 0, sizeof(s_cwd));
@@ -80,7 +80,7 @@ static void ensure_cwd(FILE *disk, superblock_t *sb) {
  * the browser keeps an in-memory snapshot of the CWD inode, we need to reload
  * it periodically so subsequent path resolutions see the latest root pointer.
  */
-static void refresh_cwd_inode(FILE *disk, superblock_t *sb) {
+static void refresh_cwd_inode(FILE *disk, bsfs_super_block *sb) {
   if (!s_cwd_initialized) {
     ensure_cwd(disk, sb);
     return;
@@ -91,7 +91,7 @@ static void refresh_cwd_inode(FILE *disk, superblock_t *sb) {
     return;
 
   inode_h->root_block = sb->inode_root;
-  inode_t fresh;
+  bsfs_inode fresh;
   if (read_inode(disk, inode_h, s_cwd.inode.inode_number, &fresh)) {
     s_cwd.inode         = fresh;
     s_cwd.current_index = 0;
@@ -153,11 +153,11 @@ static void cwd_update_text(const char *target_path) {
  * @param file Output: populated file descriptor snapshot.
  * @return 0 on success; -1 on failure.
  */
-int open_bsfs(FILE *disk, superblock_t *sb, const char *path, file_t *file) {
+int open_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, file_t *file) {
   if (!disk || !sb || !path || !file)
     return -1;
   ensure_cwd(disk, sb);
-  inode_t inode;
+  bsfs_inode inode;
   if (lookup_file(disk, sb, path, &s_cwd, &inode) != 0)
     return -1;
   btree_handle_t *inode_h = btree_create_inode_handle();
@@ -212,7 +212,7 @@ int seek_bsfs(file_t *file, uint32_t pos) {
  * @param length Number of bytes to write.
  * @return Number of bytes written (0 on failure).
  */
-size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path, const void *data, uint32_t length) {
+size_t overwrite_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, const void *data, uint32_t length) {
   if (!disk || !sb || !path || !data || length == 0)
     return 0;
   ensure_cwd(disk, sb);
@@ -251,7 +251,7 @@ size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path, const void
  * @param path Absolute or relative file path.
  * @return 0 on success; -1 on error (permissions, duplicates, or I/O).
  */
-int create_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int create_file_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
@@ -284,7 +284,7 @@ int create_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @param path Target file path.
  * @return 0 on success; -1 on error.
  */
-int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int remove_file_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
@@ -334,7 +334,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   // Load inode
   btree_handle_t *inode_h2 = btree_create_inode_handle();
   inode_h2->root_block     = sb->inode_root;
-  inode_t ino;
+  bsfs_inode ino;
   int     have_inode = read_inode(disk, inode_h2, ent.inode_number, &ino);
   if (!have_inode) {
     fprintf(stderr,
@@ -412,7 +412,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @param path Target file path.
  * @return 0 on success; -1 on error.
  */
-int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int delete_file_permanently_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
 
@@ -425,7 +425,7 @@ int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb, const char *path)
     return -1;
   uint32_t parent_ino = parent.inode.inode_number;
 
-  inode_t target;
+  bsfs_inode target;
   if (lookup_file(disk, sb, path, &s_cwd, &target) != 0)
     return -1;
   if (target.file_type != FILE_TYPE_FILE)
@@ -534,7 +534,7 @@ int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb, const char *path)
  * @param new_path  Destination path (may include a new basename).
  * @return 0 on success; -1 on error.
  */
-int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path, const char *new_path) {
+int move_bsfs(FILE *disk, bsfs_super_block *sb, const char *old_path, const char *new_path) {
   if (!disk || !sb || !old_path || !new_path)
     return -1;
   ensure_cwd(disk, sb);
@@ -565,7 +565,7 @@ int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path, const char *ne
     return -1;
   btree_handle_t *inode_h_tmp2 = btree_create_inode_handle();
   inode_h_tmp2->root_block     = sb->inode_root;
-  inode_t src_inode;
+  bsfs_inode src_inode;
   if (!read_inode(disk, inode_h_tmp2, src_entry.inode_number, &src_inode)) {
     free(inode_h_tmp2);
     return -1;
@@ -588,7 +588,7 @@ int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path, const char *ne
  * @param inode Output: filled with the target's inode on success.
  * @return 0 on success; -1 if not found or invalid args.
  */
-int stat_bsfs(FILE *disk, superblock_t *sb, const char *path, inode_t *inode) {
+int stat_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, bsfs_inode *inode) {
   if (!disk || !sb || !path || !inode)
     return -1;
   ensure_cwd(disk, sb);
@@ -608,7 +608,7 @@ int stat_bsfs(FILE *disk, superblock_t *sb, const char *path, inode_t *inode) {
  * @param dir     Output: directory descriptor snapshot.
  * @return 0 on success; -1 on error.
  */
-int opendir_bsfs(FILE *disk, superblock_t *sb, const char *dirname, dir_t *dir) {
+int opendir_bsfs(FILE *disk, bsfs_super_block *sb, const char *dirname, dir_t *dir) {
   if (!disk || !sb || !dir)
     return -1;
   ensure_cwd(disk, sb);
@@ -616,7 +616,7 @@ int opendir_bsfs(FILE *disk, superblock_t *sb, const char *dirname, dir_t *dir) 
     // Refresh CWD inode from the inode tree to pick up updated btree_root
     btree_handle_t *inode_h = btree_create_inode_handle();
     inode_h->root_block     = sb->inode_root;
-    inode_t fresh;
+    bsfs_inode fresh;
     if (read_inode(disk, inode_h, s_cwd.inode.inode_number, &fresh)) {
       s_cwd.inode = fresh;
     }
@@ -631,7 +631,7 @@ int opendir_bsfs(FILE *disk, superblock_t *sb, const char *dirname, dir_t *dir) 
     dir->current_index = 0;
     return 0;
   }
-  inode_t ino;
+  bsfs_inode ino;
   if (lookup_file(disk, sb, dirname, &s_cwd, &ino) != 0)
     return -1;
   if (ino.file_type != FILE_TYPE_DIR)
@@ -668,7 +668,7 @@ int closedir_bsfs(dir_t *dir) {
  * @param entry  Output: next directory entry.
  * @return 1 on success, 0 on end, -1 on error.
  */
-int readdir_bsfs(FILE *disk, superblock_t *sb, dir_t *dir, dir_entry_t *entry) {
+int readdir_bsfs(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry) {
   if (!disk || !sb || !dir || !entry)
     return -1;
   // The underlying read_dir_entry returns 0 on success, -1 on end/error
@@ -690,7 +690,7 @@ int readdir_bsfs(FILE *disk, superblock_t *sb, dir_t *dir, dir_entry_t *entry) {
  * @param path Directory path (absolute or relative).
  * @return 0 on success; -1 on error.
  */
-int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int mkdir_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
@@ -711,7 +711,7 @@ int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
   if (lookup_dir_entry(disk, sb, &parent, name, &created) == 0) {
     btree_handle_t *inode_h = btree_create_inode_handle();
     inode_h->root_block     = sb->inode_root;
-    inode_t ino;
+    bsfs_inode ino;
     if (read_inode(disk, inode_h, created.inode_number, &ino)) {
       ino.uid         = s_uid;
       ino.gid         = s_gid;
@@ -734,7 +734,7 @@ int mkdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @param path Directory path to remove.
  * @return 0 on success; -1 on error.
  */
-int rmdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int rmdir_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
@@ -750,7 +750,7 @@ int rmdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
     return -1;
   btree_handle_t *inode_h_tmp3 = btree_create_inode_handle();
   inode_h_tmp3->root_block     = sb->inode_root;
-  inode_t dir_inode;
+  bsfs_inode dir_inode;
   if (!read_inode(disk, inode_h_tmp3, entry.inode_number, &dir_inode)) {
     free(inode_h_tmp3);
     return -1;
@@ -774,11 +774,11 @@ int rmdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @param path Directory path.
  * @return 0 on success; -1 on error.
  */
-int chdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
+int chdir_bsfs(FILE *disk, bsfs_super_block *sb, const char *path) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
-  inode_t ino;
+  bsfs_inode ino;
   if (lookup_file(disk, sb, path, &s_cwd, &ino) != 0)
     return -1;
   if (ino.file_type != FILE_TYPE_DIR)
@@ -802,7 +802,7 @@ int chdir_bsfs(FILE *disk, superblock_t *sb, const char *path) {
  * @param buffer_size  Capacity of @p path_buffer (bytes).
  * @return 0 on success; -1 on invalid arguments.
  */
-int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer, size_t buffer_size) {
+int getcwd_bsfs(FILE *disk, bsfs_super_block *sb, char *path_buffer, size_t buffer_size) {
   (void)disk;
   (void)sb;
   if (!path_buffer || buffer_size == 0)
@@ -825,7 +825,7 @@ int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer, size_t buffer_s
  * @param dest_dir     Optional destination directory path.
  * @return 0 on success; -1 on error or insufficient permission.
  */
-int restore_bsfs(FILE *disk, superblock_t *sb, uint32_t recovery_id, const char *dest_dir) {
+int restore_bsfs(FILE *disk, bsfs_super_block *sb, uint32_t recovery_id, const char *dest_dir) {
   if (!disk || !sb || recovery_id == 0)
     return -1;
   ensure_cwd(disk, sb);
@@ -863,11 +863,11 @@ int restore_bsfs(FILE *disk, superblock_t *sb, uint32_t recovery_id, const char 
  * @param mode New mode bits (lowest 12 bits are honored).
  * @return 0 on success; -1 on error or permission denied.
  */
-int chmod_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t mode) {
+int chmod_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, uint16_t mode) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
-  inode_t ino;
+  bsfs_inode ino;
   if (lookup_file(disk, sb, path, &s_cwd, &ino) != 0)
     return -1;
   if (!(bsfs_is_root(s_uid) || s_uid == ino.uid)) {
@@ -891,11 +891,11 @@ int chmod_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t mode) {
  * @param uid  New owner user id.
  * @return 0 on success; -1 on error or permission denied.
  */
-int chown_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t uid) {
+int chown_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, uint16_t uid) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
-  inode_t ino;
+  bsfs_inode ino;
   if (lookup_file(disk, sb, path, &s_cwd, &ino) != 0)
     return -1;
   if (!bsfs_is_root(s_uid)) {
@@ -919,11 +919,11 @@ int chown_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t uid) {
  * @param gid  New group id.
  * @return 0 on success; -1 on error or permission denied.
  */
-int chgrp_bsfs(FILE *disk, superblock_t *sb, const char *path, uint16_t gid) {
+int chgrp_bsfs(FILE *disk, bsfs_super_block *sb, const char *path, uint16_t gid) {
   if (!disk || !sb || !path)
     return -1;
   ensure_cwd(disk, sb);
-  inode_t ino;
+  bsfs_inode ino;
   if (lookup_file(disk, sb, path, &s_cwd, &ino) != 0)
     return -1;
   if (!bsfs_is_root(s_uid)) {

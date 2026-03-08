@@ -13,7 +13,7 @@
 #define REMOVE_FILE_BSFS_H
 
 #include "dentry.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 #include "path_utils.h"
 #include "rec_entry.h"
@@ -46,7 +46,7 @@
  * it).
  * @return 0 on success; -1 on error.
  */
-int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, const char *path, dir_t *cwd,
+int remove_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, const char *path, dir_t *cwd,
                 uint16_t uid);
 
 #endif /* REMOVE_FILE_BSFS_H */

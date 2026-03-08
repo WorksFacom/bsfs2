@@ -25,7 +25,7 @@
  * @param offset Starting block index for the allocation scan (typically 0).
  * @return 0 on success, or -1 if there are not enough free blocks.
  */
-int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
+int allocate_bspan_queue(FILE *disk, bsfs_super_block *sb, bspan_queue_t *queue,
                          uint32_t blocks_needed, uint32_t offset) {
   if (blocks_needed == 0 || offset >= sb->total_blocks) {
     return (blocks_needed == 0) ? 0 : -1;
@@ -43,7 +43,7 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
   if (offset < sb->data_block_start)
     offset = sb->data_block_start;
   for (uint32_t i = offset; i < sb->total_blocks; i++) {
-    if (is_bit_free(bitmap, i)) {
+    if (bsfs_is_bit_free(bitmap, i)) {
       if (run_start == INVALID_BLOCK) {
         run_start = i;
         run_length = 1;
@@ -53,7 +53,7 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
 
       if (run_length == blocks_needed) {
         for (uint32_t j = run_start; j < run_start + run_length; j++) {
-          set_bit(bitmap, j);
+          bsfs_set_bit(bitmap, j);
         }
         enqueue_bspan(queue, 0, run_start, run_length);
         write_bitmap(disk, bitmap, sb->block_bitmap_start);
@@ -62,7 +62,7 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
       }
     } else if (run_length > 0) {
       for (uint32_t j = run_start; j < run_start + run_length; j++) {
-        set_bit(bitmap, j);
+        bsfs_set_bit(bitmap, j);
       }
       enqueue_bspan(queue, 0, run_start, run_length);
       int result = allocate_bspan_queue(disk, sb, queue,
@@ -76,7 +76,7 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
   // Final run if reached end of bitmap with a partial span
   if (run_length > 0) {
     for (uint32_t j = run_start; j < run_start + run_length; j++) {
-      set_bit(bitmap, j);
+      bsfs_set_bit(bitmap, j);
     }
     enqueue_bspan(queue, 0, run_start, run_length);
     int result = allocate_bspan_queue(
@@ -111,7 +111,7 @@ int allocate_bspan_queue(FILE *disk, superblock_t *sb, bspan_queue_t *queue,
  * @return The index of the allocated block on success, or INVALID_BLOCK if no
  * free blocks are available or if an error occurs during bitmap saving.
  */
-uint32_t allocate_single_block(FILE *disk, superblock_t *sb) {
+uint32_t allocate_single_block(FILE *disk, bsfs_super_block *sb) {
   uint32_t total_blocks = sb->total_blocks;
   uint8_t *bitmap = load_bitmap(disk, sb->block_bitmap_start);
   if (!bitmap)
@@ -119,8 +119,8 @@ uint32_t allocate_single_block(FILE *disk, superblock_t *sb) {
 
   uint32_t start = sb->data_block_start;
   for (uint32_t i = start; i < total_blocks; i++) {
-    if (is_bit_free(bitmap, i)) {
-      set_bit(bitmap, i);
+    if (bsfs_is_bit_free(bitmap, i)) {
+      bsfs_set_bit(bitmap, i);
 
       // ✅ Persist the updated bitmap to disk
       if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {
@@ -155,7 +155,7 @@ uint32_t allocate_single_block(FILE *disk, superblock_t *sb) {
  * @return 0 on success, or -1 if the block index is invalid or bitmap write
  * fails.
  */
-int deallocate_single_block(FILE *disk, superblock_t *sb,
+int deallocate_single_block(FILE *disk, bsfs_super_block *sb,
                             uint32_t block_index) {
   if (block_index >= sb->total_blocks) {
     fprintf(stderr, "Invalid block index for deallocation: %u\n", block_index);
@@ -168,7 +168,7 @@ int deallocate_single_block(FILE *disk, superblock_t *sb,
     return -1;
   }
 
-  clear_bit(bitmap, block_index);
+  bsfs_clear_bit(bitmap, block_index);
 
   if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {
     fprintf(stderr, "Failed to write updated bitmap to disk.\n");
@@ -199,7 +199,7 @@ int deallocate_single_block(FILE *disk, superblock_t *sb,
  * free.
  * @return 0 on success, -1 on failure to read or write the bitmap.
  */
-int deallocate_bspan(FILE *disk, superblock_t *sb, const bspan_t *bspan) {
+int deallocate_bspan(FILE *disk, bsfs_super_block *sb, const bspan_t *bspan) {
   // Load bitmap from disk
   uint8_t *bitmap = load_bitmap(disk, sb->block_bitmap_start);
   if (!bitmap) {
@@ -209,7 +209,7 @@ int deallocate_bspan(FILE *disk, superblock_t *sb, const bspan_t *bspan) {
 
   // Clear bits corresponding to the span
   for (uint32_t i = 0; i < bspan->length; i++) {
-    clear_bit(bitmap, bspan->disk_blk + i);
+    bsfs_clear_bit(bitmap, bspan->disk_blk + i);
   }
 
   // Persist updated bitmap to disk

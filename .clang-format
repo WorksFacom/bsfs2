@@ -4,3 +4,5 @@ AlignConsecutiveDeclarations: true
 AllowShortBlocksOnASingleLine: Never
 AllowAllParametersOfDeclarationOnNextLine: false
 ColumnLimit: 140
+IncludeBlocks: Merge
+SortIncludes: true

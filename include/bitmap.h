@@ -26,7 +26,10 @@
  */
 #ifndef BITMAP_OPERATIONS
 #define BITMAP_OPERATIONS
-#include "fs.h"
+
+#include "../bsfs.h"
+#include <linux/fs.h>
+#include <linux/types.h>
 
 /**
  * @brief Initializes a linked list of bitmap blocks on disk.
@@ -43,7 +46,7 @@
  *
  * @return 0 on success, or -1 if an error occurs during disk write operations.
  */
-int init_bitmap_list(FILE *disk, uint32_t start_block, uint32_t num_blocks);
+int init_bitmap_list(struct super_block *sb, __u32 start_block, __u32 num_blocks);
 
 /**
  * @brief Loads a bitmap from the specified file.
@@ -55,7 +58,7 @@ int init_bitmap_list(FILE *disk, uint32_t start_block, uint32_t num_blocks);
  * @param bitmap_start_block The block where the bitmap starts.
  * @return A pointer to the loaded bitmap in memory, or NULL if loading fails.
  */
-uint8_t *load_bitmap(FILE *disk, uint32_t bitmap_start_block);
+void load_bitmap(struct super_block *sb);
 
 /**
  * @brief Writes the bitmap to disk starting at the given block.
@@ -69,7 +72,7 @@ uint8_t *load_bitmap(FILE *disk, uint32_t bitmap_start_block);
  * @param bitmap_start_block Logical block number where the bitmap begins.
  * @return 0 on success, or -1 if an error occurs during reading or writing.
  */
-int write_bitmap(FILE *disk, uint8_t *bitmap, uint32_t bitmap_start_block);
+int write_bitmap(struct super_block *sb, __u8 *bitmap, __u32 bitmap_start_block);
 
 /**
  * @brief Checks if a given block is free in the bitmap.
@@ -81,7 +84,7 @@ int write_bitmap(FILE *disk, uint8_t *bitmap, uint32_t bitmap_start_block);
  * @param index The index of the block to check.
  * @return 1 if the block is free, 0 if the block is occupied.
  */
-uint32_t is_bit_free(uint8_t *bitmap, uint32_t index);
+__u32 bsfs_is_bit_free(__u8 *bitmap, __u32 index);
 
 /**
  * @brief Marks a block as allocated in the bitmap.
@@ -92,7 +95,7 @@ uint32_t is_bit_free(uint8_t *bitmap, uint32_t index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as allocated.
  */
-void set_bit(uint8_t *bitmap, uint32_t index);
+void bsfs_set_bit(__u8 *bitmap, __u32 index);
 
 /**
  * @brief Marks a block as free in the bitmap.
@@ -103,6 +106,6 @@ void set_bit(uint8_t *bitmap, uint32_t index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as free.
  */
-void clear_bit(uint8_t *bitmap, uint32_t index);
+void bsfs_clear_bit(__u8 *bitmap, __u32 index);
 
 #endif // BITMAP_OPERATIONS

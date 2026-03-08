@@ -13,7 +13,7 @@
 
 #include "dentry.h"
 #include "dir.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 #include "path_utils.h"
 #include "rec_entry.h"
@@ -53,7 +53,7 @@
  * @return 0 on success; -1 on failure (snapshot not found, invalid destination,
  *         insertion or linking errors).
  */
-int restore_file_by_id(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, uint32_t recovery_id,
+int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, uint32_t recovery_id,
                        const char *dest_dir_path, dir_t *cwd);
 
 #endif /* RESTORE_FILE_BSFS_H */

@@ -28,7 +28,7 @@
  * @param final_name Output parameter to receive the final name.
  * @return 0 on success, -1 on error (invalid path or not found).
  */
-int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
+int resolve_path(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd,
                  dir_t *parent_out, char *final_name) {
   if (!path || strlen(path) == 0)
     return -1;
@@ -44,7 +44,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
   btree_handle_t *inode_handle = btree_create_inode_handle();
   inode_handle->root_block = sb->inode_root;
 
-  inode_t temp_inode;
+  bsfs_inode temp_inode;
 
   // Start from root if absolute, or from cwd if relative
   if (path[0] == '/') {
@@ -125,8 +125,8 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
  * @param out_inode Output parameter to receive the found inode.
  * @return 0 on success, -1 if the file or directory is not found.
  */
-int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd,
-                inode_t *out_inode) {
+int lookup_file(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd,
+                bsfs_inode *out_inode) {
   if (!disk || !sb || !path || !cwd || !out_inode)
     return -1;
 
@@ -397,7 +397,7 @@ static int split_parent_basename(const char *normalized, char *parent_out,
  *
  * @return 0 on success; -1 on error.
  */
-int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path,
+int resolve_parent_dir(FILE *disk, bsfs_super_block *sb, const char *path,
                        dir_t *cwd, dir_t *out_parent, char *out_basename,
                        size_t basename_cap) {
   if (!disk || !sb || !path || !cwd || !out_parent || !out_basename ||
@@ -431,7 +431,7 @@ int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path,
        to pick up updated btree_root after splits */
     btree_handle_t *inode_handle = btree_create_inode_handle();
     inode_handle->root_block = sb->inode_root;
-    inode_t fresh;
+    bsfs_inode fresh;
     if (read_inode(disk, inode_handle, cwd->inode.inode_number, &fresh)) {
       memset(out_parent, 0, sizeof(*out_parent));
       out_parent->inode = fresh;
@@ -442,7 +442,7 @@ int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path,
     }
     free(inode_handle);
   } else {
-    inode_t pinode;
+    bsfs_inode pinode;
     if (lookup_file(disk, sb, parent_path, cwd, &pinode) != 0) {
       return -1;
     }

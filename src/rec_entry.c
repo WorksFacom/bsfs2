@@ -113,7 +113,7 @@ static void rec_tree_sync_next_id(FILE *disk, btree_handle_t *handle) {
  * @param rec_tree  Recovery B-tree handle used for traversals.
  * @return Next unused recovery_id value.
  */
-uint32_t get_next_rec_id(FILE *disk, superblock_t *sb,
+uint32_t get_next_rec_id(FILE *disk, bsfs_super_block *sb,
                          btree_handle_t *rec_tree) {
   if (!disk || !sb || !rec_tree)
     return s_next_recovery_id++;
@@ -150,7 +150,7 @@ uint32_t get_next_rec_id(FILE *disk, superblock_t *sb,
  * @param recovery_id Unique identifier of the recovery entry to remove.
  * @return 1 if the entry was found and removed; 0 otherwise.
  */
-int rec_tree_remove(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
+int rec_tree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree,
                     uint32_t recovery_id) {
   if (!disk || !sb || !rec_tree) {
     return 0;
@@ -216,7 +216,7 @@ int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id,
  * @param out  Output: initialized B-tree handle for the recovery tree.
  * @return 1 on success, 0 on failure.
  */
-int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
+int rec_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out) {
   if (!disk || !sb || !out)
     return 0;
 
@@ -297,7 +297,7 @@ int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out) {
  *                  will be set to a fresh ID before insertion.
  * @return 1 on success; 0 on failure (I/O error or duplicate key).
  */
-int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree,
+int rec_tree_add(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree,
                  rec_entry_t *entry) {
   if (!disk || !sb || !rec_tree || !entry)
     return 0;
@@ -442,7 +442,7 @@ int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree,
  * @param rec       The recovery entry describing the file to purge.
  * @return 0 on success; -1 on error.
  */
-int purge_file(FILE *disk, superblock_t *sb, btree_handle_t *data_tree,
+int purge_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *data_tree,
                btree_handle_t *rec_tree, const rec_entry_t *rec) {
   if (!disk || !sb || !data_tree || !rec_tree || !rec) {
     return -1;

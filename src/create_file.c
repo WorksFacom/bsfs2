@@ -23,7 +23,7 @@
 /**
  * @brief Creates an empty regular file at the given path.
  *
- * This function initializes a fresh @ref inode_t (size = 0, no data blocks),
+ * This function initializes a fresh @ref bsfs_inode (size = 0, no data blocks),
  * inserts it into the inode B-tree, and then adds a directory entry in the
  * parent directory resolved from @p path. It prevents duplicate names in the
  * parent directory and updates the parent's metadata (timestamps).
@@ -55,7 +55,7 @@
  *         inode insertion failure, duplicate name, or dir entry insertion
  * failure).
  */
-int create_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
+int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
                 const char *path, dir_t *cwd, uint16_t uid, uint16_t gid,
                 uint16_t permissions) {
   if (!disk || !sb || !inode_tree || !path || !cwd)
@@ -74,7 +74,7 @@ int create_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
 
   /* 2) Prepare a zero-sized inode for a regular file (no data blocks allocated)
    */
-  inode_t ino;
+  bsfs_inode ino;
   memset(&ino, 0, sizeof(ino));
 
   uint32_t new_ino = get_next_inode_number(disk, sb, inode_tree);

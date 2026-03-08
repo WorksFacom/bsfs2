@@ -15,7 +15,7 @@
 #include <stdio.h>
 
 #include "btree.h"
-#include "fs.h"
+#include "bsfs.h"
 
 /**
  * @brief Reads an inode from the inode B-tree.
@@ -23,10 +23,10 @@
  * @param disk Pointer to the open filesystem image.
  * @param handle Pointer to the B-tree handle for inode management.
  * @param inode_number The unique identifier of the inode to read.
- * @param out_inode Pointer to the inode_t structure to store the result.
+ * @param out_inode Pointer to the bsfs_inode structure to store the result.
  * @return 1 if the inode was found, 0 otherwise.
  */
-int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number, inode_t *out_inode);
+int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number, bsfs_inode *out_inode);
 
 /**
  * @brief Inserts a new inode into the inode B-tree.
@@ -36,7 +36,7 @@ int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number, inode_
  * @param handle Pointer to the B-tree handle for inode management.
  * @param inode Pointer to the inode to be inserted.
  */
-int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle, const inode_t *inode);
+int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode);
 
 /**
  * @brief Updates an existing inode in the B-tree.
@@ -46,7 +46,7 @@ int insert_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle, const ino
  * @param inode Pointer to the modified inode to be written back.
  * @return 1 if the inode was updated, 0 if not found.
  */
-int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode);
+int update_inode(FILE *disk, btree_handle_t *handle, const bsfs_inode *inode);
 
 /**
  * @brief Removes an inode from the inode B-tree.
@@ -60,7 +60,7 @@ int update_inode(FILE *disk, btree_handle_t *handle, const inode_t *inode);
  * @param inode_number The inode number to be removed.
  * @return 1 if the inode was found and removed, 0 otherwise.
  */
-int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle, uint32_t inode_number);
+int remove_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, uint32_t inode_number);
 
 /**
  * @brief Finds the next available inode number by scanning the inode B-tree.
@@ -74,7 +74,7 @@ int remove_inode(FILE *disk, superblock_t *sb, btree_handle_t *handle, uint32_t 
  * @param inode_tree Pointer to the B-tree handle for inodes.
  * @return The next available (unused) inode number.
  */
-uint32_t get_next_inode_number(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree);
+uint32_t get_next_inode_number(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree);
 
 /**
  * @brief Checks if an inode with the given number exists in the inode B-tree.
@@ -102,6 +102,6 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
  * @param out  Output: initialized inode B-tree handle (by value).
  * @return 1 on success, 0 on failure.
  */
-int inode_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out);
+int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
 
 #endif // INODE_OPERATIONS_H

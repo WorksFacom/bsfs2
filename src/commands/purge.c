@@ -100,7 +100,7 @@ static int cmp_deleted_at(const void *a, const void *b) {
  * @param id   Recovery entry ID to purge.
  * @return 0 on success; -1 if the entry is not found or on error.
  */
-static int purge_by_id(FILE *disk, superblock_t *sb, uint32_t id) {
+static int purge_by_id(FILE *disk, bsfs_super_block *sb, uint32_t id) {
   btree_handle_t rec_h;
   if (!rec_tree_init(disk, sb, &rec_h))
     return -1;
@@ -125,7 +125,7 @@ static int purge_by_id(FILE *disk, superblock_t *sb, uint32_t id) {
  * @param n    Number of oldest entries to purge.
  * @return 0 on success; -1 on failure to init recovery tree.
  */
-static int purge_oldest_n(FILE *disk, superblock_t *sb, size_t n) {
+static int purge_oldest_n(FILE *disk, bsfs_super_block *sb, size_t n) {
   btree_handle_t rec_h;
   if (!rec_tree_init(disk, sb, &rec_h))
     return -1;
@@ -173,7 +173,7 @@ static int purge_oldest_n(FILE *disk, superblock_t *sb, size_t n) {
  * @param sb   Loaded superblock.
  * @return 0 on success; -1 on failure to init recovery tree.
  */
-static int purge_older_than_30d(FILE *disk, superblock_t *sb) {
+static int purge_older_than_30d(FILE *disk, bsfs_super_block *sb) {
   btree_handle_t rec_h;
   if (!rec_tree_init(disk, sb, &rec_h))
     return -1;
@@ -215,7 +215,7 @@ static int purge_older_than_30d(FILE *disk, superblock_t *sb) {
  * @param sb   Loaded superblock.
  * @return 0 on success; -1 on failure to init recovery tree.
  */
-static int purge_expired(FILE *disk, superblock_t *sb) {
+static int purge_expired(FILE *disk, bsfs_super_block *sb) {
   btree_handle_t rec_h;
   if (!rec_tree_init(disk, sb, &rec_h))
     return -1;
@@ -259,7 +259,7 @@ static int purge_expired(FILE *disk, superblock_t *sb) {
  * @param args Tokenized arguments per usage above.
  * @return Always 1 to continue the browser loop.
  */
-int purge(FILE *disk, superblock_t *sb, char **args) {
+int purge(FILE *disk, bsfs_super_block *sb, char **args) {
   uint16_t uid = 0, gid = 0;
   get_identity_bsfs(&uid, &gid);
   if (uid != 0) {

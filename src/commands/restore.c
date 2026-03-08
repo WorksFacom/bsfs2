@@ -49,7 +49,7 @@ static void fmt_time(uint64_t ts, char *buf, size_t cap) {
  * args[2].
  * @return 1 to continue the browser loop.
  */
-int restore(FILE *disk, superblock_t *sb, char **args) {
+int restore(FILE *disk, bsfs_super_block *sb, char **args) {
   if (!args[1]) {
     printf("Usage: restore <recovery_id|name> [dest_dir]\n");
     return 1;

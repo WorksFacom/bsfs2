@@ -20,7 +20,7 @@
 #define BLOCK_OP_H
 
 #include "bitmap.h"
-#include "fs.h"
+#include "bsfs.h"
 
 /**
  * @brief Writes data to a single block.
@@ -66,5 +66,5 @@ int read_block(FILE *disk, uint32_t block_number, void *data, size_t size);
  * @param bitmap_size Unused parameter (reserved for future validation).
  * @return 0 on success, -1 on failure.
  */
-int free_block(FILE *disk, superblock_t *sb, uint32_t block_number, uint8_t *bitmap, uint32_t bitmap_size);
+int free_block(FILE *disk, bsfs_super_block *sb, uint32_t block_number, uint8_t *bitmap, uint32_t bitmap_size);
 #endif // !BLOCK_OP_H

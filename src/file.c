@@ -26,7 +26,7 @@ int open_file(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number,
   if (!disk || !inode_tree || !out_file)
     return -1;
 
-  inode_t inode;
+  bsfs_inode inode;
   if (!read_inode(disk, inode_tree, inode_number, &inode))
     return -1;
 
@@ -244,7 +244,7 @@ int read_file(FILE *disk, btree_handle_t *handle, file_t *file, uint8_t *buffer,
  * @param new_size The new desired file size in bytes.
  * @return 0 on success, -1 on error.
  */
-int truncate_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
+int truncate_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *bspan_tree,
                   file_t *f, uint32_t new_size) {
   if (new_size >= f->inode.file_size)
     return 0; // Nothing to truncate
@@ -353,7 +353,7 @@ int truncate_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
  * @param truncate 1 to truncate after position before writing, 0 to preserve.
  * @return Number of bytes written, or -1 on error.
  */
-int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree,
+int write_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *bspan_tree,
                file_t *f, const uint8_t *buffer, uint32_t size, int truncate) {
   if (size == 0)
     return 0;

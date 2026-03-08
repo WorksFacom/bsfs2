@@ -12,7 +12,7 @@
 #ifndef BSPAN_QUEUE_H
 #define BSPAN_QUEUE_H
 
-#include "fs.h"
+#include "bsfs.h"
 
 /**
  * @struct bspan_node

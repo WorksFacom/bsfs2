@@ -100,7 +100,7 @@ static int cmp_deleted_at(const void *a, const void *b) {
  * @param e           Recovery entry describing the deleted file.
  * @return Number of blocks freed by this purge operation.
  */
-static size_t purge_one(FILE *disk, superblock_t *sb,
+static size_t purge_one(FILE *disk, bsfs_super_block *sb,
                         btree_handle_t *rec_handle, const rec_entry_t *e) {
   size_t freed = 0;
 
@@ -157,7 +157,7 @@ static size_t purge_one(FILE *disk, superblock_t *sb,
  * @param now           Current timestamp used for retention checks.
  * @return Number of blocks actually freed (can be less than requested).
  */
-size_t rec_gc_purge_until(FILE *disk, superblock_t *sb, uint32_t needed_blocks,
+size_t rec_gc_purge_until(FILE *disk, bsfs_super_block *sb, uint32_t needed_blocks,
                           uint64_t now) {
   if (!disk || !sb || needed_blocks == 0)
     return 0;

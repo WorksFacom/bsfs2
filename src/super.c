@@ -17,13 +17,13 @@
  * @param sb Pointer to the superblock structure to write.
  * @return 0 on success, -1 on failure.
  */
-int write_superblock(FILE *disk, const superblock_t *sb) {
+int write_superblock(FILE *disk, const bsfs_super_block *sb) {
   if (fseek(disk, 0, SEEK_SET) != 0) {
     fprintf(stderr, "Failed to seek to superblock position.\n");
     return -1;
   }
 
-  if (fwrite(sb, sizeof(superblock_t), 1, disk) != 1) {
+  if (fwrite(sb, sizeof(bsfs_super_block), 1, disk) != 1) {
     fprintf(stderr, "Failed to write superblock.\n");
     return -1;
   }
@@ -39,13 +39,13 @@ int write_superblock(FILE *disk, const superblock_t *sb) {
  * @param sb Pointer to the superblock structure to populate.
  * @return 0 on success, -1 on failure.
  */
-int read_superblock(FILE *disk, superblock_t *sb) {
+int read_superblock(FILE *disk, bsfs_super_block *sb) {
   if (fseek(disk, 0, SEEK_SET) != 0) {
     fprintf(stderr, "Failed to seek to superblock position.\n");
     return -1;
   }
 
-  if (fread(sb, sizeof(superblock_t), 1, disk) != 1) {
+  if (fread(sb, sizeof(bsfs_super_block), 1, disk) != 1) {
     fprintf(stderr, "Failed to read superblock.\n");
     return -1;
   }

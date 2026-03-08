@@ -19,7 +19,7 @@
 #include <stdio.h>
 
 #include "btree.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "super.h"
 
 /**
@@ -35,7 +35,7 @@
  * @param out  Output: initialized B-tree handle for the recovery tree.
  * @return 1 on success, 0 on failure.
  */
-int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out);
+int rec_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
 
 /**
  * @brief Insert a recovery entry into the Recovery B-tree.
@@ -58,7 +58,7 @@ int rec_tree_init(FILE *disk, superblock_t *sb, btree_handle_t *out);
  *                  will be set to a fresh ID before insertion.
  * @return 1 on success; 0 on failure (I/O error or duplicate key).
  */
-int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree, rec_entry_t *entry);
+int rec_tree_add(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, rec_entry_t *entry);
 /**
  * @brief Fetch the next available recovery_id in the Recovery tree.
  *
@@ -70,7 +70,7 @@ int rec_tree_add(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree, rec_ent
  * @param rec_tree  Recovery B-tree handle used for traversals.
  * @return Next unused recovery_id.
  */
-uint32_t get_next_rec_id(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree);
+uint32_t get_next_rec_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree);
 
 /**
  * @brief Remove a recovery entry from the Recovery B-tree by ID.
@@ -97,7 +97,7 @@ uint32_t get_next_rec_id(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree)
  * @param recovery_id Unique identifier of the recovery entry to remove.
  * @return 1 if the entry was found and removed; 0 otherwise.
  */
-int rec_tree_remove(FILE *disk, superblock_t *sb, btree_handle_t *rec_tree, uint32_t recovery_id);
+int rec_tree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, uint32_t recovery_id);
 
 /**
  * @brief Look up a recovery entry in the Recovery B-tree by ID.
@@ -161,6 +161,6 @@ int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree, const char *name
  * @param rec       The recovery entry describing the file to purge.
  * @return 0 on success; -1 on error.
  */
-int purge_file(FILE *disk, superblock_t *sb, btree_handle_t *data_tree, btree_handle_t *rec_tree, const rec_entry_t *rec);
+int purge_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *data_tree, btree_handle_t *rec_tree, const rec_entry_t *rec);
 
 #endif /* REC_ENTRY_OPERATIONS_BSFS_H */

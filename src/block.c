@@ -123,7 +123,7 @@ int read_block(FILE *disk, uint32_t block_number, void *data, size_t size) {
  * @param bitmap_size Unused parameter (reserved for future validation).
  * @return 0 on success, -1 on failure.
  */
-int free_block(FILE *disk, superblock_t *sb, uint32_t block_number,
+int free_block(FILE *disk, bsfs_super_block *sb, uint32_t block_number,
                uint8_t *bitmap, uint32_t bitmap_size) {
   (void)bitmap_size; // unused parameter
   if (!disk || !bitmap) {
@@ -132,7 +132,7 @@ int free_block(FILE *disk, superblock_t *sb, uint32_t block_number,
   }
 
   // Mark the block as free in the bitmap
-  clear_bit(bitmap, block_number);
+  bsfs_clear_bit(bitmap, block_number);
 
   // Save the updated bitmap back to the disk
   if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {

@@ -37,7 +37,7 @@
  * it).
  * @return 0 on success; -1 on error.
  */
-int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
+int remove_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
                 btree_handle_t *rec_tree, const char *path, dir_t *cwd,
                 uint16_t uid) {
   if (!disk || !sb || !inode_tree || !rec_tree || !path || !cwd)
@@ -52,7 +52,7 @@ int remove_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
   }
 
   /* 2) Look up the file inode */
-  inode_t target_inode;
+  bsfs_inode target_inode;
   if (lookup_file(disk, sb, path, cwd, &target_inode) != 0) {
     return -1;
   }

@@ -11,7 +11,7 @@
 #define PATH_UTILS_BSFS_H
 
 #include "dentry.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 
 /**
@@ -31,7 +31,7 @@
  * @param final_name Output parameter to receive the final name.
  * @return 0 on success, -1 on error (invalid path or not found).
  */
-int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd, dir_t *parent_out, char *final_name);
+int resolve_path(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd, dir_t *parent_out, char *final_name);
 
 /**
  * @brief Looks up a file or directory by path and loads its inode.
@@ -47,7 +47,7 @@ int resolve_path(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd, dir
  * @param out_inode Output parameter to receive the found inode.
  * @return 0 on success, -1 if the file or directory is not found.
  */
-int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd, inode_t *out_inode);
+int lookup_file(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd, bsfs_inode *out_inode);
 
 /**
  * @brief Resolve the parent directory and basename from a path.
@@ -88,7 +88,7 @@ int lookup_file(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd, inod
  *
  * @return 0 on success; -1 on error.
  */
-int resolve_parent_dir(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd, dir_t *out_parent, char *out_basename,
+int resolve_parent_dir(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd, dir_t *out_parent, char *out_basename,
                        size_t basename_cap);
 
 #endif // PATH_UTILS_BSFS_H

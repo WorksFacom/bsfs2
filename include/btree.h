@@ -1,5 +1,5 @@
 /**
- * @file btree_bsfs.h
+ * @file btree.h
  * @brief Public interface for the B-tree implementation in the BSFS filesystem.
  *
  * This header defines the core structures and function prototypes for handling
@@ -14,123 +14,9 @@
 #ifndef BTREE_BSFS_H
 #define BTREE_BSFS_H
 
-#include <stdint.h>
-#include <stdio.h>
-
-#include "alloc.h"
-#include "block.h"
-#include "fs.h"
-
-/**
- * @enum btree_data_type_t
- * @brief Represents the type of data stored in the B-tree.
- *
- * This enumeration defines the supported logical types of data that can be
- * stored in B-trees managed by the BSFS filesystem. Each type corresponds to a
- * different kind of entry managed in the system.
- */
-typedef enum { BTREE_TYPE_INODE, BTREE_TYPE_BSPAN, BTREE_TYPE_RECOVERY, BTREE_TYPE_DIR_ENTRY } btree_data_type_t;
-
-/**
- * @typedef key_fn
- * @brief Function pointer type for extracting a key from an entry.
- *
- * A function of this type takes a pointer to an entry and returns a unique
- * 32-bit key used to index and compare entries within the B-tree.
- */
-typedef uint32_t (*key_fn)(const void *entry);
-
-/**
- * @typedef compare_fn
- * @brief Function pointer type for comparing two entries.
- *
- * A comparison function used to determine the ordering of two entries in
- * the B-tree. It returns a negative value if a < b, zero if a == b,
- * and a positive value if a > b.
- */
-typedef int (*compare_fn)(const void *a, const void *b);
-
-/**
- * @struct btree_node_t
- * @brief Represents a single node in the B-tree stored on disk.
- *
- * This structure holds metadata and content for a B-tree node.
- * It supports both leaf and internal nodes, with a flexible entry format
- * configured via the B-tree handle (`btree_handle_t`).
- *
- * - If `is_leaf` is 1, the node does not have child pointers.
- * - If `is_leaf` is 0, the `children` array contains block numbers pointing to
- * child nodes.
- *
- * The number of entries and children is determined by the minimum degree `t`:
- * - Maximum entries: `2t - 1`
- * - Maximum children: `2t`
- */
-typedef struct {
-  /**
-   * Flag indicating whether the node is a leaf (1) or internal node (0).
-   */
-  uint8_t is_leaf;
-
-  /**
-   * Number of valid entries currently stored in the node.
-   */
-  uint32_t num_entries;
-
-  /**
-   * Pointer to the array of entries (opaque key/data pairs).
-   * The format and size of each entry are defined in the B-tree handle.
-   */
-  void *entries;
-
-  /**
-   * Pointer to the array of child block numbers (only used if the node is
-   * internal). The array can hold up to `2t` block addresses.
-   */
-  uint32_t *children;
-} btree_node_t;
-
-/**
- * @struct btree_handle_t
- * @brief Describes the configuration and root reference for a B-tree instance.
- *
- * This structure holds all metadata and function pointers necessary for
- * managing a particular instance of a B-tree. It allows the B-tree
- * implementation to be generic and operate on arbitrary data types, defined via
- * the handlers below.
- *
- */
-typedef struct {
-  /**
-   * Type of data this B-tree stores.
-   */
-  btree_data_type_t type;
-
-  /**
-   * Entry size: Size of each element (in bytes).
-   */
-  size_t entry_size;
-
-  /**
-   * Function to compare two entries.
-   */
-  compare_fn cmp;
-
-  /**
-   * Function to extract the key from an entry.
-   */
-  key_fn get_key;
-
-  /**
-   * Block number of the root node on disk.
-   */
-  uint32_t root_block;
-
-  /**
-   * Minimum degree `t` used to size the tree.
-   */
-  int min_degree;
-} btree_handle_t;
+#include "../bsfs.h"
+#include <linux/fs.h>
+#include <linux/types.h>
 
 /**
  * @brief Computes the djb2 hash of a given filename.
@@ -141,7 +27,7 @@ typedef struct {
  * @param name The null-terminated string (filename) to be hashed.
  * @return A 32-bit unsigned integer hash value.
  */
-uint32_t hash_filename(const char *name);
+__u32 hash_filename(const char *name);
 
 /**
  * @brief Creates a generic B-tree handle for managing structured data.
@@ -165,15 +51,15 @@ uint32_t hash_filename(const char *name);
  * @param get_key A function to extract the key from an entry.
  * @return Pointer to a newly allocated and configured `btree_handle_t`.
  */
-btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, compare_fn cmp, key_fn get_key);
+btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key);
 
 /**
  * @brief Creates a B-tree handle specifically for managing inode entries.
  *
  * This function initializes and returns a pointer to a `btree_handle_t`
- * configured to operate on entries of type `inode_t`. It sets the appropriate:
+ * configured to operate on entries of type `bsfs_inode`. It sets the appropriate:
  * - Data type identifier (`BTREE_TYPE_INODE`)
- * - Entry size (based on `sizeof(inode_t)`)
+ * - Entry size (based on `sizeof(bsfs_inode)`)
  * - Key extraction function (`get_inode_key`)
  * - Comparison function (`compare_inode`)
  *
@@ -211,7 +97,7 @@ btree_handle_t *btree_create_bspan_handle(void);
  * @return A pointer to a newly allocated B-tree handle configured for
  *         directory entries.
  */
-btree_handle_t *btree_create_dir_entry_handle();
+btree_handle_t *btree_create_dir_entry_handle(void);
 
 /**
  * @brief Creates a B-tree handle for managing recovery entries.
@@ -251,7 +137,7 @@ btree_handle_t *btree_create_rec_entry_handle(void);
  * @param entry Pointer to the entry to be inserted (must match the tree's entry
  * type).
  */
-int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle, void *entry);
+int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry);
 
 /**
  * @brief Searches for a key in the B-tree and retrieves the associated entry.
@@ -273,7 +159,7 @@ int btree_insert(FILE *disk, superblock_t *sb, btree_handle_t *handle, void *ent
  * copied.
  * @return int 1 if the key was found, 0 otherwise.
  */
-int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block, uint32_t key, void *output);
+int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void *output);
 
 /**
  * @brief Searches for an entry in the B-tree using the handle's compare
@@ -290,7 +176,7 @@ int btree_search(FILE *disk, btree_handle_t *handle, uint32_t node_block, uint32
  * @param output Pointer where the found entry will be copied if present.
  * @return int 1 if found, 0 otherwise.
  */
-int btree_search_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block, const void *needle, void *output);
+int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, void *output);
 
 /**
  * @brief Updates an existing entry in the B-tree with new data.
@@ -312,7 +198,7 @@ int btree_search_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block, 
  * valid key).
  * @return int 1 if the entry was found and updated, 0 if the key was not found.
  */
-int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block, void *new_entry);
+int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry);
 
 /**
  * @brief Removes an entry from the B-tree based on its key.
@@ -331,7 +217,7 @@ int btree_update(FILE *disk, btree_handle_t *handle, uint32_t node_block, void *
  * @param key The key of the entry to remove from the tree.
  * @return int 1 if the key was found and removed, 0 if the key was not found.
  */
-int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle, uint32_t key);
+int btree_remove(struct super_block *sb, btree_handle_t *handle, __u32 key);
 
 /**
  * @brief Remove an entry using the handle's comparator (exact-match).
@@ -340,7 +226,7 @@ int btree_remove(FILE *disk, superblock_t *sb, btree_handle_t *handle, uint32_t 
  * directory entries ordered by hash+name). Returns 1 if the entry was
  * found and removed, 0 if not found, -1 on error.
  */
-int btree_remove_entry(FILE *disk, superblock_t *sb, btree_handle_t *handle, const void *entry);
+int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const void *entry);
 
 /**
  * @brief Writes a B-tree node to disk.
@@ -354,7 +240,7 @@ int btree_remove_entry(FILE *disk, superblock_t *sb, btree_handle_t *handle, con
  * @param node Pointer to the in-memory B-tree node structure.
  * @return 0 on success, -1 on failure.
  */
-int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block, btree_node_t *node);
+int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block, btree_node_t *node);
 
 /**
  * @brief Reads and deserializes a B-tree node from disk.
@@ -377,7 +263,7 @@ int btree_write_node(FILE *disk, btree_handle_t *handle, uint32_t block, btree_n
  * @param block The disk block number to read from.
  * @return Pointer to a newly allocated and populated `btree_node_t` structure.
  */
-btree_node_t *btree_read_node(FILE *disk, btree_handle_t *handle, uint32_t block);
+btree_node_t *btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block);
 
 /**
  * @brief Frees the memory allocated for a B-tree node.
@@ -409,6 +295,6 @@ void btree_free_node(btree_node_t *node);
  * @param node_block Block number of the current node.
  * @return 0 on success, -1 on failure (e.g., deallocation errors).
  */
-int btree_deallocate_all(FILE *disk, superblock_t *sb, btree_handle_t *handle, uint32_t node_block);
+int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block);
 
 #endif // BTREE_BSFS_H

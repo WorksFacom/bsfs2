@@ -30,12 +30,12 @@
  * @param out_dir       Output: resolved destination directory descriptor.
  * @return 0 on success; -1 on failure.
  */
-static int resolve_destination_dir(FILE *disk, superblock_t *sb,
+static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb,
                                    btree_handle_t *inode_tree,
                                    const rec_entry_t *rec,
                                    const char *dest_dir_path, dir_t *cwd,
                                    dir_t *out_dir) {
-  inode_t dir_inode;
+  bsfs_inode dir_inode;
 
   if (dest_dir_path && dest_dir_path[0] != '\0') {
     if (lookup_file(disk, sb, dest_dir_path, cwd, &dir_inode) != 0)
@@ -82,7 +82,7 @@ static int resolve_destination_dir(FILE *disk, superblock_t *sb,
  * @param out_cap      Capacity of @p out_name.
  * @return 0 if a unique name was produced; -1 on error.
  */
-static int make_unique_name(FILE *disk, superblock_t *sb, dir_t *dest_dir,
+static int make_unique_name(FILE *disk, bsfs_super_block *sb, dir_t *dest_dir,
                             const char *desired, uint32_t recovery_id,
                             char *out_name, size_t out_cap) {
   if (!desired || !*desired || !out_name || out_cap == 0)
@@ -137,10 +137,10 @@ static int make_unique_name(FILE *disk, superblock_t *sb, dir_t *dest_dir,
  * @param out_inode   Output: constructed inode.
  * @return 0 on success; -1 on failure.
  */
-static int build_inode_from_snapshot(FILE *disk, superblock_t *sb,
+static int build_inode_from_snapshot(FILE *disk, bsfs_super_block *sb,
                                      btree_handle_t *inode_tree,
                                      const rec_entry_t *rec,
-                                     inode_t *out_inode) {
+                                     bsfs_inode *out_inode) {
   if (!disk || !sb || !inode_tree || !rec || !out_inode)
     return -1;
 
@@ -208,7 +208,7 @@ static int build_inode_from_snapshot(FILE *disk, superblock_t *sb,
  * @return 0 on success; -1 on failure (snapshot not found, invalid destination,
  *         insertion or linking errors).
  */
-int restore_file_by_id(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
+int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
                        btree_handle_t *rec_tree, uint32_t recovery_id,
                        const char *dest_dir_path, dir_t *cwd) {
   if (!disk || !sb || !inode_tree || !rec_tree)
@@ -232,7 +232,7 @@ int restore_file_by_id(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree,
     return -1;
 
   // 4) Build inode from snapshot (choose inode number if needed)
-  inode_t inode;
+  bsfs_inode inode;
   if (build_inode_from_snapshot(disk, sb, inode_tree, &rec, &inode) != 0)
     return -1;
 

@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#include "fs.h"
+#include "bsfs.h"
 
 /* POSIX-style permission bits (octal) */
 #define S_IXOTH 0001  /**< Execute/search permission for others. */
@@ -40,7 +40,7 @@ extern "C" {
  * @param gid Caller group id.
  * @return 3-bit mask (r=4, w=2, x=1) for the caller class; root returns 7.
  */
-uint16_t bsfs_effective_mode(const inode_t *ino, uint16_t uid, uint16_t gid);
+uint16_t bsfs_effective_mode(const bsfs_inode *ino, uint16_t uid, uint16_t gid);
 
 /** Root check */
 static inline int bsfs_is_root(uint16_t uid) {
@@ -54,7 +54,7 @@ static inline int bsfs_is_root(uint16_t uid) {
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_read_file(const inode_t *file, uint16_t uid, uint16_t gid);
+int bsfs_can_read_file(const bsfs_inode *file, uint16_t uid, uint16_t gid);
 /**
  * @brief Check if caller can write to a regular file.
  * @param file Target inode.
@@ -62,7 +62,7 @@ int bsfs_can_read_file(const inode_t *file, uint16_t uid, uint16_t gid);
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_write_file(const inode_t *file, uint16_t uid, uint16_t gid);
+int bsfs_can_write_file(const bsfs_inode *file, uint16_t uid, uint16_t gid);
 /**
  * @brief Check if caller can execute a regular file.
  * @param file Target inode.
@@ -70,7 +70,7 @@ int bsfs_can_write_file(const inode_t *file, uint16_t uid, uint16_t gid);
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_exec_file(const inode_t *file, uint16_t uid, uint16_t gid);
+int bsfs_can_exec_file(const bsfs_inode *file, uint16_t uid, uint16_t gid);
 
 /**
  * @brief Check if caller can traverse (search) a directory.
@@ -79,7 +79,7 @@ int bsfs_can_exec_file(const inode_t *file, uint16_t uid, uint16_t gid);
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_traverse_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
+int bsfs_can_traverse_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid);
 /**
  * @brief Check if caller can list entries in a directory.
  * @param dir Directory inode.
@@ -87,7 +87,7 @@ int bsfs_can_traverse_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_list_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
+int bsfs_can_list_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid);
 /**
  * @brief Check if caller can modify entries within a directory (w+x).
  * @param dir Directory inode.
@@ -95,7 +95,7 @@ int bsfs_can_list_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
  * @param gid Caller group id.
  * @return 1 if allowed; 0 otherwise.
  */
-int bsfs_can_modify_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
+int bsfs_can_modify_dir(const bsfs_inode *dir, uint16_t uid, uint16_t gid);
 
 /**
  * @brief Check unlink/rename permission in a sticky directory.
@@ -109,7 +109,7 @@ int bsfs_can_modify_dir(const inode_t *dir, uint16_t uid, uint16_t gid);
  * @param gid   Caller group id (unused here).
  * @return 1 if allowed, 0 otherwise.
  */
-int bsfs_can_unlink_in_sticky(const inode_t *dir, const inode_t *entry, uint16_t uid, uint16_t gid);
+int bsfs_can_unlink_in_sticky(const bsfs_inode *dir, const bsfs_inode *entry, uint16_t uid, uint16_t gid);
 
 /** Apply umask to a mode when creating inode or directory. */
 static inline uint16_t bsfs_apply_umask(uint16_t mode, uint16_t umask) {

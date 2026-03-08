@@ -17,14 +17,14 @@
 #define FILE_CREATE_BSFS_H
 
 #include "dir.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 #include "path_utils.h"
 
 /**
  * @brief Creates an empty regular file at the given path.
  *
- * This function initializes a fresh @ref inode_t (size = 0, no data blocks),
+ * This function initializes a fresh @ref bsfs_inode (size = 0, no data blocks),
  * inserts it into the inode B-tree, and then adds a directory entry in the
  * parent directory resolved from @p path. It prevents duplicate names in the
  * parent directory and updates the parent's metadata (timestamps).
@@ -56,7 +56,7 @@
  *         inode insertion failure, duplicate name, or dir entry insertion
  * failure).
  */
-int create_file(FILE *disk, superblock_t *sb, btree_handle_t *inode_tree, const char *path, dir_t *cwd, uint16_t uid, uint16_t gid,
+int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, const char *path, dir_t *cwd, uint16_t uid, uint16_t gid,
                 uint16_t permissions);
 
 #endif // FILE_CREATE_BSFS_H

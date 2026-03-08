@@ -20,7 +20,7 @@
 #include "btree.h"
 #include "dentry.h"
 #include "dir.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 #include "super.h"
 
@@ -107,8 +107,8 @@ int read_file(FILE *disk, btree_handle_t *handle, file_t *file, uint8_t *buffer,
  * @param truncate 1 to truncate after position before writing, 0 to preserve.
  * @return Number of bytes written, or -1 on error.
  */
-int write_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree, file_t *f, const uint8_t *buffer, uint32_t size, int truncate);
+int write_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *bspan_tree, file_t *f, const uint8_t *buffer, uint32_t size, int truncate);
 
-int truncate_file(FILE *disk, superblock_t *sb, btree_handle_t *bspan_tree, file_t *f, uint32_t new_size);
+int truncate_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *bspan_tree, file_t *f, uint32_t new_size);
 
 #endif // FILE_OPERATIONS_BSFS_H

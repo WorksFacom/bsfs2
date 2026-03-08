@@ -11,7 +11,7 @@
 #define DIRECTORY_OPERATIONS_BSFS_H
 
 #include "dentry.h"
-#include "fs.h"
+#include "bsfs.h"
 #include "inode.h"
 #include "path_utils.h"
 
@@ -27,7 +27,7 @@
  * @param cwd Current working directory (for resolving relative paths).
  * @return 0 on success, -1 on error.
  */
-int create_directory(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd);
+int create_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd);
 
 /**
  * @brief Deletes a directory at the given path, if it is empty.
@@ -41,7 +41,7 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd)
  * @param cwd Current working directory (for resolving relative paths).
  * @return 0 on success, -1 if the directory is not empty or cannot be removed.
  */
-int remove_directory(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd);
+int remove_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd);
 
 /**
  * @brief Moves or renames a directory entry from one directory to another.
@@ -59,7 +59,7 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path, dir_t *cwd)
  * src_name).
  * @return 0 on success, -1 on failure.
  */
-int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name);
+int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name);
 
 /**
  * @brief Initialize and persist the root directory ("/") on a fresh image.
@@ -72,6 +72,6 @@ int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir, const char *src
  * @param sb   Loaded superblock (root inode and tree roots may be updated).
  * @return 0 on success; -1 on error.
  */
-int create_root_directory(FILE *disk, superblock_t *sb);
+int create_root_directory(FILE *disk, bsfs_super_block *sb);
 
 #endif // DIRECTORY_OPERATIONS_BSFS_H

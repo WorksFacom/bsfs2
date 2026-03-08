@@ -21,7 +21,7 @@
  * @param cwd Current working directory (for resolving relative paths).
  * @return 0 on success, -1 on error.
  */
-int create_directory(FILE *disk, superblock_t *sb, const char *path,
+int create_directory(FILE *disk, bsfs_super_block *sb, const char *path,
                      dir_t *cwd) {
   dir_t parent;
   char name[MAX_FILENAME];
@@ -49,8 +49,8 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
     return -1;
   }
 
-  inode_t new_inode;
-  memset(&new_inode, 0, sizeof(inode_t));
+  bsfs_inode new_inode;
+  memset(&new_inode, 0, sizeof(bsfs_inode));
   new_inode.inode_number = new_inode_number;
   new_inode.file_type = FILE_TYPE_DIR;
   new_inode.permissions = 0755;
@@ -129,7 +129,7 @@ int create_directory(FILE *disk, superblock_t *sb, const char *path,
  * @param cwd Current working directory (for resolving relative paths).
  * @return 0 on success, -1 if the directory is not empty or cannot be removed.
  */
-int remove_directory(FILE *disk, superblock_t *sb, const char *path,
+int remove_directory(FILE *disk, bsfs_super_block *sb, const char *path,
                      dir_t *cwd) {
   dir_t parent;
   char name[MAX_FILENAME];
@@ -155,7 +155,7 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path,
   // 3. Load inode
   btree_handle_t *inode_tree = btree_create_inode_handle();
   inode_tree->root_block = sb->inode_root;
-  inode_t dir_inode;
+  bsfs_inode dir_inode;
   if (!read_inode(disk, inode_tree, entry.inode_number, &dir_inode)) {
     fprintf(stderr, "Failed to read directory inode.\n");
     free(inode_tree);
@@ -221,7 +221,7 @@ int remove_directory(FILE *disk, superblock_t *sb, const char *path,
  * src_name).
  * @return 0 on success, -1 on failure.
  */
-int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
+int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir,
                    const char *src_name, dir_t *dest_dir,
                    const char *dest_name) {
   // 1. Lookup entry in source
@@ -263,11 +263,11 @@ int move_dir_entry(FILE *disk, superblock_t *sb, dir_t *src_dir,
  * @param sb   Loaded superblock (root inode and tree roots may be updated).
  * @return 0 on success; -1 on error.
  */
-int create_root_directory(FILE *disk, superblock_t *sb) {
+int create_root_directory(FILE *disk, bsfs_super_block *sb) {
   uint32_t root_inode_number = sb->root_inode;
 
-  inode_t root_inode;
-  memset(&root_inode, 0, sizeof(inode_t));
+  bsfs_inode root_inode;
+  memset(&root_inode, 0, sizeof(bsfs_inode));
   root_inode.inode_number = root_inode_number;
   root_inode.file_type = FILE_TYPE_DIR; // DIRECTORY
   root_inode.links_count = 1;

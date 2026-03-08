@@ -19,10 +19,18 @@
  */
 
 #include <inttypes.h>
-#include <linux/fs.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include <unistd.h>
+
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <unistd.h>
+
+#include <linux/fs.h>
 
 // linux/fs.h defines BLOCK_SIZE as 1024; ensure our filesystem's BLOCK_SIZE
 // prevails
@@ -31,8 +39,8 @@
 #endif
 
 #include "../include/bitmap.h"
+#include "../include/bsfs.h"
 #include "../include/btree.h"
-#include "../include/fs.h"
 #include "../include/inode.h"
 #include "../include/mkfs.h"
 #include "../include/super.h"
@@ -87,7 +95,7 @@ static uint32_t compute_bitmap_blocks(uint64_t total_blocks) {
  * @param sb   Pointer to an initialized superblock with bitmap positions.
  * @return 0 on success; -1 on failure to load or write the bitmap.
  */
-static int reserve_initial_blocks(FILE *disk, const superblock_t *sb) {
+static int reserve_initial_blocks(FILE *disk, const bsfs_super_block *sb) {
   // Mark as in-use: block 0 (superblock) and the whole bitmap region
   uint8_t *bitmap = load_bitmap(disk, sb->block_bitmap_start);
   if (!bitmap) {
@@ -100,7 +108,7 @@ static int reserve_initial_blocks(FILE *disk, const superblock_t *sb) {
     limit = sb->total_blocks;
 
   for (uint32_t i = 0; i < limit; i++) {
-    set_bit(bitmap, i);
+    bsfs_set_bit(bitmap, i);
   }
 
   if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {
@@ -204,7 +212,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     return -1;
   }
 
-  superblock_t sb;
+  bsfs_super_block sb;
   memset(&sb, 0, sizeof(sb));
   sb.magic_number       = MAGIC_NUMBER;
   sb.block_size         = BLOCK_SIZE;
@@ -268,7 +276,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     return -1;
   }
 
-  inode_t root;
+  bsfs_inode root;
   memset(&root, 0, sizeof(root));
   root.inode_number = sb.root_inode;
   root.file_size    = 0;
