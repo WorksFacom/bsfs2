@@ -13,12 +13,12 @@
 #define API_BSFS_H
 
 // Centralize lower-level dependencies needed by browser commands
-#include "btree_bsfs.h"                 // btree_handle_t, hash helpers
-#include "dir_entry_operations_bsfs.h"  // dir_t, dir_entry_t
-#include "filesystem_bsfs.h"            // superblock_t, inode_t, file_t
-#include "rec_entry_operations_bsfs.h"  // recovery tree helpers/APIs
-#include "superblock_operations_bsfs.h" // read/write superblock
-#include "permissions_bsfs.h"           // DAC helpers
+#include "btree.h"       // btree_handle_t, hash helpers
+#include "dentry.h"      // dir_t, dir_entry_t
+#include "fs.h"          // superblock_t, inode_t, file_t
+#include "permissions.h" // DAC helpers
+#include "rec_entry.h"   // recovery tree helpers/APIs
+#include "super.h"       // read/write superblock
 
 /**
  * @brief Open a file by path and load its inode into a file_t.
@@ -58,40 +58,6 @@ int close_bsfs(file_t *file);
 int seek_bsfs(file_t *file, uint32_t pos);
 
 /**
- * @brief Read up to @p length bytes from the current file position.
- *
- * Performs a permission check (read) for the current session identity and
- * reads data spanning direct and indirect block spans. Advances the file
- * position by the number of bytes read.
- *
- * @param disk   Open filesystem image.
- * @param sb     Loaded superblock.
- * @param file   Open file descriptor.
- * @param data   Output buffer.
- * @param length Maximum number of bytes to read.
- * @return Number of bytes read (0 on EOF or error).
- */
-size_t read_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
-                 uint32_t length);
-
-/**
- * @brief Write @p length bytes from @p data at the current file position.
- *
- * Allocates block spans as needed, writes the data, advances the file
- * position, and persists the inode metadata update in the inode tree.
- * Requires write permission for the current session identity.
- *
- * @param disk   Open filesystem image.
- * @param sb     Loaded superblock (used for allocation and inode updates).
- * @param file   Open file descriptor.
- * @param data   Input buffer containing bytes to write.
- * @param length Number of bytes to write.
- * @return Number of bytes written (0 on error).
- */
-size_t write_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
-                  uint32_t length);
-
-/**
  * @brief Truncate an open file to @p new_size bytes.
  *
  * Frees any blocks beyond @p new_size and updates the inode metadata.
@@ -102,8 +68,7 @@ size_t write_bsfs(FILE *disk, superblock_t *sb, file_t *file, void *data,
  * @param new_size Target logical size in bytes.
  * @return 0 on success; -1 on error.
  */
-int truncate_file_bsfs(FILE *disk, superblock_t *sb, file_t *file,
-                       uint32_t new_size);
+int truncate_file_bsfs(FILE *disk, superblock_t *sb, file_t *file, uint32_t new_size);
 
 /**
  * @brief Overwrite an entire file with the provided buffer.
@@ -118,8 +83,7 @@ int truncate_file_bsfs(FILE *disk, superblock_t *sb, file_t *file,
  * @param length Number of bytes to write.
  * @return Number of bytes written (0 on failure).
  */
-size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path,
-                      const void *data, uint32_t length);
+size_t overwrite_bsfs(FILE *disk, superblock_t *sb, const char *path, const void *data, uint32_t length);
 
 /**
  * @brief Create an empty regular file at @p path.
@@ -161,8 +125,7 @@ int remove_file_bsfs(FILE *disk, superblock_t *sb, const char *path);
  * @param path Target file path.
  * @return 0 on success; -1 on error.
  */
-int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb,
-                                 const char *path);
+int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb, const char *path);
 
 /**
  * @brief Move or rename an entry from @p old_path to @p new_path.
@@ -177,8 +140,7 @@ int delete_file_permanently_bsfs(FILE *disk, superblock_t *sb,
  * @param new_path  Destination path (may include a new basename).
  * @return 0 on success; -1 on error.
  */
-int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path,
-              const char *new_path);
+int move_bsfs(FILE *disk, superblock_t *sb, const char *old_path, const char *new_path);
 
 /**
  * @brief Resolve @p path and return its inode metadata.
@@ -276,8 +238,7 @@ int chdir_bsfs(FILE *disk, superblock_t *sb, const char *path);
  * @param buffer_size  Capacity of @p path_buffer (bytes).
  * @return 0 on success; -1 on invalid arguments.
  */
-int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer,
-                size_t buffer_size);
+int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer, size_t buffer_size);
 
 /**
  * @brief Restore a deleted file by recovery ID.
@@ -292,8 +253,7 @@ int getcwd_bsfs(FILE *disk, superblock_t *sb, char *path_buffer,
  * @param dest_dir     Optional destination directory path.
  * @return 0 on success; -1 on error or insufficient permission.
  */
-int restore_bsfs(FILE *disk, superblock_t *sb, uint32_t recovery_id,
-                 const char *dest_dir);
+int restore_bsfs(FILE *disk, superblock_t *sb, uint32_t recovery_id, const char *dest_dir);
 
 /**
  * @brief Set the current session identity (uid,gid) for permission checks.

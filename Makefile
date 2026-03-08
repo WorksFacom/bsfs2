@@ -3,15 +3,15 @@ bsfs-objs := src/bsfs.o
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-OPERATION_FILES = $(shell find src/operations -type f -name '*.c')
+SRC_FILES = $(shell find src -type f -name '*.c')
 
 MKFS = mkfs.bsfs
 
 all: $(MKFS)
 	make -C $(KDIR) M=$(PWD) modules
 
-$(MKFS): src/mkfs.c
-	$(CC) -Wall -o $@ $< -Isrc/include $(OPERATION_FILES)
+$(MKFS): tools/mkfs.c
+	$(CC) -Wall -o $@ $< -Isrc/include $(SRC_FILES)
 
 clean:
 	make -C $(KDIR) M=$(PWD) clean
