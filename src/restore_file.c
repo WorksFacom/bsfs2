@@ -11,30 +11,8 @@
 
 #include "../include/restore_file.h"
 
-/**
- * @brief Determine a destination directory for restoration.
- *
- * Resolution order:
- *  - If @p dest_dir_path is non-NULL, resolve it (relative to @p cwd if
- *    needed) and ensure it is a directory.
- *  - Else if the snapshot's original parent inode exists and is a directory,
- *    use it.
- *  - Else fall back to @p cwd.
- *
- * @param disk          Open filesystem image.
- * @param sb            Loaded superblock.
- * @param inode_tree    Inode B-tree handle.
- * @param rec           Recovery snapshot providing original parent.
- * @param dest_dir_path Optional path to destination directory.
- * @param cwd           Current working directory (fallback).
- * @param out_dir       Output: resolved destination directory descriptor.
- * @return 0 on success; -1 on failure.
- */
-static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb,
-                                   btree_handle_t *inode_tree,
-                                   const rec_entry_t *rec,
-                                   const char *dest_dir_path, dir_t *cwd,
-                                   dir_t *out_dir) {
+static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, const rec_entry_t *rec,
+                                   const char *dest_dir_path, dir_t *cwd, dir_t *out_dir) {
   bsfs_inode dir_inode;
 
   if (dest_dir_path && dest_dir_path[0] != '\0') {
@@ -42,7 +20,7 @@ static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb,
       return -1;
     if (dir_inode.file_type != FILE_TYPE_DIR)
       return -1;
-    out_dir->inode = dir_inode;
+    out_dir->inode         = dir_inode;
     out_dir->current_index = 0;
     return 0;
   }
@@ -50,7 +28,7 @@ static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb,
   if (rec && rec->original_parent_ino != 0) {
     if (read_inode(disk, inode_tree, rec->original_parent_ino, &dir_inode)) {
       if (dir_inode.file_type == FILE_TYPE_DIR) {
-        out_dir->inode = dir_inode;
+        out_dir->inode         = dir_inode;
         out_dir->current_index = 0;
         return 0;
       }
@@ -65,26 +43,8 @@ static int resolve_destination_dir(FILE *disk, bsfs_super_block *sb,
   return -1;
 }
 
-/**
- * @brief Generate a unique filename under a destination directory.
- *
- * If @p desired already exists in @p dest_dir, appends a suffix based on the
- * @p recovery_id (e.g., "name(recovered-<id>)"). If the name is still taken or
- * too long, progressively tries compact fallback names like
- * "recovered-<id>" and "recovered-<id>-<n>".
- *
- * @param disk         Open filesystem image.
- * @param sb           Loaded superblock.
- * @param dest_dir     Destination directory descriptor.
- * @param desired      Desired filename.
- * @param recovery_id  Recovery entry ID used in suffixes.
- * @param out_name     Output buffer for the chosen name.
- * @param out_cap      Capacity of @p out_name.
- * @return 0 if a unique name was produced; -1 on error.
- */
-static int make_unique_name(FILE *disk, bsfs_super_block *sb, dir_t *dest_dir,
-                            const char *desired, uint32_t recovery_id,
-                            char *out_name, size_t out_cap) {
+static int make_unique_name(FILE *disk, bsfs_super_block *sb, dir_t *dest_dir, const char *desired, uint32_t recovery_id, char *out_name,
+                            size_t out_cap) {
   if (!desired || !*desired || !out_name || out_cap == 0)
     return -1;
 
@@ -97,8 +57,7 @@ static int make_unique_name(FILE *disk, bsfs_super_block *sb, dir_t *dest_dir,
   }
 
   // Try "<desired>(recovered-<id>)"
-  int written =
-      snprintf(out_name, out_cap, "%s(recovered-%u)", desired, recovery_id);
+  int written = snprintf(out_name, out_cap, "%s(recovered-%u)", desired, recovery_id);
   if (written > 0 && (size_t)written < out_cap) {
     if (lookup_dir_entry(disk, sb, dest_dir, out_name, &tmp) != 0) {
       return 0;
@@ -125,21 +84,7 @@ static int make_unique_name(FILE *disk, bsfs_super_block *sb, dir_t *dest_dir,
   return -1;
 }
 
-/**
- * @brief Recreate an inode from a Recovery snapshot, choosing an inode number.
- *
- * Prefers reusing the inode number recorded in the snapshot if available;
- * otherwise obtains a fresh inode number from the inode tree.
- *
- * @param disk        Open filesystem image.
- * @param inode_tree  Inode B-tree handle.
- * @param rec         Recovery snapshot.
- * @param out_inode   Output: constructed inode.
- * @return 0 on success; -1 on failure.
- */
-static int build_inode_from_snapshot(FILE *disk, bsfs_super_block *sb,
-                                     btree_handle_t *inode_tree,
-                                     const rec_entry_t *rec,
+static int build_inode_from_snapshot(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, const rec_entry_t *rec,
                                      bsfs_inode *out_inode) {
   if (!disk || !sb || !inode_tree || !rec || !out_inode)
     return -1;
@@ -154,19 +99,19 @@ static int build_inode_from_snapshot(FILE *disk, bsfs_super_block *sb,
   }
 
   out_inode->inode_number = chosen_ino;
-  out_inode->file_type = rec->file_type;
-  out_inode->uid = rec->uid;
-  out_inode->gid = rec->gid;
-  out_inode->permissions = rec->permissions;
-  out_inode->file_size = rec->file_size;
-  out_inode->block_count = rec->block_count;
+  out_inode->file_type    = rec->file_type;
+  out_inode->uid          = rec->uid;
+  out_inode->gid          = rec->gid;
+  out_inode->permissions  = rec->permissions;
+  out_inode->file_size    = rec->file_size;
+  out_inode->block_count  = rec->block_count;
 
   for (int i = 0; i < 16; i++)
     out_inode->direct_blocks[i] = rec->direct_blocks[i];
   out_inode->btree_root = rec->btree_root;
 
-  uint32_t now = (uint32_t)time(NULL);
-  out_inode->created_at = now;
+  uint32_t now           = (uint32_t)time(NULL);
+  out_inode->created_at  = now;
   out_inode->modified_at = now;
   out_inode->accessed_at = now;
   out_inode->links_count = 1; // will be linked into the destination dir
@@ -174,42 +119,7 @@ static int build_inode_from_snapshot(FILE *disk, bsfs_super_block *sb,
   return 0;
 }
 
-/**
- * @brief Restore a file from the Recovery tree by its recovery ID.
- *
- * Semantics:
- *  - Loads the snapshot from the Recovery B-tree using @p recovery_id.
- *  - Determines the destination directory: if @p dest_dir_path is non-NULL,
- *    resolves it to a directory inode (relative to @p cwd if needed). If NULL
- *    or resolution fails, attempts to use the original parent recorded in the
- *    snapshot; if that is not available, falls back to @p cwd.
- *  - Resolves name conflicts by appending a suffix containing the recovery ID,
- *    ensuring a unique filename in the destination directory.
- *  - Recreates the inode from the snapshot (reusing its block mapping) and
- *    inserts it into the inode B-tree, updating @p sb->inode_root if the
- *    insertion creates the tree root.
- *  - Creates a directory entry in the destination directory and updates its
- *    metadata timestamps.
- *  - Removes the entry from the Recovery tree.
- *
- * @param disk           Open filesystem image.
- * @param sb             Loaded superblock (may be updated if inode root is
- *                       first created during restore).
- * @param inode_tree     Inode B-tree handle (handle->root_block should be set
- *                       from @p sb->inode_root if it already exists).
- * @param rec_tree       Recovery B-tree handle (handle->root_block should be
- *                       set from @p sb->recovery_root).
- * @param recovery_id    Unique ID of the recovery snapshot to restore.
- * @param dest_dir_path  Optional destination directory path (absolute or
- *                       relative to @p cwd). If NULL, attempt original parent
- *                       then @p cwd.
- * @param cwd            Current working directory context for resolving
- *                       relative paths and as a fallback destination.
- * @return 0 on success; -1 on failure (snapshot not found, invalid destination,
- *         insertion or linking errors).
- */
-int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
-                       btree_handle_t *rec_tree, uint32_t recovery_id,
+int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, uint32_t recovery_id,
                        const char *dest_dir_path, dir_t *cwd) {
   if (!disk || !sb || !inode_tree || !rec_tree)
     return -1;
@@ -221,14 +131,12 @@ int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_t
 
   // 2) Determine destination directory
   dir_t dest_dir;
-  if (resolve_destination_dir(disk, sb, inode_tree, &rec, dest_dir_path, cwd,
-                              &dest_dir) != 0)
+  if (resolve_destination_dir(disk, sb, inode_tree, &rec, dest_dir_path, cwd, &dest_dir) != 0)
     return -1;
 
   // 3) Resolve unique filename in destination
   char final_name[MAX_FILENAME];
-  if (make_unique_name(disk, sb, &dest_dir, rec.original_name, recovery_id,
-                       final_name, sizeof(final_name)) != 0)
+  if (make_unique_name(disk, sb, &dest_dir, rec.original_name, recovery_id, final_name, sizeof(final_name)) != 0)
     return -1;
 
   // 4) Build inode from snapshot (choose inode number if needed)
@@ -249,8 +157,8 @@ int restore_file_by_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_t
   dir_entry_t entry;
   memset(&entry, 0, sizeof(entry));
   entry.inode_number = inode.inode_number;
-  entry.file_type = inode.file_type;
-  entry.file_size = 0; // optional cached size, if used elsewhere
+  entry.file_type    = inode.file_type;
+  entry.file_size    = 0; // optional cached size, if used elsewhere
   strncpy(entry.filename, final_name, sizeof(entry.filename) - 1);
   entry.filename[sizeof(entry.filename) - 1] = '\0';
 

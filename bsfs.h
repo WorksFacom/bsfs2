@@ -18,6 +18,8 @@
 /** Usable bytes in a bitmap block (reserve 4B for next pointer). */
 #define BITMAP_BLOCK_BYTES (BLOCK_SIZE - sizeof(__u32))
 
+#define BITS_PER_BLOCK (BITMAP_BLOCK_BYTES * 8)
+
 /** Sentinel for an invalid or absent block address. */
 #define INVALID_BLOCK 0xFFFFFFFF
 
@@ -45,6 +47,7 @@ typedef struct bsfs_super_block {
 struct bsfs_super_info {
   bsfs_super_block    *super;
   struct buffer_head  *bh;
+  struct __u8        **bitmap;
   struct buffer_head **bitmap_map;
 };
 
@@ -134,12 +137,15 @@ typedef struct {
   __u8              min_degree;
 } btree_handle_t;
 
-typedef struct {
-  __u8                is_leaf;
-  __u32               num_entries;
-  void               *entries;
-  __u32              *children; // Array of child block numbers, only used if the node is internal. Up to `2t` block addresses.
+struct btree_node_t {
+  __u32 num_entries;
+  __u8  is_leaf;
+  __u8  data[4091]; // remaining bytes (entries + children)
+};
+
+struct btree_node {
+  btree_node_t       *node; // TODO: remove. Use helper instead: btree_bh_get_node(buffer_head *bh) { return (btree_node_t *)bh->b_data; }
   struct buffer_head *bh;
-} btree_node_t;
+}
 
 #endif // FILESYSTEM_BSFS

@@ -9,45 +9,15 @@
 
 #include "../include/remove_file.h"
 
-/**
- * @brief Logically remove a file and snapshot it into the Recovery tree.
- *
- * Unlinks the directory entry for @p path, removes the file's inode from the
- * inode tree (without freeing its data blocks), and inserts a snapshot of the
- * file metadata into the Recovery B-tree to enable later restoration or purge.
- *
- * Steps:
- *  1) Resolve the parent directory and basename from @p path.
- *  2) Lookup the file inode (must not be a directory).
- *  3) Build and insert a @ref rec_entry_t snapshot into the Recovery tree.
- *  4) Remove the directory entry from its parent.
- *  5) Remove the inode from the inode tree.
- *  6) Update parent directory timestamps.
- *
- * Rollback: If step 4 or 5 fails, the inserted recovery entry is removed to
- * keep metadata consistent.
- *
- * @param disk       Open filesystem image.
- * @param sb         Loaded superblock.
- * @param inode_tree Inode B-tree handle.
- * @param rec_tree   Recovery B-tree handle.
- * @param path       Absolute or relative path of the file to remove.
- * @param cwd        Current working directory (for resolving relative paths).
- * @param uid        Caller user id (currently unused; permission checks may use
- * it).
- * @return 0 on success; -1 on error.
- */
-int remove_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
-                btree_handle_t *rec_tree, const char *path, dir_t *cwd,
+int remove_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, btree_handle_t *rec_tree, const char *path, dir_t *cwd,
                 uint16_t uid) {
   if (!disk || !sb || !inode_tree || !rec_tree || !path || !cwd)
     return -1;
 
   /* 1) Resolve parent directory and basename */
   dir_t parent_dir;
-  char basename[256] = {0};
-  if (resolve_parent_dir(disk, sb, path, cwd, &parent_dir, basename,
-                         sizeof(basename)) != 0) {
+  char  basename[256] = {0};
+  if (resolve_parent_dir(disk, sb, path, cwd, &parent_dir, basename, sizeof(basename)) != 0) {
     return -1;
   }
 
@@ -68,22 +38,21 @@ int remove_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
   /* 3) Build recovery entry snapshot */
   rec_entry_t rec;
   memset(&rec, 0, sizeof(rec));
-  rec.recovery_id = 0; /* assigned by rec_tree_add */
-  rec.deleted_at = (uint64_t)time(NULL);
+  rec.recovery_id         = 0; /* assigned by rec_tree_add */
+  rec.deleted_at          = (uint64_t)time(NULL);
   rec.original_parent_ino = parent_dir.inode.inode_number;
   strncpy(rec.original_name, basename, sizeof(rec.original_name) - 1);
   rec.original_name[sizeof(rec.original_name) - 1] = '\0';
 
   rec.inode_number = target_inode.inode_number;
-  rec.file_type = target_inode.file_type;
-  rec.uid = target_inode.uid;
-  rec.gid = target_inode.gid;
-  rec.permissions = target_inode.permissions;
-  rec.file_size = target_inode.file_size;
-  rec.block_count = target_inode.block_count;
-  memcpy(rec.direct_blocks, target_inode.direct_blocks,
-         sizeof(rec.direct_blocks));
-  rec.btree_root = target_inode.btree_root;
+  rec.file_type    = target_inode.file_type;
+  rec.uid          = target_inode.uid;
+  rec.gid          = target_inode.gid;
+  rec.permissions  = target_inode.permissions;
+  rec.file_size    = target_inode.file_size;
+  rec.block_count  = target_inode.block_count;
+  memcpy(rec.direct_blocks, target_inode.direct_blocks, sizeof(rec.direct_blocks));
+  rec.btree_root      = target_inode.btree_root;
   rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
 
   /* 4) First, insert into Recovery tree to ensure snapshot exists.

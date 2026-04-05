@@ -71,7 +71,7 @@ struct bsfs_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
   btree_handle_t *inode_h = btree_create_inode_handle();
   inode_h->root_block     = sbi->super->inode_root;
 
-  ret = btree_search(sb, inode_h, ino, inode_h->root_block, inode);
+  ret = btree_search(sb, inode_h, inode_h->root_block, ino, inode);
 
   // TODO: applicable?
   // if (!ino || ino > sbi->s_ninodes) {
@@ -153,8 +153,10 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
   struct inode *inode;
 
   inode = iget_locked(sb, ino);
+
   if (!inode)
     return ERR_PTR(-ENOMEM);
+
   if (!(inode->i_state & I_NEW))
     return inode;
 

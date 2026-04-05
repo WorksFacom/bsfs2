@@ -34,12 +34,14 @@
 
 void load_bitmap(struct super_block *sb) {
   struct buffer_head **bitmap_map;
+  struct __u8        **bitmap;
   struct buffer_head  *bh;
   int                  i;
 
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  bitmap_map = kzalloc(sbi->super->block_bitmap_total, GFP_KERNEL);
+  bitmap_map = kcalloc(sbi->super->block_bitmap_total, sizeof(*bitmap_map), GFP_KERNEL);
+  bitmap     = kcalloc(sbi->super->block_bitmap_total, sizeof(*bitmap), GFP_KERNEL);
 
   i = 0;
 
@@ -52,63 +54,50 @@ void load_bitmap(struct super_block *sb) {
     block = (bitmap_block_t *)bh->b_data;
 
     bitmap_map[i] = bh;
+    bitmap[i]     = block->bits;
 
     current_block = block->next_block;
     i++;
   }
 
+  sbi->bitmap     = bitmap;
   sbi->bitmap_map = bitmap_map;
 }
 
-// int write_bitmap(struct super_block *sb, __u8 *bitmap, __u32 bitmap_start_block) {
-//   uint32_t current_block = bitmap_start_block;
-//   size_t   offset        = 0;
-//
-//   while (current_block != INVALID_BLOCK) {
-//     bitmap_block_t block;
-//     memset(&block, 0, sizeof(block));
-//
-//     // Preserve next_block pointer from on-disk structure
-//     if (fseek(disk, current_block * BLOCK_SIZE + BITMAP_BLOCK_BYTES, SEEK_SET) != 0 ||
-//         fread(&block.next_block, sizeof(uint32_t), 1, disk) != 1) {
-//       fprintf(stderr, "Failed to read next block info.\n");
-//       return -1;
-//     }
-//
-//     // Copy a slice of the bitmap into this block's bits
-//     size_t to_copy = BITMAP_BLOCK_BYTES;
-//     memcpy(block.bits, bitmap + offset, to_copy);
-//     offset += to_copy;
-//
-//     if (fseek(disk, current_block * BLOCK_SIZE, SEEK_SET) != 0 || fwrite(&block, sizeof(bitmap_block_t), 1, disk) != 1) {
-//       fprintf(stderr, "Failed to write bitmap block.\n");
-//       return -1;
-//     }
-//
-//     current_block = block.next_block;
-//   }
-//
-//   fflush(disk);
-//   return 0;
-// }
+// TODO: are these 3 functions below working??
+static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-__u32 bsfs_is_bit_free(__u8 *bitmap, __u32 index) {
-  uint32_t byte_index = index / 8;
-  uint8_t  bit_index  = index % 8;
+  __u32 block  = index / BITS_PER_BLOCK;
+  __u32 offset = index % BITS_PER_BLOCK;
 
-  return !(bitmap[byte_index] & (1 << bit_index));
+  __u8 *bits = sbi->bitmap[block];
+
+  return !(bits[offset / 8] & (1U << (offset % 8)));
 }
 
-void bsfs_set_bit(__u8 *bitmap, __u32 index) {
-  uint32_t byte_index = index / 8;
-  uint8_t  bit_index  = index % 8;
+static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  bitmap[byte_index] |= (1 << bit_index);
+  __u32 block  = index / BITS_PER_BLOCK;
+  __u32 offset = index % BITS_PER_BLOCK;
+
+  __u8 *bits = sbi->bitmap[block];
+
+  bits[offset / 8] |= (1U << (offset % 8));
+
+  mark_buffer_dirty(sbi->bitmap_map[block]);
 }
 
-void bsfs_clear_bit(__u8 *bitmap, __u32 index) {
-  uint32_t byte_index = index / 8;
-  uint8_t  bit_index  = index % 8;
+static inline void bsfs_clear_bit(struct super_block *sb, __u32 index) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  bitmap[byte_index] &= ~(1 << bit_index);
+  __u32 block  = index / BITS_PER_BLOCK;
+  __u32 offset = index % BITS_PER_BLOCK;
+
+  __u8 *bits = sbi->bitmap[block];
+
+  bits[offset / 8] &= ~(1U << (offset % 8));
+
+  mark_buffer_dirty(sbi->bitmap_map[block]);
 }

@@ -20,53 +20,16 @@
  */
 #include "../include/create_file.h"
 
-/**
- * @brief Creates an empty regular file at the given path.
- *
- * This function initializes a fresh @ref bsfs_inode (size = 0, no data blocks),
- * inserts it into the inode B-tree, and then adds a directory entry in the
- * parent directory resolved from @p path. It prevents duplicate names in the
- * parent directory and updates the parent's metadata (timestamps).
- *
- * Workflow:
- *  1) Resolve the parent directory and basename from @p path (relative to @p
- * cwd if needed) using resolve_parent_dir(). 2) Allocate a new inode number and
- * initialize a zero-sized regular file inode. 3) Insert the inode into the
- * inode B-tree via insert_inode(). 4) Build a dir_entry_t and insert it into
- * the parent directory using add_dir_entry(). 5) Update the parent directory's
- * timestamps and persist them via update_inode().
- *
- * Notes:
- *  - This routine does NOT allocate any data blocks; writes will allocate on
- * demand.
- *  - On failure to add the directory entry, the newly inserted inode is removed
- *    from the inode B-tree (basic rollback).
- *
- * @param disk         Open filesystem image.
- * @param sb           Loaded superblock.
- * @param inode_tree   Handle for the inode B-tree.
- * @param path         Absolute or relative path of the new file.
- * @param cwd          Current working directory for resolving relative paths.
- * @param uid          Owner user ID for the new inode.
- * @param gid          Owner group ID for the new inode.
- * @param permissions  Mode bits (e.g., 0644).
- *
- * @return 0 on success; -1 on error (invalid args, path resolution failure,
- *         inode insertion failure, duplicate name, or dir entry insertion
- * failure).
- */
-int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
-                const char *path, dir_t *cwd, uint16_t uid, uint16_t gid,
+int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree, const char *path, dir_t *cwd, uint16_t uid, uint16_t gid,
                 uint16_t permissions) {
   if (!disk || !sb || !inode_tree || !path || !cwd)
     return -1;
 
   /* 1) Resolve parent directory + basename */
   dir_t parent_dir;
-  char basename[256] = {0};
+  char  basename[256] = {0};
 
-  if (resolve_parent_dir(disk, sb, path, cwd, &parent_dir, basename,
-                         sizeof(basename)) != 0)
+  if (resolve_parent_dir(disk, sb, path, cwd, &parent_dir, basename, sizeof(basename)) != 0)
     return -1;
 
   if (basename[0] == '\0')
@@ -82,17 +45,16 @@ int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
     return -1;
 
   ino.inode_number = new_ino;
-  ino.file_size = 0;
-  ino.file_type =
-      FILE_TYPE_FILE; /* adjust to your enum/constant if different */
-  ino.block_count = 0;
-  ino.uid = uid;
-  ino.gid = gid;
-  ino.permissions = permissions;
-  ino.links_count = 1; /* linked by the parent directory entry */
+  ino.file_size    = 0;
+  ino.file_type    = FILE_TYPE_FILE; /* adjust to your enum/constant if different */
+  ino.block_count  = 0;
+  ino.uid          = uid;
+  ino.gid          = gid;
+  ino.permissions  = permissions;
+  ino.links_count  = 1; /* linked by the parent directory entry */
 
-  uint32_t now = (uint32_t)time(NULL);
-  ino.created_at = now;
+  uint32_t now    = (uint32_t)time(NULL);
+  ino.created_at  = now;
   ino.modified_at = now;
   ino.accessed_at = now;
 
@@ -100,7 +62,7 @@ int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
   for (int i = 0; i < 16; i++) {
     ino.direct_blocks[i].file_blk = 0;
     ino.direct_blocks[i].disk_blk = 0;
-    ino.direct_blocks[i].length = 0;
+    ino.direct_blocks[i].length   = 0;
   }
   ino.btree_root = 0;
 
@@ -114,7 +76,7 @@ int create_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree,
   dir_entry_t entry;
   memset(&entry, 0, sizeof(entry));
   entry.inode_number = ino.inode_number;
-  entry.file_type = ino.file_type;
+  entry.file_type    = ino.file_type;
   /* Adjust the name field to match your dir_entry_t definition */
   strncpy(entry.filename, basename, sizeof(entry.filename) - 1);
   entry.filename[sizeof(entry.filename) - 1] = '\0';

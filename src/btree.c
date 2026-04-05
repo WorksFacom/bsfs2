@@ -12,7 +12,7 @@ static void btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 par
 static void btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
 static void btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
 
-static int default_compare(const void *a, const void *b) {
+static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
   __u32 kb = *(__u32 *)b;
   return (ka < kb) ? -1 : (ka > kb);
@@ -44,17 +44,17 @@ btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, b
   return handle;
 }
 
-static void btree_shift_left(void *entries, __u64 entry_size, int from, int count) {
+static inline void btree_shift_left(void *entries, __u64 entry_size, int from, int count) {
   for (int i = from; i < count - 1; i++) {
     memcpy((__u8 *)entries + i * entry_size, (__u8 *)entries + (i + 1) * entry_size, entry_size);
   }
 }
 
-__u32 get_inode_key(const void *entry) {
+static inline __u32 get_inode_key(const void *entry) {
   return ((const bsfs_inode *)entry)->ino;
 }
 
-int compare_inode(const void *a, const void *b) {
+static inline int compare_inode(const void *a, const void *b) {
   return (get_inode_key(a) > get_inode_key(b)) - (get_inode_key(a) < get_inode_key(b));
 }
 
@@ -62,11 +62,11 @@ btree_handle_t *btree_create_inode_handle(void) {
   return btree_create_handle(BTREE_TYPE_INODE, sizeof(bsfs_inode), compare_inode, get_inode_key);
 }
 
-__u32 get_bspan_key(const void *entry) {
+static inline __u32 get_bspan_key(const void *entry) {
   return ((const bspan_t *)entry)->file_blk;
 }
 
-int compare_bspan(const void *a, const void *b) {
+static inline int compare_bspan(const void *a, const void *b) {
   return (get_bspan_key(a) > get_bspan_key(b)) - (get_bspan_key(a) < get_bspan_key(b));
 }
 
@@ -106,160 +106,146 @@ btree_handle_t *btree_create_dir_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(dir_entry_t), compare_dir_entry, get_dir_entry_key);
 }
 
-__u32 get_rec_entry_key(const void *entry) {
+static inline __u32 get_rec_entry_key(const void *entry) {
   return ((const rec_entry_t *)entry)->recovery_id;
 }
 
-int compare_rec_entry(const void *a, const void *b) {
+static inline int compare_rec_entry(const void *a, const void *b) {
   return (get_rec_entry_key(a) > get_rec_entry_key(b)) - (get_rec_entry_key(a) < get_rec_entry_key(b));
 }
 
-btree_handle_t *btree_create_rec_entry_handle(void) {
+static inline btree_handle_t *btree_create_rec_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t), compare_rec_entry, get_rec_entry_key);
 }
 
-int btree_update(FILE *disk, btree_handle_t *handle, __u32 node_block, void *new_entry) {
-  if (node_block == 0)
-    return 0;
-  btree_node_t *node    = btree_read_node(disk, handle, node_block);
-  __u8         *entries = node->entries;
-  __u32         key     = handle->get_key(new_entry);
-
-  __u32 i = 0;
-  while (i < node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * handle->entry_size);
-    if (key <= entry_key)
-      break;
-    i++;
-  }
-
-  if (i < node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * handle->entry_size);
-    if (key == entry_key) {
-      memcpy(entries + i * handle->entry_size, new_entry, handle->entry_size);
-      btree_write_node(disk, handle, node_block, node);
-      btree_free_node(node);
-      return 1;
-    }
-  }
-
-  if (node->is_leaf) {
-    btree_free_node(node);
-    return 0;
-  }
-
-  int updated = btree_update(disk, handle, node->children[i], new_entry);
-  if (updated) {
-    btree_write_node(disk, handle, node_block, node);
-  }
-  btree_free_node(node);
-  return updated;
-}
-
-int btree_write_node(super_block *sb, btree_handle_t *handle, __u32 block, btree_node_t *node) {
-  buffer_head *bh;
-  __u8         buffer[4096] = {0};
-  __u64        offset       = 0;
-
-  memcpy(buffer + offset, &node->is_leaf, sizeof(__u8));
-  offset += sizeof(__u8);
-
-  memcpy(buffer + offset, &node->num_entries, sizeof(__u32));
-  offset += sizeof(__u32);
-
-  memcpy(buffer + offset, node->entries, handle->entry_size * (2 * handle->min_degree - 1));
-  offset += handle->entry_size * (2 * handle->min_degree - 1);
-
-  memcpy(buffer + offset, node->children, sizeof(__u32) * (2 * handle->min_degree));
-
-  bh = node->bh;
-
-  // TODO
-  // bh->b_data =
-
-  // if (write_block(disk, block, buffer, sizeof(buffer)) != 0) {
-  //   fprintf(stderr, "Failed to write B-tree node at block %u\n", block);
-  //   return -1;
-  // }
-
-  return 0;
-}
-
-btree_node_t *btree_read_node(super_block *sb, btree_handle_t *handle, __u32 block) {
-  // TODO: manipulate b_data directly instead of memcpy, e.g., n = (struct btree_node_t *) bh->b_data;
-  // TODO: fix project-wide BLOCK_SIZE
+// TODO: fix project-wide BLOCK_SIZE
+// TODO: properly handle alignment (e.g: get_unaligned_le32)
+btree_node_t *btree_read_node(struct super_block *sb, __u32 block) {
   struct buffer_head *bh;
-  __u8                buffer[4096];
 
-  *bh    = sb_bread(sb, block);
-  buffer = bh->b_data;
+  *bh = sb_bread(sb, block);
 
-  __u64 offset = 0;
+  struct btree_node *node = kzalloc(sizeof(struct btree_node), GFP_KERNEL);
 
-  btree_node_t *node = kzalloc(sizeof(btree_node_t), GFP_KERNEL);
-
-  memcpy(&node->is_leaf, buffer + offset, sizeof(__u8));
-  offset += sizeof(__u8);
-
-  memcpy(&node->num_entries, buffer + offset, sizeof(__u32));
-  offset += sizeof(__u32);
-
-  int total_entries_size = (2 * handle->min_degree - 1) * handle->entry_size;
-  node->entries          = kzalloc(total_entries_size, GFP_KERNEL);
-
-  memcpy(node->entries, buffer + offset, total_entries_size);
-  offset += handle->entry_size * (2 * handle->min_degree - 1);
-
-  node->children = kzalloc(2 * handle->min_degree * sizeof(__u32), GFP_KERNEL);
-
-  memcpy(node->children, buffer + offset, sizeof(__u32) * (2 * handle->min_degree));
-
-  node->bh = bh;
+  node->bh   = bh;
+  node->node = (btree_node_t *)bh->b_data;
 
   return node;
 }
 
-void btree_free_node(btree_node_t *node) {
-  kfree(node->entries);
-  kfree(node->children);
-
+void btree_free_node(struct btree_node *node) {
   brelse(node->bh);
-
   kfree(node);
 }
 
-int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void *output) {
+static inline __u8 *btree_entries(struct btree_node *node) {
+  // up to: (2 * handle->min_degree - 1) * handle->entry_size;
+  return node->node->data;
+}
+
+static inline __u32 *btree_children(struct btree_node *node, btree_handle_t *handle) {
+  // up to: 2 * handle->min_degree
+
+  size_t children_start = (2 * handle->min_degree - 1) * handle->entry_size;
+  return (__u32 *)(node->node->data + children_start);
+}
+
+// TODO: is this working?
+int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry) {
+  __u32  i, key, ret;
+  size_t size;
+
   if (node_block == 0)
     return 0;
 
-  btree_node_t *node    = btree_read_node(sb, handle, node_block);
-  __u8         *entries = node->entries;
+  key  = handle->get_key(new_entry);
+  size = handle->entry_size;
 
-  __u32 i = 0;
-  while (i < node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * handle->entry_size);
+  struct btree_node *node    = btree_read_node(sb, node_block);
+  __u8              *entries = btree_entries(node);
+
+  i = 0;
+  while (i < node->node->num_entries) {
+    __u32 entry_key = handle->get_key(entries + i * size);
     if (key <= entry_key)
       break;
     i++;
   }
 
-  if (i < node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * handle->entry_size);
+  if (i < node->node->num_entries) {
+    __u32 entry_key = handle->get_key(entries + i * size);
+    // TODO: lock buffer!!!
     if (key == entry_key) {
-      memcpy(output, entries + i * handle->entry_size, handle->entry_size);
-      btree_free_node(node);
-      return 1;
+      memcpy(entries + i * size, new_entry, size);
+
+      mark_buffer_dirty(node->bh);
+      ret = 1;
+      goto out;
     }
   }
 
-  if (node->is_leaf) {
-    btree_free_node(node);
-    return 0;
+  if (node->node->is_leaf) {
+    ret = 0;
+    goto out;
   }
 
-  __u32 child_block = node->children[i];
+  __u32 *children = btree_children(node);
+
+  ret = btree_update(sb, handle, children[i], new_entry);
+
+out:
   btree_free_node(node);
-  return btree_search(sb, handle, child_block, key, output);
+  return ret;
+}
+
+// TODO: duplicated code with btree_update
+// TODO: is this working?
+// TODO: remove recursion? not common in kernel
+int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void *output) {
+  __u32  i, ret;
+  size_t size;
+
+  if (node_block == 0)
+    return;
+
+  size = handle->entry_size;
+
+  btree_node_t *node    = btree_read_node(sb, handle, node_block);
+  __u8         *entries = btree_entries(node);
+
+  i = 0;
+  while (i < node->num_entries) {
+    __u32 entry_key = handle->get_key(entries + i * size);
+
+    if (key <= entry_key)
+      break;
+
+    i++;
+  }
+
+  if (i < node->num_entries) {
+    __u32 entry_key = handle->get_key(entries + i * size);
+
+    if (key == entry_key) {
+      memcpy(output, entries + i * size, size);
+
+      ret = 1;
+      goto out;
+    }
+  }
+
+  if (node->node->is_leaf) {
+    ret = 0;
+    goto out;
+  }
+
+  __u32 *children = btree_children(node);
+
+  ret = btree_search(sb, handle, children[i], key, output);
+
+out:
+  btree_free_node(node);
+  return ret;
 }
 
 int btree_search_entry(FILE *disk, btree_handle_t *handle, __u32 node_block, const void *needle, void *output) {

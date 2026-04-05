@@ -84,7 +84,7 @@ int write_bitmap(struct super_block *sb, __u8 *bitmap, __u32 bitmap_start_block)
  * @param index The index of the block to check.
  * @return 1 if the block is free, 0 if the block is occupied.
  */
-__u32 bsfs_is_bit_free(__u8 *bitmap, __u32 index);
+static inline __u32 bsfs_is_bit_free(__u8 *bitmap, __u32 index);
 
 /**
  * @brief Marks a block as allocated in the bitmap.
@@ -95,7 +95,7 @@ __u32 bsfs_is_bit_free(__u8 *bitmap, __u32 index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as allocated.
  */
-void bsfs_set_bit(__u8 *bitmap, __u32 index);
+static inline void bsfs_set_bit(__u8 *bitmap, __u32 index);
 
 /**
  * @brief Marks a block as free in the bitmap.
@@ -106,6 +106,6 @@ void bsfs_set_bit(__u8 *bitmap, __u32 index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as free.
  */
-void bsfs_clear_bit(__u8 *bitmap, __u32 index);
+static inline void bsfs_clear_bit(__u8 *bitmap, __u32 index);
 
 #endif // BITMAP_OPERATIONS
