@@ -1,0 +1,1 @@
+"""Bitmap allocators test suite"""
