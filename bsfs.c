@@ -1,6 +1,9 @@
 #include "bsfs.h"
 #include "include/bitmap.h"
 #include "include/btree.h"
+#include "include/dir.h"
+#include "include/file.h"
+#include "include/inode.h"
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/highuid.h>
@@ -138,8 +141,8 @@ static struct inode *__set_up_inode_new(struct inode *inode) {
   // TODO: whats this?
   inode->i_blocks = 0;
 
-  for (i = 0; i < 10; i++)
-    bsfs_inode->u.i2_data[i] = disk_inode->i_zone[i];
+  // for (i = 0; i < 10; i++)
+  //   bsfs_inode->u.i2_data[i] = disk_inode->i_zone[i];
 
   // TODO: support special file inodes
   // bsfs_set_inode(inode, old_decode_dev(rdev));
@@ -173,13 +176,10 @@ static const struct super_operations bsfs_sops = {
 };
 
 static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
-  unsigned long i, block;
-
   int ret    = -EINVAL;
   int silent = fc->sb_flags & SB_SILENT;
 
   struct buffer_head      *bh;
-  struct buffer_head     **map;
   struct bsfs_super_block *bsfs_super;
 
   struct inode           *root_inode;
@@ -233,13 +233,6 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   if (!s->s_root)
     goto out_no_root;
 
-  if (!(sbi->s_mount_state & BSFS_VALID_FS))
-    printk("BSFS: mounting unchecked file system, "
-           "running fsck is recommended\n");
-  else if (sbi->s_mount_state & BSFS_ERROR_FS)
-    printk("BSFS: mounting file system with errors, "
-           "running fsck is recommended\n");
-
   return 0;
 
 out_no_root:
@@ -247,11 +240,12 @@ out_no_root:
     printk("BSFS: get root inode failed\n");
   goto out_freemap;
 
-out_no_bitmap:
+  // TODO: handle this goto
+  // out_no_bitmap:
   printk("BSFS: bad superblock or unable to read bitmaps\n");
 
+// TODO
 out_freemap:
-  // TODO
   //   for (i = 0; i < sbi->s_imap_blocks; i++)
   //     brelse(sbi->s_imap[i]);
   //   for (i = 0; i < sbi->s_zmap_blocks; i++)
@@ -259,13 +253,15 @@ out_freemap:
   //   kfree(sbi->s_imap);
   //   goto out_release;
 
-out_no_map:
+  // TODO: handle this goto
+  // out_no_map:
   ret = -ENOMEM;
   if (!silent)
     printk("BSFS: can't allocate map\n");
   goto out_release;
 
-out_illegal_sb:
+  // TODO: handle this goto
+  // out_illegal_sb:
   if (!silent)
     printk("BSFS: bad superblock\n");
   goto out_release;
@@ -319,7 +315,7 @@ static struct file_system_type bsfs_fs_type = {
 MODULE_ALIAS_FS("bsfs");
 
 static void init_once(void *foo) {
-  struct bsfs_inode *bsfs_inode = (struct bsfs_inode *)foo;
+  struct inode_info *bsfs_inode = (struct inode_info *)foo;
 
   inode_init_once(&bsfs_inode->vfs_inode);
 }

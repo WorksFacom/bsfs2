@@ -53,6 +53,14 @@ __u32 hash_filename(const char *name);
  */
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key);
 
+static inline __u32 get_inode_key(const void *entry) {
+  return ((const bsfs_inode *)entry)->ino;
+}
+
+static inline int compare_inode(const void *a, const void *b) {
+  return (get_inode_key(a) > get_inode_key(b)) - (get_inode_key(a) < get_inode_key(b));
+}
+
 /**
  * @brief Creates a B-tree handle specifically for managing inode entries.
  *
@@ -69,7 +77,17 @@ btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, b
  * @return Pointer to a newly allocated and configured `btree_handle_t` for
  * inodes.
  */
-btree_handle_t *btree_create_inode_handle(void);
+static inline btree_handle_t *btree_create_inode_handle(void) {
+  return btree_create_handle(BTREE_TYPE_INODE, sizeof(bsfs_inode), compare_inode, get_inode_key);
+}
+
+static inline __u32 get_bspan_key(const void *entry) {
+  return ((const bspan_t *)entry)->file_blk;
+}
+
+static inline int compare_bspan(const void *a, const void *b) {
+  return (get_bspan_key(a) > get_bspan_key(b)) - (get_bspan_key(a) < get_bspan_key(b));
+}
 
 /**
  * @brief Creates a B-tree handle for managing bspan entries.
@@ -86,7 +104,28 @@ btree_handle_t *btree_create_inode_handle(void);
  *
  * @return Pointer to a configured `btree_handle_t` for bspan entries.
  */
-btree_handle_t *btree_create_bspan_handle(void);
+btree_handle_t *btree_create_bspan_handle(void) {
+  return btree_create_handle(BTREE_TYPE_BSPAN, sizeof(bspan_t), compare_bspan, get_bspan_key);
+}
+
+__u32 get_dir_entry_key(const void *entry) {
+  return hash_filename(((const dir_entry_t *)entry)->filename);
+}
+
+int compare_dir_entry(const void *a, const void *b) {
+  __u32 ha = get_dir_entry_key(a);
+  __u32 hb = get_dir_entry_key(b);
+
+  if (ha < hb)
+    return -1;
+  if (ha > hb)
+    return 1;
+
+  // In case of hash collision, fallback to full string comparison
+  const dir_entry_t *ea = (const dir_entry_t *)a;
+  const dir_entry_t *eb = (const dir_entry_t *)b;
+  return strcmp(ea->filename, eb->filename);
+}
 
 /**
  * @brief Creates a B-tree handle for managing directory entries.
@@ -97,7 +136,17 @@ btree_handle_t *btree_create_bspan_handle(void);
  * @return A pointer to a newly allocated B-tree handle configured for
  *         directory entries.
  */
-btree_handle_t *btree_create_dir_entry_handle(void);
+btree_handle_t *btree_create_dir_entry_handle(void) {
+  return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(dir_entry_t), compare_dir_entry, get_dir_entry_key);
+}
+
+static inline __u32 get_rec_entry_key(const void *entry) {
+  return ((const rec_entry_t *)entry)->recovery_id;
+}
+
+static inline int compare_rec_entry(const void *a, const void *b) {
+  return (get_rec_entry_key(a) > get_rec_entry_key(b)) - (get_rec_entry_key(a) < get_rec_entry_key(b));
+}
 
 /**
  * @brief Creates a B-tree handle for managing recovery entries.
@@ -114,7 +163,9 @@ btree_handle_t *btree_create_dir_entry_handle(void);
  *
  * @return Pointer to a configured `btree_handle_t` for recovery entries.
  */
-btree_handle_t *btree_create_rec_entry_handle(void);
+static inline btree_handle_t *btree_create_rec_entry_handle(void) {
+  return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t), compare_rec_entry, get_rec_entry_key);
+}
 
 /**
  * @brief Inserts a new entry into the B-tree.
@@ -240,7 +291,7 @@ int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const voi
  * @param node Pointer to the in-memory B-tree node structure.
  * @return 0 on success, -1 on failure.
  */
-int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block, btree_node_t *node);
+int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node_t *node);
 
 /**
  * @brief Reads and deserializes a B-tree node from disk.
@@ -263,7 +314,7 @@ int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block
  * @param block The disk block number to read from.
  * @return Pointer to a newly allocated and populated `btree_node_t` structure.
  */
-btree_node_t *btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block);
+struct btree_node *btree_read_node(struct super_block *sb, __u32 block);
 
 /**
  * @brief Frees the memory allocated for a B-tree node.
@@ -279,7 +330,7 @@ btree_node_t *btree_read_node(struct super_block *sb, btree_handle_t *handle, __
  *
  * @param node Pointer to the B-tree node to be deallocated.
  */
-void btree_free_node(btree_node_t *node);
+void btree_free_node(struct btree_node *node);
 
 /**
  * @brief Recursively deallocates all nodes and data blocks in a B-tree.

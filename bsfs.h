@@ -7,11 +7,14 @@
 #define BSFS_V1 0x0001
 #define BSFS_V2 0x0002
 
+#define BSFS_VALID_FS 0x0001
+#define BSFS_ERROR_FS 0x0002
+
 #define MAGIC_NUMBER 0x53465342
 
 #define BSFS_ROOT_INO 1
 
-// #define BLOCK_SIZE 4096
+#define BSFS_BLOCK_SIZE 4096
 
 #define MAX_FILENAME 255
 
@@ -22,9 +25,6 @@
 
 /** Sentinel for an invalid or absent block address. */
 #define INVALID_BLOCK 0xFFFFFFFF
-
-// #define FILE_TYPE_DIR 1
-// #define FILE_TYPE_FILE 2
 
 /** Default retention period for recovery entries (seconds). */
 #define DEFAULT_RECOVERY_TTL (30ULL * 24ULL * 60ULL * 60ULL)
@@ -116,12 +116,6 @@ typedef struct {
   char  filename[MAX_FILENAME];
 } dir_entry_t;
 
-// TODO: remove
-typedef struct {
-  bsfs_inode inode;
-  __u32      pos;
-} file_t;
-
 typedef enum { BTREE_TYPE_INODE, BTREE_TYPE_BSPAN, BTREE_TYPE_RECOVERY, BTREE_TYPE_DIR_ENTRY } btree_data_type_t;
 
 typedef int (*btree_compare_fn)(const void *a, const void *b);
@@ -144,8 +138,8 @@ struct btree_node_t {
 };
 
 struct btree_node {
-  btree_node_t       *node; // TODO: remove. Use helper instead: btree_bh_get_node(buffer_head *bh) { return (btree_node_t *)bh->b_data; }
-  struct buffer_head *bh;
-}
+  struct btree_node_t *node; // TODO: remove. Use helper instead: btree_bh_get_node(buffer_head *bh) { return (btree_node_t *)bh->b_data; }
+  struct buffer_head  *bh;
+};
 
 #endif // FILESYSTEM_BSFS

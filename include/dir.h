@@ -10,38 +10,12 @@
 #ifndef DIRECTORY_OPERATIONS_BSFS_H
 #define DIRECTORY_OPERATIONS_BSFS_H
 
+#include "../bsfs.h"
 #include "dentry.h"
-#include "bsfs.h"
-#include "inode.h"
-#include "path_utils.h"
 
-/**
- * @brief Creates a new directory at the given path.
- *
- * This function allocates a new inode of type directory and inserts it as an
- * entry into the parent directory determined by the path.
- *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the loaded superblock.
- * @param path Absolute or relative path for the new directory.
- * @param cwd Current working directory (for resolving relative paths).
- * @return 0 on success, -1 on error.
- */
-int create_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd);
+extern const struct file_operations bsfs_dir_operations;
 
-/**
- * @brief Deletes a directory at the given path, if it is empty.
- *
- * This function removes the directory entry and deallocates the associated
- * inode.
- *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the loaded superblock.
- * @param path Absolute or relative path of the directory to remove.
- * @param cwd Current working directory (for resolving relative paths).
- * @return 0 on success, -1 if the directory is not empty or cannot be removed.
- */
-int remove_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd);
+extern const struct inode_operations bsfs_dir_inode_operations;
 
 /**
  * @brief Moves or renames a directory entry from one directory to another.

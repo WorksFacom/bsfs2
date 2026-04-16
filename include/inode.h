@@ -12,10 +12,10 @@
 #ifndef INODE_OPERATIONS_H
 #define INODE_OPERATIONS_H
 
-#include <stdio.h>
-
+#include "../bsfs.h"
 #include "btree.h"
-#include "bsfs.h"
+
+extern const struct address_space_operations bsfs_aops;
 
 /**
  * @brief Reads an inode from the inode B-tree.

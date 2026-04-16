@@ -8,44 +8,8 @@
  */
 #include "../include/dentry.h"
 #include "../include/alloc.h"
-
-dir_t *open_dir(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
-  bsfs_inode inode;
-  if (!read_inode(disk, inode_tree, inode_number, &inode)) {
-    fprintf(stderr, "Failed to load directory inode.\n");
-    return NULL;
-  }
-
-  if (inode.file_type != 1) { // 1 = directory
-    fprintf(stderr, "Inode is not a directory.\n");
-    return NULL;
-  }
-
-  dir_t *dir = malloc(sizeof(dir_t));
-  if (!dir) {
-    fprintf(stderr, "Failed to allocate memory for dir_t.\n");
-    return NULL;
-  }
-
-  dir->inode             = inode;
-  dir->current_index     = 0;
-  dir->btree             = btree_create_dir_entry_handle();
-  dir->btree->root_block = inode.btree_root;
-
-  return dir;
-}
-
-int close_dir(dir_t *dir) {
-  if (!dir)
-    return -1;
-
-  if (dir->btree) {
-    free(dir->btree);
-  }
-
-  free(dir);
-  return 0;
-}
+#include "../include/btree.h"
+#include "../include/inode.h"
 
 int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry) {
   btree_handle_t *dir_handle = btree_create_dir_entry_handle();

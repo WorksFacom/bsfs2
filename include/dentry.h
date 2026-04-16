@@ -9,9 +9,7 @@
 #ifndef DIRECTORY_OPERATIONS
 #define DIRECTORY_OPERATIONS
 
-#include "btree.h"
-#include "bsfs.h"
-#include "inode.h"
+#include "../bsfs.h"
 
 /**
  * @struct dir_t
@@ -21,37 +19,13 @@
  * directory entries during read operations like readdir().
  */
 typedef struct {
-  bsfs_inode         inode;         ///< The inode of the directory
+  bsfs_inode      inode;         ///< The inode of the directory
   uint32_t        current_index; ///< The logical position of the next entry to read
   btree_handle_t *btree;         ///< Handle to the B-tree storing directory entries
   /* Iteration state for in-order traversal */
   uint32_t iter_key;     ///< Last returned key (filename hash)
   int      iter_started; ///< 0 if iteration not started, 1 otherwise
 } dir_t;
-
-/**
- * @brief Opens a directory given its inode number.
- *
- * Loads the directory inode from the inode B-tree, initializes a dir_t
- * structure and prepares the B-tree handle for reading directory entries.
- *
- * @param disk Pointer to the open filesystem image.
- * @param inode_tree Pointer to the B-tree containing inodes.
- * @param inode_number The inode number of the directory to open.
- * @return Pointer to an allocated dir_t on success, NULL on failure.
- */
-dir_t *open_dir(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
-
-/**
- * @brief Closes a directory and frees allocated resources.
- *
- * This function deallocates the memory used by the dir_t structure
- * and its associated B-tree handle.
- *
- * @param dir Pointer to the open directory to be closed.
- * @return 0 on success.
- */
-int close_dir(dir_t *dir);
 
 /**
  * @brief Adds a new entry to a directory.

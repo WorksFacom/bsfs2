@@ -4,13 +4,15 @@
 /*
  * Static functions prototypes
  */
-static int  btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, btree_node_t *node, void *entry);
-static int  btree_split_child(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int index);
-static void btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, int *success);
-static void btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
-static void btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
-static void btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
-static void btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx);
+static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node_t *node, void *entry);
+static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int index);
+static void __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, int *success);
+static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int idx);
+static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int idx);
+static void __btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent,
+                                     int idx);
+static void __btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent,
+                                     int idx);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -50,30 +52,6 @@ static inline void btree_shift_left(void *entries, __u64 entry_size, int from, i
   }
 }
 
-static inline __u32 get_inode_key(const void *entry) {
-  return ((const bsfs_inode *)entry)->ino;
-}
-
-static inline int compare_inode(const void *a, const void *b) {
-  return (get_inode_key(a) > get_inode_key(b)) - (get_inode_key(a) < get_inode_key(b));
-}
-
-btree_handle_t *btree_create_inode_handle(void) {
-  return btree_create_handle(BTREE_TYPE_INODE, sizeof(bsfs_inode), compare_inode, get_inode_key);
-}
-
-static inline __u32 get_bspan_key(const void *entry) {
-  return ((const bspan_t *)entry)->file_blk;
-}
-
-static inline int compare_bspan(const void *a, const void *b) {
-  return (get_bspan_key(a) > get_bspan_key(b)) - (get_bspan_key(a) < get_bspan_key(b));
-}
-
-btree_handle_t *btree_create_bspan_handle(void) {
-  return btree_create_handle(BTREE_TYPE_BSPAN, sizeof(bspan_t), compare_bspan, get_bspan_key);
-}
-
 __u32 hash_filename(const char *name) {
   __u32 hash = 5381;
   int   c;
@@ -83,52 +61,16 @@ __u32 hash_filename(const char *name) {
   return hash;
 }
 
-__u32 get_dir_entry_key(const void *entry) {
-  return hash_filename(((const dir_entry_t *)entry)->filename);
-}
-
-int compare_dir_entry(const void *a, const void *b) {
-  __u32 ha = get_dir_entry_key(a);
-  __u32 hb = get_dir_entry_key(b);
-
-  if (ha < hb)
-    return -1;
-  if (ha > hb)
-    return 1;
-
-  // In case of hash collision, fallback to full string comparison
-  const dir_entry_t *ea = (const dir_entry_t *)a;
-  const dir_entry_t *eb = (const dir_entry_t *)b;
-  return strcmp(ea->filename, eb->filename);
-}
-
-btree_handle_t *btree_create_dir_entry_handle(void) {
-  return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(dir_entry_t), compare_dir_entry, get_dir_entry_key);
-}
-
-static inline __u32 get_rec_entry_key(const void *entry) {
-  return ((const rec_entry_t *)entry)->recovery_id;
-}
-
-static inline int compare_rec_entry(const void *a, const void *b) {
-  return (get_rec_entry_key(a) > get_rec_entry_key(b)) - (get_rec_entry_key(a) < get_rec_entry_key(b));
-}
-
-static inline btree_handle_t *btree_create_rec_entry_handle(void) {
-  return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t), compare_rec_entry, get_rec_entry_key);
-}
-
-// TODO: fix project-wide BLOCK_SIZE
 // TODO: properly handle alignment (e.g: get_unaligned_le32)
-btree_node_t *btree_read_node(struct super_block *sb, __u32 block) {
+struct btree_node *btree_read_node(struct super_block *sb, __u32 block) {
   struct buffer_head *bh;
 
-  *bh = sb_bread(sb, block);
+  bh = sb_bread(sb, block);
 
   struct btree_node *node = kzalloc(sizeof(struct btree_node), GFP_KERNEL);
 
   node->bh   = bh;
-  node->node = (btree_node_t *)bh->b_data;
+  node->node = (struct btree_node_t *)bh->b_data;
 
   return node;
 }
@@ -189,7 +131,7 @@ int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
     goto out;
   }
 
-  __u32 *children = btree_children(node);
+  __u32 *children = btree_children(node, handle);
 
   ret = btree_update(sb, handle, children[i], new_entry);
 
@@ -316,7 +258,7 @@ int btree_insert(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, void 
       return -1;
     }
 
-    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
+    if (__btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
         btree_write_node(disk, handle, handle->root_block, root) != 0) {
       btree_free_node(root);
       return -1;
@@ -355,8 +297,8 @@ int btree_insert(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, void 
 
     new_root->children[0] = handle->root_block;
 
-    if (btree_split_child(disk, sb, handle, new_root_block, new_root, 0) != 0 ||
-        btree_insert_nonfull(disk, sb, handle, new_root_block, new_root, entry) != 0 ||
+    if (__btree_split_child(disk, sb, handle, new_root_block, new_root, 0) != 0 ||
+        __btree_insert_nonfull(disk, sb, handle, new_root_block, new_root, entry) != 0 ||
         btree_write_node(disk, handle, new_root_block, new_root) != 0) {
       btree_free_node(new_root);
       btree_free_node(root);
@@ -366,7 +308,7 @@ int btree_insert(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, void 
     handle->root_block = new_root_block;
     btree_free_node(new_root);
   } else {
-    if (btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
+    if (__btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
         btree_write_node(disk, handle, handle->root_block, root) != 0) {
       btree_free_node(root);
       return -1;
@@ -377,8 +319,8 @@ int btree_insert(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, void 
   return 0;
 }
 
-static int btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block, btree_node_t *node,
-                                void *entry) {
+static int __btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block, btree_node_t *node,
+                                  void *entry) {
   int   i       = node->num_entries - 1;
   __u8 *entries = node->entries;
   __u32 key     = handle->get_key(entry);
@@ -411,7 +353,7 @@ static int btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t
       return -1;
 
     if (child->num_entries == (__u32)(2 * handle->min_degree - 1)) {
-      if (btree_split_child(disk, sb, handle, node_block, node, i) != 0) {
+      if (__btree_split_child(disk, sb, handle, node_block, node, i) != 0) {
         btree_free_node(child);
         return -1;
       }
@@ -428,7 +370,7 @@ static int btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t
         return -1;
     }
 
-    int result = btree_insert_nonfull(disk, sb, handle, child_block, child, entry);
+    int result = __btree_insert_nonfull(disk, sb, handle, child_block, child, entry);
     if (result == 0) {
       // persist child and updated parent
       if (btree_write_node(disk, handle, child_block, child) != 0)
@@ -442,8 +384,8 @@ static int btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t
   }
 }
 
-static int btree_split_child(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent,
-                             int index) {
+static int __btree_split_child(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent,
+                               int index) {
   btree_node_t *child = btree_read_node(disk, handle, parent->children[index]);
   if (!child)
     return -1;
@@ -506,7 +448,7 @@ static int btree_split_child(FILE *disk, bsfs_super_block *sb, btree_handle_t *h
 int btree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 key) {
   int   success  = 0;
   __u32 old_root = handle ? handle->root_block : 0;
-  btree_remove_internal(disk, sb, handle, handle->root_block, key, &success);
+  __btree_remove_internal(disk, sb, handle, handle->root_block, key, &success);
 
   if (success && handle && handle->root_block != 0) {
     btree_node_t *root = btree_read_node(disk, handle, handle->root_block);
@@ -532,7 +474,7 @@ int btree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32
   return success;
 }
 
-static void btree_remove_internal(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, int *success) {
+static void __btree_remove_internal(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, int *success) {
   if (node_block == 0) {
     *success = 0;
     return;
@@ -562,7 +504,7 @@ static void btree_remove_internal(FILE *disk, bsfs_super_block *sb, btree_handle
           btree_write_node(disk, handle, node_block, node);
           __u32 pred_key = handle->get_key((__u8 *)pred->entries + (pred->num_entries - 1) * handle->entry_size);
           btree_free_node(pred);
-          btree_remove_internal(disk, sb, handle, node->children[i], pred_key, success);
+          __btree_remove_internal(disk, sb, handle, node->children[i], pred_key, success);
         } else {
           btree_node_t *succ = btree_read_node(disk, handle, node->children[i + 1]);
           if (succ->num_entries >= (__u32)handle->min_degree) {
@@ -570,10 +512,10 @@ static void btree_remove_internal(FILE *disk, bsfs_super_block *sb, btree_handle
             btree_write_node(disk, handle, node_block, node);
             __u32 succ_key = handle->get_key(succ->entries);
             btree_free_node(succ);
-            btree_remove_internal(disk, sb, handle, node->children[i + 1], succ_key, success);
+            __btree_remove_internal(disk, sb, handle, node->children[i + 1], succ_key, success);
           } else {
-            btree_merge(disk, sb, handle, node_block, node, i);
-            btree_remove_internal(disk, sb, handle, node->children[i], key, success);
+            __btree_merge(disk, sb, handle, node_block, node, i);
+            __btree_remove_internal(disk, sb, handle, node->children[i], key, success);
           }
           // succ was freed in the >= branch and merged into left in the else
           // branch; do not double-free here.
@@ -587,13 +529,13 @@ static void btree_remove_internal(FILE *disk, bsfs_super_block *sb, btree_handle
       int           child_idx = i;
       btree_node_t *child     = btree_read_node(disk, handle, node->children[child_idx]);
       if (child->num_entries < (__u32)handle->min_degree) {
-        btree_fill(disk, sb, handle, node_block, node, child_idx);
+        __btree_fill(disk, sb, handle, node_block, node, child_idx);
         btree_write_node(disk, handle, node_block, node);
         if (child_idx > (int)node->num_entries)
           child_idx = node->num_entries;
       }
       btree_free_node(child);
-      btree_remove_internal(disk, sb, handle, node->children[child_idx], key, success);
+      __btree_remove_internal(disk, sb, handle, node->children[child_idx], key, success);
     }
   }
 
@@ -709,7 +651,7 @@ static void btree_remove_entry_internal(FILE *disk, bsfs_super_block *sb, btree_
       }
     } else {
       // Merge left + key + right, then recurse into merged
-      btree_merge(disk, sb, handle, node_block, node, (int)i);
+      __btree_merge(disk, sb, handle, node_block, node, (int)i);
       // After merge, the merged child stays at children[i]
       __u32 merged_block = node->children[i];
       (void)btree_write_node(disk, handle, node_block, node);
@@ -751,10 +693,10 @@ static void btree_remove_entry_internal(FILE *disk, bsfs_super_block *sb, btree_
     if (left_sib_block) {
       btree_node_t *left = btree_read_node(disk, handle, left_sib_block);
       if (left && left->num_entries >= (__u32)handle->min_degree) {
-        btree_borrow_from_prev(disk, handle, node_block, node, child_idx);
+        __btree_borrow_from_prev(disk, handle, node_block, node, child_idx);
       } else {
         // Merge with left sibling
-        btree_merge(disk, sb, handle, node_block, node, child_idx - 1);
+        __btree_merge(disk, sb, handle, node_block, node, child_idx - 1);
         child_idx -= 1;
         child_block = node->children[child_idx];
       }
@@ -763,10 +705,10 @@ static void btree_remove_entry_internal(FILE *disk, bsfs_super_block *sb, btree_
     } else if (right_sib_block) {
       btree_node_t *right = btree_read_node(disk, handle, right_sib_block);
       if (right && right->num_entries >= (__u32)handle->min_degree) {
-        btree_borrow_from_next(disk, handle, node_block, node, child_idx);
+        __btree_borrow_from_next(disk, handle, node_block, node, child_idx);
       } else {
         // Merge with right sibling at child_idx
-        btree_merge(disk, sb, handle, node_block, node, child_idx);
+        __btree_merge(disk, sb, handle, node_block, node, child_idx);
         // child_idx remains the same; merged block at children[child_idx]
         child_block = node->children[child_idx];
       }
@@ -817,7 +759,7 @@ int btree_remove_entry(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle,
   return success;
 }
 
-static void btree_merge(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
+static void __btree_merge(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
   __u32 left_block  = parent->children[idx];
   __u32 right_block = parent->children[idx + 1];
 
@@ -854,11 +796,11 @@ static void btree_merge(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle
   btree_free_node(right);
 }
 
-static void btree_fill(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
+static void __btree_fill(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
   if (idx > 0) {
     btree_node_t *left = btree_read_node(disk, handle, parent->children[idx - 1]);
     if (left->num_entries >= (__u32)handle->min_degree) {
-      btree_borrow_from_prev(disk, handle, parent_block, parent, idx);
+      __btree_borrow_from_prev(disk, handle, parent_block, parent, idx);
       btree_free_node(left);
       return;
     }
@@ -867,7 +809,7 @@ static void btree_fill(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle,
   if ((__u32)idx < parent->num_entries) {
     btree_node_t *right = btree_read_node(disk, handle, parent->children[idx + 1]);
     if (right->num_entries >= (__u32)handle->min_degree) {
-      btree_borrow_from_next(disk, handle, parent_block, parent, idx);
+      __btree_borrow_from_next(disk, handle, parent_block, parent, idx);
       btree_free_node(right);
       return;
     }
@@ -876,7 +818,7 @@ static void btree_fill(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle,
   btree_merge(disk, sb, handle, parent_block, parent, (idx > 0) ? idx - 1 : idx);
 }
 
-static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
+static void __btree_borrow_from_prev(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
   btree_node_t *child   = btree_read_node(disk, handle, parent->children[idx]);
   btree_node_t *sibling = btree_read_node(disk, handle, parent->children[idx - 1]);
 
@@ -910,7 +852,7 @@ static void btree_borrow_from_prev(FILE *disk, btree_handle_t *handle, __u32 par
   btree_free_node(sibling);
 }
 
-static void btree_borrow_from_next(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
+static void __btree_borrow_from_next(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
   btree_node_t *child   = btree_read_node(disk, handle, parent->children[idx]);
   btree_node_t *sibling = btree_read_node(disk, handle, parent->children[idx + 1]);
 

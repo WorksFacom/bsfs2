@@ -13,7 +13,7 @@
 #define API_BSFS_H
 
 // Centralize lower-level dependencies needed by browser commands
-#include "bsfs.h"        // bsfs_super_block, bsfs_inode, file_t
+#include "../bsfs.h"     // bsfs_super_block, bsfs_inode, file_t
 #include "btree.h"       // btree_handle_t, hash helpers
 #include "dentry.h"      // dir_t, dir_entry_t
 #include "permissions.h" // DAC helpers
