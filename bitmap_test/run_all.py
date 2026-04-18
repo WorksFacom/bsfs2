@@ -24,6 +24,7 @@ from allocators import (
 
 
 STRATEGY_SPECS = [
+    ("baseline", BitmapBaseline, "Baseline Sequential Scan"),
     ("avl", BitmapAVL, "AVL Tree"),
     ("rb", BitmapRB, "Red-Black Tree"),
     ("heap", BitmapHeap, "Min-Heap"),
@@ -33,9 +34,10 @@ STRATEGY_SPECS = [
     ("segtree", BitmapSegmentTree, "Segment Tree"),
     ("twolevel", BitmapTwoLevelIndex, "Two-Level Index"),
     ("treap", BitmapTreap, "Treap"),
-    ("baseline", BitmapBaseline, "Baseline Sequential Scan"),
 ]
-STRATEGIES = {key: (allocator_class, name) for key, allocator_class, name in STRATEGY_SPECS}
+STRATEGIES = {
+    key: (allocator_class, name) for key, allocator_class, name in STRATEGY_SPECS
+}
 
 
 class BitmapTester:
@@ -48,7 +50,7 @@ class BitmapTester:
 
     def demo(self):
         """Run demo mode."""
-        print(f"\n{'='*74}")
+        print(f"\n{'=' * 74}")
         print(f"DEMO: {self.name} for Bitmap Block Allocation")
         print("=" * 74)
 
@@ -85,7 +87,7 @@ class BitmapTester:
     ):
         """Run stress test and return metrics."""
         if show_summary:
-            print(f"\n{'='*74}")
+            print(f"\n{'=' * 74}")
             print(f"STRESS TEST: {self.name} Multiple Block Allocation Performance")
             print("=" * 74)
 
@@ -110,7 +112,7 @@ class BitmapTester:
         for i in range(num_operations):
             if show_progress and i % progress_step == 0 and i > 0:
                 print(
-                    f"\rProgress: {i:,}/{num_operations:,} ({100*i//num_operations}%)\033[K",
+                    f"\rProgress: {i:,}/{num_operations:,} ({100 * i // num_operations}%)\033[K",
                     end="",
                     flush=True,
                 )
@@ -132,7 +134,9 @@ class BitmapTester:
                     allocated_blocks.extend(allocated)
             else:
                 free_count = min(blocks_per_alloc, len(allocated_blocks))
-                block_positions = sorted(rng.sample(range(len(allocated_blocks)), free_count), reverse=True)
+                block_positions = sorted(
+                    rng.sample(range(len(allocated_blocks)), free_count), reverse=True
+                )
                 blocks_to_free = [allocated_blocks[pos] for pos in block_positions]
                 t_start = time.perf_counter_ns()
                 success = allocator.deallocate_blocks(blocks_to_free)
@@ -148,11 +152,17 @@ class BitmapTester:
 
         alloc_avg = sum(alloc_times) / len(alloc_times) if alloc_times else 0
         alloc_median = median(alloc_times) if alloc_times else 0
-        alloc_p95 = sorted(alloc_times)[int(len(alloc_times) * 0.95)] if alloc_times else 0
+        alloc_p95 = (
+            sorted(alloc_times)[int(len(alloc_times) * 0.95)] if alloc_times else 0
+        )
 
         dealloc_avg = sum(dealloc_times) / len(dealloc_times) if dealloc_times else 0
         dealloc_median = median(dealloc_times) if dealloc_times else 0
-        dealloc_p95 = sorted(dealloc_times)[int(len(dealloc_times) * 0.95)] if dealloc_times else 0
+        dealloc_p95 = (
+            sorted(dealloc_times)[int(len(dealloc_times) * 0.95)]
+            if dealloc_times
+            else 0
+        )
 
         total_time_ns = sum(alloc_times) + sum(dealloc_times)
         total_time_s = total_time_ns / 1e6
@@ -181,7 +191,7 @@ class BitmapTester:
         }
 
         if show_summary:
-            print(f"\n{'='*74}")
+            print(f"\n{'=' * 74}")
             print("RESULTS")
             print("=" * 74)
 
