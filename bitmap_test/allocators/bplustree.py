@@ -135,6 +135,7 @@ class BitmapBPlusTree(BaseAllocator):
             
             parent.keys.insert(index, new_child.keys[0])
         else:
+            promoted_key = full_child.keys[mid_index]
             new_child.keys = full_child.keys[mid_index + 1:]
             new_child.children = full_child.children[mid_index + 1:]
             
@@ -144,7 +145,7 @@ class BitmapBPlusTree(BaseAllocator):
             for child in new_child.children:
                 child.parent = new_child
             
-            parent.keys.insert(index, full_child.keys[mid_index])
+            parent.keys.insert(index, promoted_key)
         
         parent.children.insert(index + 1, new_child)
         new_child.parent = parent
