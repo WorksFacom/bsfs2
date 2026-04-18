@@ -24,39 +24,40 @@ class BitmapHeap:
     
     def allocate_blocks(self, count):
         """Allocate count free blocks - O(count × log n)"""
-        allocated = []
-        
-        try:
-            for _ in range(count):
-                if not self.heap:
-                    for allocated_idx in allocated:
-                        self._insert_to_heap(allocated_idx)
-                        self.bitmap[allocated_idx] = 0
-                    return []
-                
-                idx = self.heap[0]
-                self.bitmap[idx] = 1
-                self._remove_min()
-                allocated.append(idx)
-            
-            return sorted(allocated)
-        except Exception:
-            for allocated_idx in allocated:
-                self._insert_to_heap(allocated_idx)
-                self.bitmap[allocated_idx] = 0
+        if count <= 0:
             return []
+
+        allocated = []
+
+        for _ in range(count):
+            if not self.heap:
+                for allocated_idx in allocated:
+                    self._insert_to_heap(allocated_idx)
+                    self.bitmap[allocated_idx] = 0
+                return []
+
+            idx = self.heap[0]
+            self.bitmap[idx] = 1
+            self._remove_min()
+            allocated.append(idx)
+
+        return allocated
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks - O(count × log n)"""
-        try:
-            for idx in indices:
-                if self.bitmap[idx] == 0:
-                    return False
-                self.bitmap[idx] = 0
-                self._insert_to_heap(idx)
-            return True
-        except Exception:
+        if len(set(indices)) != len(indices):
             return False
+
+        for idx in indices:
+            if idx < 0 or idx >= self.size:
+                return False
+            if self.bitmap[idx] == 0:
+                return False
+
+        for idx in indices:
+            self.bitmap[idx] = 0
+            self._insert_to_heap(idx)
+        return True
     
     def count_free_blocks(self):
         """Count free blocks"""

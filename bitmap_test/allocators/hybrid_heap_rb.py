@@ -252,47 +252,41 @@ class BitmapHybridHeapRB:
     
     def allocate_blocks(self, count):
         """Allocate blocks using heap for fast finding"""
-        allocated = []
-        
-        try:
-            for _ in range(count):
-                idx = self.find_free_block()
-                if idx == -1:
-                    # Rollback
-                    for allocated_idx in allocated:
-                        self.bitmap[allocated_idx] = 0
-                        heapq.heappush(self.heap, allocated_idx)
-                    return []
-                
-                heapq.heappop(self.heap)
-                self.bitmap[idx] = 1
-                allocated.append(idx)
-            
-            return sorted(allocated)
-        except Exception:
-            for allocated_idx in allocated:
-                self.bitmap[allocated_idx] = 0
-                heapq.heappush(self.heap, allocated_idx)
+        if count <= 0:
             return []
+
+        allocated = []
+
+        for _ in range(count):
+            idx = self.find_free_block()
+            if idx == -1:
+                # Rollback
+                for allocated_idx in allocated:
+                    self.bitmap[allocated_idx] = 0
+                    heapq.heappush(self.heap, allocated_idx)
+                return []
+
+            heapq.heappop(self.heap)
+            self.bitmap[idx] = 1
+            allocated.append(idx)
+
+        return allocated
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks using RB-Tree for fast insertion"""
-        try:
-            if len(set(indices)) != len(indices):
+        if len(set(indices)) != len(indices):
+            return False
+
+        for idx in indices:
+            if idx < 0 or idx >= self.size:
+                return False
+            if self.bitmap[idx] == 0:
                 return False
 
-            for idx in indices:
-                if idx < 0 or idx >= self.size:
-                    return False
-                if self.bitmap[idx] == 0:
-                    return False
-
-            for idx in indices:
-                self.bitmap[idx] = 0
-                heapq.heappush(self.heap, idx)
-            return True
-        except Exception:
-            return False
+        for idx in indices:
+            self.bitmap[idx] = 0
+            heapq.heappush(self.heap, idx)
+        return True
     
     def count_free_blocks(self):
         """Count free blocks"""

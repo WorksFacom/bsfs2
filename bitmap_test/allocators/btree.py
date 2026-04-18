@@ -43,39 +43,40 @@ class BitmapBTree:
     
     def allocate_blocks(self, count):
         """Allocate count free blocks"""
-        allocated = []
-        
-        try:
-            for _ in range(count):
-                idx = self.find_free_block()
-                if idx == -1:
-                    for allocated_idx in allocated:
-                        self._insert_key(allocated_idx)
-                        self.bitmap[allocated_idx] = 0
-                    return []
-                
-                self.bitmap[idx] = 1
-                self._delete_key(idx)
-                allocated.append(idx)
-            
-            return sorted(allocated)
-        except Exception:
-            for allocated_idx in allocated:
-                self._insert_key(allocated_idx)
-                self.bitmap[allocated_idx] = 0
+        if count <= 0:
             return []
+
+        allocated = []
+
+        for _ in range(count):
+            idx = self.find_free_block()
+            if idx == -1:
+                for allocated_idx in allocated:
+                    self._insert_key(allocated_idx)
+                    self.bitmap[allocated_idx] = 0
+                return []
+
+            self.bitmap[idx] = 1
+            self._delete_key(idx)
+            allocated.append(idx)
+
+        return allocated
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks"""
-        try:
-            for idx in indices:
-                if self.bitmap[idx] == 0:
-                    return False
-                self.bitmap[idx] = 0
-                self._insert_key(idx)
-            return True
-        except Exception:
+        if len(set(indices)) != len(indices):
             return False
+
+        for idx in indices:
+            if idx < 0 or idx >= self.size:
+                return False
+            if self.bitmap[idx] == 0:
+                return False
+
+        for idx in indices:
+            self.bitmap[idx] = 0
+            self._insert_key(idx)
+        return True
     
     def count_free_blocks(self):
         """Count free blocks"""

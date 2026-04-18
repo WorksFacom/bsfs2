@@ -23,8 +23,7 @@ class BitmapSegmentTree:
     def __init__(self, size):
         self.size = size
         self.bitmap = [0] * size  # 0 = free, 1 = occupied
-        self.root = self._build_tree(0, size - 1)
-        self.last_search_idx = 0
+        self.root = self._build_tree(0, size - 1) if size > 0 else None
     
     def _build_tree(self, start, end):
         """Build segment tree recursively."""
@@ -85,14 +84,22 @@ class BitmapSegmentTree:
     
     def allocate_blocks(self, count):
         """Allocate count blocks."""
+        if count <= 0:
+            return []
+        if not self.root:
+            return []
+
         allocated = []
         
-        # Try to find and allocate count blocks
+        # Try to find and allocate count blocks atomically.
         for _ in range(count):
             idx = self._find_free(self.root, 1)
             
             if idx == -1:
-                break
+                for allocated_idx in allocated:
+                    self.bitmap[allocated_idx] = 0
+                    self._update_point(self.root, allocated_idx, True)
+                return []
             
             # Mark as occupied
             self.bitmap[idx] = 1
@@ -103,6 +110,9 @@ class BitmapSegmentTree:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks."""
+        if len(set(indices)) != len(indices):
+            return False
+
         for idx in indices:
             if idx < 0 or idx >= self.size:
                 return False

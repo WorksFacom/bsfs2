@@ -38,39 +38,40 @@ class BitmapAVL:
     
     def allocate_blocks(self, count):
         """Allocate count free blocks using first-fit (O(count × log n))"""
-        allocated = []
-        
-        try:
-            for _ in range(count):
-                idx = self.find_free_block()
-                if idx == -1:
-                    for allocated_idx in allocated:
-                        self.root = self._insert(self.root, allocated_idx)
-                        self.bitmap[allocated_idx] = 0
-                    return []
-                
-                self.bitmap[idx] = 1
-                self.root = self._delete(self.root, idx)
-                allocated.append(idx)
-            
-            return sorted(allocated)
-        except Exception:
-            for allocated_idx in allocated:
-                self.root = self._insert(self.root, allocated_idx)
-                self.bitmap[allocated_idx] = 0
+        if count <= 0:
             return []
+
+        allocated = []
+
+        for _ in range(count):
+            idx = self.find_free_block()
+            if idx == -1:
+                for allocated_idx in allocated:
+                    self.root = self._insert(self.root, allocated_idx)
+                    self.bitmap[allocated_idx] = 0
+                return []
+
+            self.bitmap[idx] = 1
+            self.root = self._delete(self.root, idx)
+            allocated.append(idx)
+
+        return sorted(allocated)
     
     def deallocate_blocks(self, indices):
-        """Deallocate blocks by reinserting into AVL tree"""
-        try:
-            for idx in indices:
-                if self.bitmap[idx] == 0:
-                    return False
-                self.bitmap[idx] = 0
-                self.root = self._insert(self.root, idx)
-            return True
-        except Exception:
+        """Deallocate blocks by reinserting into AVL tree."""
+        if len(set(indices)) != len(indices):
             return False
+
+        for idx in indices:
+            if idx < 0 or idx >= self.size:
+                return False
+            if self.bitmap[idx] == 0:
+                return False
+
+        for idx in indices:
+            self.bitmap[idx] = 0
+            self.root = self._insert(self.root, idx)
+        return True
     
     def count_free_blocks(self):
         """Count free blocks by tree traversal"""

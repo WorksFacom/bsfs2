@@ -118,6 +118,9 @@ class BitmapTreap:
     
     def allocate_blocks(self, count):
         """Allocate count blocks using min-finding from treap."""
+        if count <= 0:
+            return []
+
         allocated = []
         
         for _ in range(count):
@@ -125,7 +128,10 @@ class BitmapTreap:
             min_idx = self._find_min(self.treap_root)
             
             if min_idx == -1:
-                break
+                for allocated_idx in allocated:
+                    self.bitmap[allocated_idx] = 0
+                    self.treap_root = self._insert(self.treap_root, TreapNode(allocated_idx))
+                return []
             
             # Mark as occupied
             self.bitmap[min_idx] = 1
@@ -138,6 +144,9 @@ class BitmapTreap:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks."""
+        if len(set(indices)) != len(indices):
+            return False
+
         for idx in indices:
             if idx < 0 or idx >= self.size:
                 return False
