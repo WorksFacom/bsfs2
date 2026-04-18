@@ -2,14 +2,16 @@
 Min-Heap implementation for bitmap block allocation
 """
 
+from core import BaseAllocator, register
 
-class BitmapHeap:
+
+@register("heap", display_name="Min-Heap")
+class BitmapHeap(BaseAllocator):
     """Min-Heap indexed Bitmap Allocator"""
     
     def __init__(self, size):
         """Initialize bitmap of size blocks, all free (0)"""
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
         self.heap = list(range(size))
         self.position = {i: i for i in range(size)}
         
@@ -45,14 +47,8 @@ class BitmapHeap:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks - O(count × log n)"""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

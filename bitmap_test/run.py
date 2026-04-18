@@ -5,13 +5,18 @@ Entry point for running all allocator tests with optional comparison report
 """
 
 import os
-import random
 import sys
 
 # Add current directory to path for relative imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from run_all import STRATEGY_SPECS, STRATEGIES, run_all, run_test
+from allocators import get_strategy_specs
+from runners import BenchmarkRunner, ReportRunner, ValidatorRunner
+
+STRATEGY_SPECS = get_strategy_specs()
+STRATEGIES = {
+    key: (allocator_class, name) for key, allocator_class, name in STRATEGY_SPECS
+}
 
 
 def _menu_select(title, options):
@@ -52,8 +57,6 @@ def run_tui():
             return
 
         if main_idx == 1:
-            from run_report import run_and_save_report
-
             report_path = run_and_save_report()
             print(f"\nReport saved to: {report_path}")
             continue
@@ -72,138 +75,53 @@ def run_tui():
         strategy = "all" if strategy_idx == 0 else list(STRATEGIES.keys())[strategy_idx - 1]
 
         if strategy == "all":
-            run_all(demo=demo, stress=stress)
+            run_all_tests(demo=demo, stress=stress)
         else:
-            run_test(strategy, demo=demo, stress=stress)
-
-
-def _run_validation_workload(
-    allocator_class,
-    bitmap_size,
-    blocks_per_alloc,
-    num_operations,
-    seed,
-):
-    """Run deterministic mini-stress workload and return final state."""
-    allocator = allocator_class(bitmap_size)
-    rng = random.Random(seed)
-    allocated_blocks = []
-
-    for _ in range(num_operations):
-        estimated_free_blocks = bitmap_size - len(allocated_blocks)
-        should_allocate = rng.random() < 0.7 or not allocated_blocks
-
-        if estimated_free_blocks <= blocks_per_alloc and allocated_blocks:
-            should_allocate = False
-
-        if should_allocate:
-            allocated = allocator.allocate_blocks(blocks_per_alloc)
-            if allocated:
-                allocated_blocks.extend(allocated)
-        else:
-            free_count = min(blocks_per_alloc, len(allocated_blocks))
-            block_positions = sorted(
-                rng.sample(range(len(allocated_blocks)), free_count),
-                reverse=True,
-            )
-            blocks_to_free = [allocated_blocks[pos] for pos in block_positions]
-            success = allocator.deallocate_blocks(blocks_to_free)
-            if success:
-                for pos in block_positions:
-                    allocated_blocks.pop(pos)
-
-    bitmap = list(allocator.bitmap)
-    occupied_count = sum(bitmap)
-    free_count = allocator.count_free_blocks()
-    tracked_occupied_count = len(allocated_blocks)
-    bitmap_free_count = bitmap_size - occupied_count
-
-    return {
-        "bitmap": bitmap,
-        "occupied_count": occupied_count,
-        "free_count": free_count,
-        "bitmap_free_count": bitmap_free_count,
-        "tracked_occupied_count": tracked_occupied_count,
-    }
+            run_single_test(strategy, demo=demo, stress=stress)
 
 
 def run_consistency_validator():
     """Validate that all allocators end with the same bitmap on fixed workload."""
-    bitmap_size = 100000
-    blocks_per_alloc = 5
-    num_operations = 10000  # 10% of default stress load (100k)
-    seed = 42
+    return ValidatorRunner(STRATEGY_SPECS).run()
 
-    print("\n" + "=" * 80)
-    print("BITMAP ALLOCATORS - CONSISTENCY VALIDATOR")
-    print("=" * 80)
-    print("\nFixed workload:")
-    print(f"  Bitmap size: {bitmap_size:,} blocks")
-    print(f"  Blocks per allocation: {blocks_per_alloc}")
-    print(f"  Operations: {num_operations:,} (10% of stress)")
-    print(f"  RNG seed: {seed}")
-    print("")
 
-    results = []
-    for key, allocator_class, name in STRATEGY_SPECS:
-        state = _run_validation_workload(
-            allocator_class=allocator_class,
-            bitmap_size=bitmap_size,
-            blocks_per_alloc=blocks_per_alloc,
-            num_operations=num_operations,
-            seed=seed,
-        )
-        results.append((key, name, state))
-        print(f"  ✓ {name}")
+def run_single_test(strategy_name, demo=False, stress=False):
+    """Run test for a specific strategy."""
+    if strategy_name not in STRATEGIES:
+        print(f"Unknown strategy: {strategy_name}")
+        print(f"Available: {', '.join(STRATEGIES.keys())}")
+        return
 
-    baseline_key, baseline_name, baseline_state = results[0]
-    baseline_bitmap = baseline_state["bitmap"]
+    allocator_class, name = STRATEGIES[strategy_name]
+    runner = BenchmarkRunner(allocator_class, name)
 
-    divergence_messages = []
-    consistency_messages = []
+    if demo:
+        runner.run_demo()
+    if stress:
+        runner.run_stress()
+    if not demo and not stress:
+        runner.run_demo()
+        runner.run_stress()
 
-    for key, name, state in results:
-        if state["free_count"] != state["bitmap_free_count"]:
-            consistency_messages.append(
-                f"- {name}: count_free_blocks={state['free_count']} != bitmap_free={state['bitmap_free_count']}"
-            )
-        if state["tracked_occupied_count"] != state["occupied_count"]:
-            consistency_messages.append(
-                f"- {name}: tracked_occupied={state['tracked_occupied_count']} != bitmap_occupied={state['occupied_count']}"
-            )
 
-        if key == baseline_key:
-            continue
+def run_all_tests(demo=False, stress=False):
+    """Run tests for all strategies."""
+    for _, allocator_class, name in STRATEGY_SPECS:
+        runner = BenchmarkRunner(allocator_class, name)
+        if demo:
+            runner.run_demo()
+        if stress:
+            runner.run_stress()
+        if not demo and not stress:
+            runner.run_demo()
+            runner.run_stress()
 
-        if state["bitmap"] != baseline_bitmap:
-            mismatch_count = sum(
-                1 for a, b in zip(baseline_bitmap, state["bitmap"]) if a != b
-            )
-            first_mismatch_idx = next(
-                i for i, (a, b) in enumerate(zip(baseline_bitmap, state["bitmap"])) if a != b
-            )
-            divergence_messages.append(
-                f"- {name} divergiu de {baseline_name}: {mismatch_count} posições diferentes (primeira em idx={first_mismatch_idx})"
-            )
 
-    print("\n" + "-" * 80)
-    if consistency_messages:
-        print("INTERNAL CONSISTENCY CHECKS: FAILED")
-        for message in consistency_messages:
-            print(message)
-    else:
-        print("INTERNAL CONSISTENCY CHECKS: OK")
-
-    if divergence_messages:
-        print("BITMAP COMPARISON: FAILED")
-        for message in divergence_messages:
-            print(message)
-        print("\nValidator result: FAIL")
-        return False
-
-    print("BITMAP COMPARISON: OK")
-    print("Validator result: PASS")
-    return not consistency_messages
+def run_and_save_report(output_dir=None):
+    """Run all benchmarks and save markdown report."""
+    results = ReportRunner.run_all_benchmarks(STRATEGY_SPECS)
+    markdown = ReportRunner.build_report_markdown(results)
+    return ReportRunner.save_report_file(markdown, output_dir=output_dir)
 
 
 def print_usage():
@@ -252,10 +170,6 @@ Results:
     - Time to deallocate N blocks
     - Total operations per second
     - Memory fragmentation patterns
-
-Performance Notes:
-  - B+Tree, Hybrid, RB, Segment Tree, Two-Level Index, Treap
-  - AVL Tree, Heap, B-Tree
 """)
 
 
@@ -267,11 +181,8 @@ if __name__ == "__main__":
     if "--tui" in sys.argv or (len(sys.argv) == 1 and sys.stdin.isatty()):
         run_tui()
         sys.exit(0)
-    
-    # Check for report flag first
-    if "--report" in sys.argv:
-        from run_report import run_and_save_report
 
+    if "--report" in sys.argv:
         report_path = run_and_save_report()
         print(f"\nReport saved to: {report_path}")
         sys.exit(0)
@@ -279,22 +190,20 @@ if __name__ == "__main__":
     if "--validate" in sys.argv:
         passed = run_consistency_validator()
         sys.exit(0 if passed else 1)
-    
+
     demo = "--demo" in sys.argv
     stress = "--stress" in sys.argv
-    
-    # Default to both if no test type specified
+
     if not demo and not stress:
         demo = stress = True
-    
-    # Check for specific strategy
+
     strategy = None
     for arg in sys.argv[1:]:
         if arg in STRATEGIES:
             strategy = arg
             break
-    
+
     if strategy:
-        run_test(strategy, demo, stress)
+        run_single_test(strategy, demo, stress)
     else:
-        run_all(demo, stress)
+        run_all_tests(demo, stress)

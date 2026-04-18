@@ -10,6 +10,7 @@ Simpler to implement than Red-Black Trees while maintaining same complexity.
 """
 
 import random
+from core import BaseAllocator, register
 
 
 class TreapNode:
@@ -26,12 +27,12 @@ class TreapNode:
         return self.idx < other.idx
 
 
-class BitmapTreap:
+@register("treap", display_name="Treap")
+class BitmapTreap(BaseAllocator):
     """Bitmap allocator using Treap (randomized BST)."""
     
     def __init__(self, size):
-        self.size = size
-        self.bitmap = [0] * size  # 0 = free, 1 = occupied
+        super().__init__(size)
         self.treap_root = None
         
         # Initialize treap with all free blocks
@@ -144,14 +145,8 @@ class BitmapTreap:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks."""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

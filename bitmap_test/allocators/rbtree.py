@@ -4,6 +4,8 @@ Red-Black Tree implementation for bitmap block allocation
 
 from enum import IntEnum
 
+from core import BaseAllocator, register
+
 
 class Color(IntEnum):
     """Red-Black Tree node color"""
@@ -22,13 +24,13 @@ class RBNode:
         self.parent = None
 
 
-class BitmapRB:
+@register("rb", display_name="Red-Black Tree")
+class BitmapRB(BaseAllocator):
     """Red-Black Tree indexed Bitmap Allocator"""
     
     def __init__(self, size):
         """Initialize bitmap of size blocks, all free (0)"""
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
         self.root = None
         self.free_blocks = set(range(size))
     
@@ -57,14 +59,8 @@ class BitmapRB:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks - O(count × log n)"""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

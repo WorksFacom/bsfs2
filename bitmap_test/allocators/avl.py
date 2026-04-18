@@ -2,6 +2,8 @@
 AVL Tree implementation for bitmap block allocation
 """
 
+from core import BaseAllocator, register
+
 
 class AVLNode:
     """AVL Tree node"""
@@ -13,13 +15,13 @@ class AVLNode:
         self.height = 1
 
 
-class BitmapAVL:
+@register("avl", display_name="AVL Tree")
+class BitmapAVL(BaseAllocator):
     """AVL Tree indexed Bitmap Allocator"""
     
     def __init__(self, size):
         """Initialize bitmap of size blocks, all free (0)"""
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
         self.root = None
         
         # Insert all indices as free in AVL tree
@@ -59,14 +61,8 @@ class BitmapAVL:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks by reinserting into AVL tree."""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

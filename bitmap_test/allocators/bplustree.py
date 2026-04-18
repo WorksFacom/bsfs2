@@ -2,6 +2,8 @@
 B+Tree implementation for bitmap block allocation
 """
 
+from core import BaseAllocator, register
+
 
 class BPNode:
     """B+Tree node"""
@@ -19,13 +21,13 @@ class BPNode:
         return len(self.keys) >= 2 * self.order - 1
 
 
-class BitmapBPlusTree:
+@register("bplustree", display_name="B+Tree")
+class BitmapBPlusTree(BaseAllocator):
     """B+Tree indexed Bitmap Allocator"""
     
     def __init__(self, size, order=256):
         """Initialize bitmap with B+Tree indexing"""
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
         self.order = order
         self.root = BPNode(order, is_leaf=True)
         self.first_leaf = self.root
@@ -63,14 +65,8 @@ class BitmapBPlusTree:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks"""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

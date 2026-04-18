@@ -5,6 +5,7 @@ Hybrid Heap + RB-Tree allocator for bitmap block allocation
 """
 
 import heapq
+from core import BaseAllocator, register
 
 class Color:
     RED = 0
@@ -218,7 +219,8 @@ class HybridRBTreeForDealloc:
         return self._find(self.root, key) is not None
 
 
-class BitmapHybridHeapRB:
+@register("hybrid", display_name="Hybrid Heap+RB")
+class BitmapHybridHeapRB(BaseAllocator):
     """Hybrid Heap + RB-Tree Bitmap Allocator
     
     Strategy:
@@ -228,8 +230,7 @@ class BitmapHybridHeapRB:
     """
     
     def __init__(self, size, heap_order=256):
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
         self.heap_order = heap_order
         
         # Min-Heap for allocation
@@ -274,14 +275,8 @@ class BitmapHybridHeapRB:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks using RB-Tree for fast insertion"""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

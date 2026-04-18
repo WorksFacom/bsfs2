@@ -2,14 +2,16 @@
 Baseline sequential-scan implementation for bitmap block allocation.
 """
 
+from core import BaseAllocator, register
 
-class BitmapBaseline:
+
+@register("baseline", display_name="Baseline Sequential Scan")
+class BitmapBaseline(BaseAllocator):
     """Baseline allocator using linear scan over the bitmap."""
 
     def __init__(self, size):
         """Initialize bitmap of size blocks, all free (0)."""
-        self.bitmap = [0] * size
-        self.size = size
+        super().__init__(size)
 
     def find_free_block(self):
         """Find first free block via sequential scan - O(n)."""
@@ -35,11 +37,8 @@ class BitmapBaseline:
 
     def deallocate_blocks(self, indices):
         """Deallocate blocks back to the bitmap."""
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
+        if not self.validate_deallocation(indices):
+            return False
 
         for idx in indices:
             self.bitmap[idx] = 0

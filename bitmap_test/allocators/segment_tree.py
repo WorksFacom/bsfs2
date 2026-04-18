@@ -5,6 +5,8 @@ Uses a proper segment tree to track free blocks in ranges.
 Supports efficient range queries for finding contiguous free blocks.
 """
 
+from core import BaseAllocator, register
+
 
 class SegmentTreeNode:
     """Node in a segment tree."""
@@ -17,12 +19,12 @@ class SegmentTreeNode:
         self.right = None
 
 
-class BitmapSegmentTree:
+@register("segtree", display_name="Segment Tree")
+class BitmapSegmentTree(BaseAllocator):
     """Bitmap allocator using Segment Tree."""
     
     def __init__(self, size):
-        self.size = size
-        self.bitmap = [0] * size  # 0 = free, 1 = occupied
+        super().__init__(size)
         self.root = self._build_tree(0, size - 1) if size > 0 else None
     
     def _build_tree(self, start, end):
@@ -110,14 +112,8 @@ class BitmapSegmentTree:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks."""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

@@ -6,15 +6,17 @@ Uses a two-level hierarchy:
 - Level 2: Sequential scan within the selected bucket
 """
 
+from core import BaseAllocator, register
 
-class BitmapTwoLevelIndex:
+
+@register("twolevel", display_name="Two-Level Index")
+class BitmapTwoLevelIndex(BaseAllocator):
     """Bitmap allocator using two-level indexing with buckets."""
     
     BUCKET_SIZE = 100  # Blocks per bucket
     
     def __init__(self, size):
-        self.size = size
-        self.bitmap = [0] * size  # 0 = free, 1 = occupied
+        super().__init__(size)
         
         # Calculate number of buckets
         self.num_buckets = (size + self.BUCKET_SIZE - 1) // self.BUCKET_SIZE
@@ -106,14 +108,8 @@ class BitmapTwoLevelIndex:
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks."""
-        if len(set(indices)) != len(indices):
+        if not self.validate_deallocation(indices):
             return False
-
-        for idx in indices:
-            if idx < 0 or idx >= self.size:
-                return False
-            if self.bitmap[idx] == 0:
-                return False
 
         for idx in indices:
             self.bitmap[idx] = 0

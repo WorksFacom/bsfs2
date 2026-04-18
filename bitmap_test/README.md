@@ -1,82 +1,71 @@
-# Bitmap Allocators Test Suite
+# Bitmap Allocators Benchmark Suite
 
-Complete, encapsulated test framework for comparing bitmap allocation strategies.
+Suíte de benchmark para comparar estratégias de alocação de blocos em bitmap com arquitetura modular (`core`, `allocators`, `scenarios`, `runners`).
 
-## Quick Start
+## Quick start
 
 ```bash
-# Open interactive TUI
+# TUI interativa
 python run.py
 
-# Run specific strategy
+# Executar uma estratégia específica
 python run.py bplustree --stress
 
-# Run in demo mode only
+# Executar todas (demo)
 python run.py all --demo
 
-# Generate markdown report file
+# Gerar relatório markdown
 python run.py --report
+
+# Validar consistência entre estratégias
+python run.py --validate
 ```
 
-## Structure
+## Estrutura atual
 
-```
+```text
 bitmap_test/
-├── run.py                    # Main entry point
-├── run_all.py                # Base runner (demo/stress)
-├── run_report.py             # Comparison report generator
-├── allocators/               # Data structure implementations
-│   ├── avl.py
-│   ├── rbtree.py
-│   ├── heap.py
-│   ├── btree.py
-│   ├── bplustree.py
-│   ├── __init__.py
-│   └── README.md
-└── README.md                 # This file
+├── run.py          # CLI/TUI e orquestração
+├── core/           # Contratos base, registry e métricas
+├── allocators/     # Implementações de alocadores
+├── scenarios/      # Cenários de carga (stress/fragmentação/burst)
+└── runners/        # Execução de benchmark, validação e relatório
 ```
 
-## Available Allocators
+## CLI suportada
 
-| Strategy | Speed | Notes |
-|----------|-------|-------|
-| **B+Tree** ⭐ | 442k ops/sec | Recommended - Best overall |
-| Red-Black Tree | 355k ops/sec | Fast balanced tree |
-| AVL Tree | 62k ops/sec | Highly balanced |
-| Heap | 61k ops/sec | Simple, fast minimum |
-| B-Tree | 13k ops/sec | Avoid - slow delete |
+`run.py` mantém os comandos:
+- `--demo`
+- `--stress`
+- `--report`
+- `--validate`
+- `--tui`
+- `--help`
 
-## Commands
+Exemplos:
 
 ```bash
-# Open interactive TUI (recommended)
-python run.py
-
-# Specific strategy
-python run.py bplustree
 python run.py rb --demo
-python run.py avl --stress
-
-# Report output file (created in current directory)
+python run.py treap --stress
 python run.py --report
-# => report-YYYYMMDD-HHMMSS.md
-
-# Help
-python run.py --help
+python run.py --validate
 ```
 
-## Usage in Code
+## Estratégias disponíveis
 
-```python
-import sys
-sys.path.insert(0, 'bitmap_test')
+As estratégias são registradas automaticamente por decorator (`@register`) em `allocators/` e expostas no CLI:
 
-from allocators import BitmapBPlusTree
+`baseline`, `avl`, `rb`, `heap`, `btree`, `bplustree`, `hybrid`, `segtree`, `twolevel`, `treap`.
 
-allocator = BitmapBPlusTree(size=100000)
-blocks = allocator.allocate_blocks(5)
-allocator.deallocate_blocks(blocks)
-free = allocator.count_free_blocks()
-```
+## Como estender
 
-See `allocators/README.md` for detailed allocator documentation.
+1. Novo allocator: implementar classe em `allocators/` herdando `BaseAllocator` e usar `@register("chave")`.
+2. Novo cenário: criar classe em `scenarios/` implementando `BenchmarkScenario`.
+3. Nova saída/fluxo: evoluir runners em `runners/`.
+
+## Documentação por pasta
+
+- `core/README.md`
+- `allocators/README.md`
+- `scenarios/README.md`
+- `runners/README.md`
