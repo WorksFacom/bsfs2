@@ -2,7 +2,6 @@
 Red-Black Tree implementation for bitmap block allocation
 """
 
-import heapq
 from enum import IntEnum
 
 
@@ -31,65 +30,50 @@ class BitmapRB:
         self.bitmap = [0] * size
         self.size = size
         self.root = None
-        self.free_heap = list(range(size))
-        heapq.heapify(self.free_heap)
-        
-        for i in range(size):
-            self._insert_node(i)
+        self.free_blocks = set(range(size))
     
     def find_free_block(self):
         """Find minimum free index - O(log n)"""
-        while self.free_heap and self.bitmap[self.free_heap[0]] == 1:
-            heapq.heappop(self.free_heap)
-        if not self.free_heap:
+        if not self.free_blocks:
             return -1
-        return self.free_heap[0]
+        return min(self.free_blocks)
     
     def allocate_blocks(self, count):
         """Allocate count free blocks - O(count × log n)"""
-        allocated = []
-        
-        try:
-            for _ in range(count):
-                idx = self.find_free_block()
-                if idx == -1:
-                    for allocated_idx in allocated:
-                        self.bitmap[allocated_idx] = 0
-                        heapq.heappush(self.free_heap, allocated_idx)
-                    return []
-                
-                heapq.heappop(self.free_heap)
-                self.bitmap[idx] = 1
-                allocated.append(idx)
-            
-            return sorted(allocated)
-        except Exception:
-            for allocated_idx in allocated:
-                self.bitmap[allocated_idx] = 0
+        if count <= 0:
             return []
+        if len(self.free_blocks) < count:
+            return []
+
+        allocated = []
+
+        for _ in range(count):
+            idx = self.find_free_block()
+            self.free_blocks.remove(idx)
+            self.bitmap[idx] = 1
+            allocated.append(idx)
+
+        return allocated
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks - O(count × log n)"""
-        try:
-            if len(set(indices)) != len(indices):
+        if len(set(indices)) != len(indices):
+            return False
+
+        for idx in indices:
+            if idx < 0 or idx >= self.size:
+                return False
+            if self.bitmap[idx] == 0:
                 return False
 
-            for idx in indices:
-                if idx < 0 or idx >= self.size:
-                    return False
-                if self.bitmap[idx] == 0:
-                    return False
-
-            for idx in indices:
-                self.bitmap[idx] = 0
-                heapq.heappush(self.free_heap, idx)
-            return True
-        except Exception:
-            return False
+        for idx in indices:
+            self.bitmap[idx] = 0
+            self.free_blocks.add(idx)
+        return True
     
     def count_free_blocks(self):
         """Count free blocks"""
-        return sum(1 for b in self.bitmap if b == 0)
+        return len(self.free_blocks)
     
     # ===== Red-Black Tree Operations =====
     
@@ -109,8 +93,10 @@ class BitmapRB:
             parent = current
             if index < current.index:
                 current = current.left
-            else:
+            elif index > current.index:
                 current = current.right
+            else:
+                return
         
         new_node.parent = parent
         if index < parent.index:
