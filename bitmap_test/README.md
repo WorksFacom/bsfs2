@@ -41,6 +41,7 @@ bitmap_test/
 - `--validate`
 - `--tui`
 - `--help`
+- `--stat-bench` (benchmark estatístico repetido)
 
 Exemplos:
 
@@ -50,6 +51,34 @@ python run.py treap --stress
 python run.py --report
 python run.py --validate
 ```
+
+## Benchmark estatístico (robusto)
+
+Dois modos separados:
+
+1. `allocation_only` (apenas alocação)
+2. `mixed_7030` (70% alocação / 30% desalocação)
+
+Cenário médio padrão:
+- 100 arquivos × 10 MiB
+- bloco = 4 KiB
+- 2560 blocos por arquivo
+- 256.000 blocos alvo
+- bitmap padrão = **2x** (512.000 blocos)
+
+Exemplos:
+
+```bash
+# Allocation-only com 1000 seeds
+python run.py --stat-bench --stat-mode allocation_only --stat-seeds 1000
+
+# Mixed 70/30 com subset de estratégias
+python run.py --stat-bench --stat-mode mixed_7030 --stat-seeds 1000 \
+  --stat-strategies baseline,avl,heap
+```
+
+Artefatos gerados:
+- `benchmark_runs_<mode>_<YYYYMMDD-HHMMSS>.csv` (resultado por seed/estratégia)
 
 ## Estratégias disponíveis
 

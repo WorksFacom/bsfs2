@@ -10,6 +10,8 @@ Separar lógica de workload da CLI e dos allocators para facilitar extensão e t
 
 - `base.py`: contrato `BenchmarkScenario` (`run(...)`).
 - `stress.py`: cenário padrão de benchmark (mix 70% alloc / 30% dealloc, seed fixa).
+- `allocation_only.py`: cenário estatístico de alocação pura.
+- `mixed_7030.py`: cenário estatístico seedável com mix 70/30.
 - `__init__.py`: exports públicos.
 
 ## Interface comum

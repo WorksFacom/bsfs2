@@ -7,6 +7,9 @@ Camada base da arquitetura da suíte de benchmark.
 - `base_allocator.py`: classe abstrata `BaseAllocator` com estado comum (`bitmap`, `size`) e helpers de validação/rollback.
 - `registry.py`: registro automático de estratégias via decorator `@register`.
 - `metrics.py`: agregação centralizada de métricas de stress (latências, throughput, totais).
+- `stats_config.py`: configuração do benchmark estatístico (cenário médio + parâmetros reprodutíveis).
+- `stats.py`: geração de seeds para execuções estatísticas reproduzíveis.
+- `io_csv.py`: escrita de CSVs.
 - `types.py`: tipos compartilhados leves para runners/scenarios.
 - `__init__.py`: exports públicos da camada core.
 

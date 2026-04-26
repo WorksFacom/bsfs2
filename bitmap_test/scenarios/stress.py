@@ -71,18 +71,15 @@ class StressScenario(BenchmarkScenario):
                     allocated_blocks.extend(allocated)
             else:
                 free_count = min(self.blocks_per_alloc, len(allocated_blocks))
-                block_positions = sorted(
-                    rng.sample(range(len(allocated_blocks)), free_count), reverse=True
-                )
-                blocks_to_free = [allocated_blocks[pos] for pos in block_positions]
+                blocks_to_free = rng.sample(allocated_blocks, free_count)
                 t_start = time.perf_counter_ns()
                 success = allocator.deallocate_blocks(blocks_to_free)
                 t_end = time.perf_counter_ns()
 
                 if success:
                     dealloc_times.append((t_end - t_start) / 1000.0)
-                    for pos in block_positions:
-                        allocated_blocks.pop(pos)
+                    freed = set(blocks_to_free)
+                    allocated_blocks = [b for b in allocated_blocks if b not in freed]
 
         if show_progress:
             print(

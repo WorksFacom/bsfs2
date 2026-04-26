@@ -6,7 +6,7 @@ from scenarios import StressScenario
 
 
 class BenchmarkRunner:
-    def __init__(self, allocator_class, allocator_name, bitmap_size=100000):
+    def __init__(self, allocator_class, allocator_name, bitmap_size=512000):
         self.allocator_class = allocator_class
         self.allocator_name = allocator_name
         self.bitmap_size = bitmap_size
@@ -42,8 +42,8 @@ class BenchmarkRunner:
 
     def run_stress(
         self,
-        blocks_per_alloc=5,
-        num_operations=100000,
+        blocks_per_alloc=2560,
+        num_operations=196,
         show_progress=True,
         show_summary=True,
     ):

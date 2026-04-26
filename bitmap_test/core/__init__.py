@@ -8,10 +8,14 @@ from .registry import (
     list_strategies,
     register,
 )
+from .stats_config import StatBenchmarkConfig
+from .stats import generate_seeds
 
 __all__ = [
     "BaseAllocator",
     "StrategySpec",
+    "StatBenchmarkConfig",
+    "generate_seeds",
     "register",
     "get_strategy",
     "list_strategies",
