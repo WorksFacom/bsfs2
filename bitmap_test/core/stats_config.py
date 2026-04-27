@@ -16,7 +16,7 @@ class StatBenchmarkConfig:
     bitmap_size_override: int | None = None
     num_seeds: int = 1000
     seed_base: int = 42
-    mode: str = "mixed_7030"  # allocation_only | mixed_7030
+    mode: str = "mixed_7030"  # allocation_only | mixed_7030 | multisize_pareto
     num_operations: int | None = None
     output_dir: str = "."
     workload_label: str = "default"
@@ -60,5 +60,5 @@ class StatBenchmarkConfig:
             raise ValueError("num_seeds must be > 0")
         if self.resolved_num_operations <= 0:
             raise ValueError("num_operations must be > 0")
-        if self.mode not in {"allocation_only", "mixed_7030"}:
-            raise ValueError("mode must be 'allocation_only' or 'mixed_7030'")
+        if self.mode not in {"allocation_only", "mixed_7030", "multisize_pareto"}:
+            raise ValueError("mode must be 'allocation_only', 'mixed_7030', or 'multisize_pareto'")
