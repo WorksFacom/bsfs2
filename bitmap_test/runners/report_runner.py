@@ -73,15 +73,15 @@ class ReportRunner:
                 "",
                 "## Detailed Metrics",
                 "",
-                "| Strategy | Ops/sec | Alloc avg (µs) | Alloc p95 (µs) | Dealloc avg (µs) | Dealloc p95 (µs) | Total time (s) |",
-                "|---|---:|---:|---:|---:|---:|---:|",
+                "| Strategy | Ops/sec | Alloc avg (µs) | Dealloc avg (µs) | Fragmentation | Total time (s) |",
+                "|---|---:|---:|---:|---:|---:|",
             ]
         )
 
         for result in results:
             lines.append(
-                f"| {result['name']} | {result['ops_per_sec']:,.0f} | {result['alloc_avg']:.2f} | {result['alloc_p95']:.2f} | "
-                f"{result['dealloc_avg']:.2f} | {result['dealloc_p95']:.2f} | {result['total_time_s']:.3f} |"
+                f"| {result['name']} | {result['ops_per_sec']:,.0f} | {result['alloc_avg']:.2f} | "
+                f"{result['dealloc_avg']:.2f} | {result['fragmentation']:.4f} | {result['total_time_s']:.3f} |"
             )
 
         lines.extend(
