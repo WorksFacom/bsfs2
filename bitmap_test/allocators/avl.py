@@ -60,7 +60,7 @@ class BitmapAVL(BaseAllocator):
                 self.root = self._delete(self.root, idx)
             allocated.append(idx)
 
-        return sorted(allocated)
+        return allocated
     
     def deallocate_blocks(self, indices):
         """Deallocate blocks by reinserting into AVL tree."""
@@ -75,7 +75,7 @@ class BitmapAVL(BaseAllocator):
     def count_free_blocks(self):
         """Count free blocks."""
         return self.free_blocks_remaining
-    
+
     # ===== AVL Tree Operations =====
     
     def _insert(self, node, index):
@@ -176,9 +176,3 @@ class BitmapAVL(BaseAllocator):
     def _get_balance(self, node):
         """Get balance factor"""
         return self._get_height(node.left) - self._get_height(node.right) if node else 0
-    
-    def _count_recursive(self, node):
-        """Recursively count nodes in tree"""
-        if not node:
-            return 0
-        return 1 + self._count_recursive(node.left) + self._count_recursive(node.right)

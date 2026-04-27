@@ -34,17 +34,17 @@ class BitmapRB(BaseAllocator):
         self.root = None
         self.next_fresh = 0
     
-    def find_free_block(self):
-        """Find minimum free index among recycled and fresh blocks - O(log n)."""
-        recycled_min = self._find_min(self.root).index if self.root else None
+    def _select_min_free(self):
+        """Select minimum free index from recycled or fresh - O(log n)."""
+        recycled_min_node = self._find_min(self.root) if self.root else None
+        recycled_min = recycled_min_node.index if recycled_min_node else None
         fresh_min = self.next_fresh if self.next_fresh < self.size else None
-        if recycled_min is None and fresh_min is None:
-            return -1
+        
         if recycled_min is None:
             return fresh_min
         if fresh_min is None:
             return recycled_min
-        return min(recycled_min, fresh_min)
+        return recycled_min if recycled_min < fresh_min else fresh_min
     
     def allocate_blocks(self, count):
         """Allocate count free blocks - O(count × log n)"""
@@ -56,15 +56,15 @@ class BitmapRB(BaseAllocator):
         allocated = []
 
         for _ in range(count):
-            recycled_min = self._find_min(self.root).index if self.root else None
-            if recycled_min is not None and (
-                self.next_fresh >= self.size or recycled_min < self.next_fresh
-            ):
-                idx = recycled_min
+            idx = self._select_min_free()
+            if idx == -1:
+                return []
+            
+            if self.root and idx == self._find_min(self.root).index:
                 self._delete_node(idx)
             else:
-                idx = self.next_fresh
                 self.next_fresh += 1
+            
             self.bitmap[idx] = 1
             allocated.append(idx)
 
@@ -157,7 +157,9 @@ class BitmapRB(BaseAllocator):
         return None
     
     def _find_min(self, node):
-        """Find minimum node in subtree"""
+        """Find minimum node in subtree. Returns None if node is None."""
+        if not node:
+            return None
         while node.left:
             node = node.left
         return node
@@ -384,9 +386,4 @@ class BitmapRB(BaseAllocator):
     def _get_color(self, node):
         """Get color, treating None as BLACK"""
         return node.color if node else Color.BLACK
-    
-    def _count_recursive(self, node):
-        """Recursively count nodes in tree"""
-        if not node:
-            return 0
-        return 1 + self._count_recursive(node.left) + self._count_recursive(node.right)
+

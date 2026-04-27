@@ -4,7 +4,6 @@ Hybrid Heap + RB-Tree allocator for bitmap block allocation
 - RB-Tree: O(log n) insertion/deletion for efficient deallocation
 """
 
-import heapq
 from core import BaseAllocator, register
 
 
@@ -29,31 +28,32 @@ class HybridRBTreeForDealloc:
         self.root = None
 
     def insert(self, key):
+        new_node = RBNode(key)
+
         if not self.root:
-            self.root = RBNode(key)
-            self.root.color = Color.BLACK
+            new_node.color = Color.BLACK
+            self.root = new_node
             return
 
-        node = self.root
-        while True:
-            if key < node.key:
-                if node.left:
-                    node = node.left
-                else:
-                    node.left = RBNode(key)
-                    node.left.parent = node
-                    self._fix_insert(node.left)
-                    return
-            elif key > node.key:
-                if node.right:
-                    node = node.right
-                else:
-                    node.right = RBNode(key)
-                    node.right.parent = node
-                    self._fix_insert(node.right)
-                    return
+        parent = None
+        current = self.root
+
+        while current:
+            parent = current
+            if key < current.key:
+                current = current.left
+            elif key > current.key:
+                current = current.right
             else:
                 return
+
+        new_node.parent = parent
+        if key < parent.key:
+            parent.left = new_node
+        else:
+            parent.right = new_node
+
+        self._fix_insert(new_node)
 
     def delete(self, key):
         node = self._find(self.root, key)
@@ -67,22 +67,22 @@ class HybridRBTreeForDealloc:
 
         child = node.left if node.left else node.right
 
-        if node.color == Color.BLACK:
-            if child:
-                child.color = Color.BLACK
-            self._fix_delete(node)
+        if child:
+            child.parent = node.parent
 
-        if node.parent:
+        if not node.parent:
+            self.root = child
+        else:
             if node.parent.left == node:
                 node.parent.left = child
             else:
                 node.parent.right = child
+
+        if node.color == Color.BLACK:
             if child:
-                child.parent = node.parent
-        else:
-            self.root = child
-            if self.root:
-                self.root.color = Color.BLACK
+                self._fix_delete(child)
+            elif node.parent:
+                self._fix_delete_null(node.parent, node == node.parent.left)
 
     def _find(self, node, key):
         while node:
@@ -101,8 +101,11 @@ class HybridRBTreeForDealloc:
 
     def _fix_insert(self, node):
         while node.parent and node.parent.color == Color.RED:
+            if not node.parent.parent:
+                break
             if node.parent == node.parent.parent.left:
                 uncle = node.parent.parent.right
+
                 if uncle and uncle.color == Color.RED:
                     node.parent.color = Color.BLACK
                     uncle.color = Color.BLACK
@@ -112,11 +115,13 @@ class HybridRBTreeForDealloc:
                     if node == node.parent.right:
                         node = node.parent
                         self._rotate_left(node)
+
                     node.parent.color = Color.BLACK
                     node.parent.parent.color = Color.RED
                     self._rotate_right(node.parent.parent)
             else:
                 uncle = node.parent.parent.left
+
                 if uncle and uncle.color == Color.RED:
                     node.parent.color = Color.BLACK
                     uncle.color = Color.BLACK
@@ -126,6 +131,7 @@ class HybridRBTreeForDealloc:
                     if node == node.parent.left:
                         node = node.parent
                         self._rotate_right(node)
+
                     node.parent.color = Color.BLACK
                     node.parent.parent.color = Color.RED
                     self._rotate_left(node.parent.parent)
@@ -136,89 +142,179 @@ class HybridRBTreeForDealloc:
         while node != self.root and self._get_color(node) == Color.BLACK:
             if node == node.parent.left:
                 sibling = node.parent.right
+
                 if self._get_color(sibling) == Color.RED:
                     sibling.color = Color.BLACK
                     node.parent.color = Color.RED
                     self._rotate_left(node.parent)
                     sibling = node.parent.right
 
-                if (
-                    self._get_color(sibling.left) == Color.BLACK
-                    and self._get_color(sibling.right) == Color.BLACK
-                ):
-                    sibling.color = Color.RED
+                left_color = self._get_color(sibling.left) if sibling else Color.BLACK
+                right_color = self._get_color(sibling.right) if sibling else Color.BLACK
+
+                if left_color == Color.BLACK and right_color == Color.BLACK:
+                    if sibling:
+                        sibling.color = Color.RED
                     node = node.parent
                 else:
-                    if self._get_color(sibling.right) == Color.BLACK:
-                        sibling.left.color = Color.BLACK
+                    if right_color == Color.BLACK:
+                        if sibling.left:
+                            sibling.left.color = Color.BLACK
                         sibling.color = Color.RED
                         self._rotate_right(sibling)
                         sibling = node.parent.right
 
-                    sibling.color = node.parent.color
+                    if sibling:
+                        sibling.color = node.parent.color
                     node.parent.color = Color.BLACK
-                    sibling.right.color = Color.BLACK
+                    if sibling and sibling.right:
+                        sibling.right.color = Color.BLACK
                     self._rotate_left(node.parent)
                     node = self.root
             else:
                 sibling = node.parent.left
+
                 if self._get_color(sibling) == Color.RED:
                     sibling.color = Color.BLACK
                     node.parent.color = Color.RED
                     self._rotate_right(node.parent)
                     sibling = node.parent.left
 
-                if (
-                    self._get_color(sibling.left) == Color.BLACK
-                    and self._get_color(sibling.right) == Color.BLACK
-                ):
-                    sibling.color = Color.RED
+                left_color = self._get_color(sibling.left) if sibling else Color.BLACK
+                right_color = self._get_color(sibling.right) if sibling else Color.BLACK
+
+                if right_color == Color.BLACK and left_color == Color.BLACK:
+                    if sibling:
+                        sibling.color = Color.RED
                     node = node.parent
                 else:
-                    if self._get_color(sibling.left) == Color.BLACK:
-                        sibling.right.color = Color.BLACK
+                    if left_color == Color.BLACK:
+                        if sibling.right:
+                            sibling.right.color = Color.BLACK
                         sibling.color = Color.RED
                         self._rotate_left(sibling)
                         sibling = node.parent.left
 
-                    sibling.color = node.parent.color
+                    if sibling:
+                        sibling.color = node.parent.color
                     node.parent.color = Color.BLACK
-                    sibling.left.color = Color.BLACK
+                    if sibling and sibling.left:
+                        sibling.left.color = Color.BLACK
                     self._rotate_right(node.parent)
                     node = self.root
 
+    def _fix_delete_null(self, parent, is_left):
+        node = None
+        while parent and (node is None or node.color == Color.BLACK):
+            if not node or node == parent.left:
+                sibling = parent.right
+
+                if sibling and sibling.color == Color.RED:
+                    sibling.color = Color.BLACK
+                    parent.color = Color.RED
+                    self._rotate_left(parent)
+                    sibling = parent.right
+
+                if sibling:
+                    left_color = self._get_color(sibling.left)
+                    right_color = self._get_color(sibling.right)
+
+                    if left_color == Color.BLACK and right_color == Color.BLACK:
+                        sibling.color = Color.RED
+                        node = parent
+                        parent = node.parent
+                    else:
+                        if right_color == Color.BLACK:
+                            if sibling.left:
+                                sibling.left.color = Color.BLACK
+                            sibling.color = Color.RED
+                            self._rotate_right(sibling)
+                            sibling = parent.right
+
+                        sibling.color = parent.color
+                        parent.color = Color.BLACK
+                        if sibling and sibling.right:
+                            sibling.right.color = Color.BLACK
+                        self._rotate_left(parent)
+                        break
+                else:
+                    node = parent
+                    parent = node.parent
+            else:
+                sibling = parent.left
+
+                if sibling and sibling.color == Color.RED:
+                    sibling.color = Color.BLACK
+                    parent.color = Color.RED
+                    self._rotate_right(parent)
+                    sibling = parent.left
+
+                if sibling:
+                    left_color = self._get_color(sibling.left)
+                    right_color = self._get_color(sibling.right)
+
+                    if right_color == Color.BLACK and left_color == Color.BLACK:
+                        sibling.color = Color.RED
+                        node = parent
+                        parent = node.parent
+                    else:
+                        if left_color == Color.BLACK:
+                            if sibling.right:
+                                sibling.right.color = Color.BLACK
+                            sibling.color = Color.RED
+                            self._rotate_left(sibling)
+                            sibling = parent.left
+
+                        sibling.color = parent.color
+                        parent.color = Color.BLACK
+                        if sibling and sibling.left:
+                            sibling.left.color = Color.BLACK
+                        self._rotate_right(parent)
+                        break
+                else:
+                    node = parent
+                    parent = node.parent
+
     def _get_color(self, node):
-        return Color.BLACK if not node else node.color
+        return node.color if node else Color.BLACK
 
     def _rotate_left(self, node):
-        right = node.right
-        node.right = right.left
-        if right.left:
-            right.left.parent = node
-        right.parent = node.parent
+        right_child = node.right
+        node.right = right_child.left
+
+        if right_child.left:
+            right_child.left.parent = node
+
+        right_child.parent = node.parent
+
         if not node.parent:
-            self.root = right
-        elif node == node.parent.left:
-            node.parent.left = right
+            self.root = right_child
+        elif node.parent.left == node:
+            node.parent.left = right_child
         else:
-            node.parent.right = right
-        right.left = node
-        node.parent = right
+            node.parent.right = right_child
+
+        right_child.left = node
+        node.parent = right_child
 
     def _rotate_right(self, node):
-        left = node.left
-        node.left = left.right
-        if left.right:
-            left.right.parent = node
-        left.parent = node.parent
+        left_child = node.left
+        node.left = left_child.right
+
+        if left_child.right:
+            left_child.right.parent = node
+
+        left_child.parent = node.parent
+
         if not node.parent:
-            self.root = left
-        elif node == node.parent.right:
-            node.parent.right = left
+            self.root = left_child
+        elif node.parent.left == node:
+            node.parent.left = left_child
         else:
-            node.parent.left = left
-        left.right = node
-        node.parent = left
+            node.parent.right = left_child
+
+        left_child.right = node
+        node.parent = left_child
 
     def contains(self, key):
         return self._find(self.root, key) is not None
@@ -246,8 +342,6 @@ class BitmapHybridHeapRB(BaseAllocator):
 
     def find_free_block(self):
         """Find minimum free block via recycled heap or fresh range."""
-        while self.heap and self.bitmap[self.heap[0]] == 1:
-            heapq.heappop(self.heap)
         recycled_min = self.heap[0] if self.heap else -1
         fresh_min = self.next_fresh if self.next_fresh < self.size else -1
         if recycled_min == -1:
@@ -271,7 +365,7 @@ class BitmapHybridHeapRB(BaseAllocator):
                 return []
 
             if self.heap and idx == self.heap[0]:
-                heapq.heappop(self.heap)
+                self._delete_key(idx)
             elif idx == self.next_fresh:
                 self.next_fresh += 1
             self.bitmap[idx] = 1
@@ -286,7 +380,7 @@ class BitmapHybridHeapRB(BaseAllocator):
 
         for idx in indices:
             self.bitmap[idx] = 0
-            heapq.heappush(self.heap, idx)
+            self._insert_key(idx)
         return True
 
     def count_free_blocks(self):

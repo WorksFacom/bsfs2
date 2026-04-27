@@ -17,16 +17,6 @@ class BitmapHeap(BaseAllocator):
         self.heap = []
         self.next_fresh = 0
     
-    def find_free_block(self):
-        """Find minimum free index from recycled heap or fresh range."""
-        if self.next_fresh >= self.size and not self.heap:
-            return -1
-        if not self.heap:
-            return self.next_fresh
-        if self.next_fresh >= self.size:
-            return self.heap[0]
-        return min(self.heap[0], self.next_fresh)
-
     def _pop_min_free(self):
         if self.next_fresh >= self.size and not self.heap:
             return -1

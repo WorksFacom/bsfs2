@@ -2,6 +2,7 @@
 B+Tree implementation for bitmap block allocation
 """
 
+import bisect
 from core import BaseAllocator, register
 
 
@@ -99,22 +100,18 @@ class BitmapBPlusTree(BaseAllocator):
     def _insert_non_full(self, node, key):
         """Insert into non-full node"""
         if node.is_leaf:
-            i = 0
-            while i < len(node.keys) and key > node.keys[i]:
-                i += 1
+            i = bisect.bisect_left(node.keys, key)
             node.keys.insert(i, key)
         else:
-            i = 0
-            while i < len(node.keys) and key > node.keys[i]:
-                i += 1
-            
+            i = bisect.bisect_left(node.keys, key)
+
             child = node.children[i]
             if child.is_full():
                 self._split_child(node, i)
                 if key > node.keys[i]:
                     i += 1
                 child = node.children[i]
-            
+
             self._insert_non_full(child, key)
     
     def _split_child(self, parent, index):
@@ -154,21 +151,25 @@ class BitmapBPlusTree(BaseAllocator):
     def _delete_key(self, key):
         """Delete key from B+Tree"""
         self._delete_from_node(self.root, key)
-        
+
         if not self.root.keys and self.root.children:
             self.root = self.root.children[0]
             self.root.parent = None
-        
-        curr = self.root
-        while not curr.is_leaf:
-            curr = curr.children[0]
-        self.first_leaf = curr
+
+        # Smart first_leaf update: only recalculate if minimum was deleted
+        if self.first_leaf and self.first_leaf.keys and key == self.first_leaf.keys[0]:
+            self.first_leaf = self.first_leaf.next if self.first_leaf.next else self.first_leaf
+        elif self.first_leaf and not self.first_leaf.keys and self.first_leaf.next:
+            self.first_leaf = self.first_leaf.next
+        elif not self.first_leaf or not self.first_leaf.keys:
+            curr = self.root
+            while not curr.is_leaf:
+                curr = curr.children[0]
+            self.first_leaf = curr
     
     def _delete_from_node(self, node, key):
         """Delete key from node"""
-        i = 0
-        while i < len(node.keys) and key > node.keys[i]:
-            i += 1
+        i = bisect.bisect_left(node.keys, key)
         
         if node.is_leaf:
             if i < len(node.keys) and node.keys[i] == key:

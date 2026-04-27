@@ -1,41 +1,92 @@
+"""Segment Tree allocator for bitmap block management.
+
+This implementation uses a sparse implicit segment tree that tracks
+occupied blocks per range. Untouched nodes are considered fully free,
+keeping memory proportional to touched regions instead of bitmap size.
 """
-Segment Tree allocator for bitmap block management.
-
-For very large bitmaps, this implementation uses a sparse/lazy model:
-- fresh free space is represented by a monotonic cursor (`next_fresh`)
-- recycled free blocks are tracked in a min-heap
-
-This keeps memory bounded by touched blocks instead of bitmap size.
-"""
-
-from __future__ import annotations
-
-import heapq
 
 from core import BaseAllocator, register
 
 
 @register("segtree", display_name="Segment Tree")
 class BitmapSegmentTree(BaseAllocator):
-    """Bitmap allocator using sparse free-range tracking."""
+    """Bitmap allocator using a sparse implicit segment tree."""
 
     def __init__(self, size):
         super().__init__(size)
-        self.next_fresh = 0
-        self.recycled_heap = []
+        # node index -> occupied count in that interval
+        self.occupied = {}
 
-    def _pop_min_free(self):
-        if self.next_fresh >= self.size and not self.recycled_heap:
+    def _node_occupied(self, node):
+        return self.occupied.get(node, 0)
+
+    def _set_block_occupied(self, index, is_occupied):
+        if index < 0 or index >= self.size:
+            raise IndexError(f"block index out of range: {index}")
+
+        if self.size == 0:
+            raise IndexError("cannot update block in empty bitmap")
+
+        occupied = self.occupied
+        path = []
+        node = 1
+        left = 0
+        right = self.size - 1
+
+        while left != right:
+            path.append(node)
+            mid = (left + right) // 2
+            if index <= mid:
+                node = node * 2
+                right = mid
+            else:
+                node = node * 2 + 1
+                left = mid + 1
+
+        if is_occupied:
+            occupied[node] = 1
+        else:
+            occupied.pop(node, None)
+
+        for parent in reversed(path):
+            left_child = parent * 2
+            right_child = left_child + 1
+            total = occupied.get(left_child, 0) + occupied.get(right_child, 0)
+            if total:
+                occupied[parent] = total
+            else:
+                occupied.pop(parent, None)
+
+    def _allocate_first_free(self):
+        if self.size == 0:
             return -1
-        if not self.recycled_heap:
-            idx = self.next_fresh
-            self.next_fresh += 1
-            return idx
-        if self.next_fresh >= self.size or self.recycled_heap[0] < self.next_fresh:
-            return heapq.heappop(self.recycled_heap)
-        idx = self.next_fresh
-        self.next_fresh += 1
-        return idx
+        if self._node_occupied(1) >= self.size:
+            return -1
+
+        occupied = self.occupied
+        node = 1
+        left = 0
+        right = self.size - 1
+
+        while left != right:
+            mid = (left + right) // 2
+            left_node = node * 2
+            left_len = mid - left + 1
+
+            if occupied.get(left_node, 0) < left_len:
+                node = left_node
+                right = mid
+            else:
+                node = left_node + 1
+                left = mid + 1
+
+        self._set_block_occupied(left, True)
+        return left
+
+    def _rollback_allocated(self, allocated):
+        self.rollback_bitmap_allocation(allocated)
+        for idx in allocated:
+            self._set_block_occupied(idx, False)
 
     def allocate_blocks(self, count):
         """Allocate count blocks."""
@@ -46,8 +97,9 @@ class BitmapSegmentTree(BaseAllocator):
 
         allocated = []
         for _ in range(count):
-            idx = self._pop_min_free()
+            idx = self._allocate_first_free()
             if idx == -1:
+                self._rollback_allocated(allocated)
                 return []
             self.bitmap[idx] = 1
             allocated.append(idx)
@@ -60,7 +112,7 @@ class BitmapSegmentTree(BaseAllocator):
 
         for idx in indices:
             self.bitmap[idx] = 0
-            heapq.heappush(self.recycled_heap, idx)
+            self._set_block_occupied(idx, False)
         return True
 
     def count_free_blocks(self):

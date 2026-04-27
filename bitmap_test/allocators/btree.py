@@ -2,6 +2,7 @@
 B-Tree implementation for bitmap block allocation
 """
 
+import bisect
 from core import BaseAllocator, register
 
 
@@ -97,25 +98,18 @@ class BitmapBTree(BaseAllocator):
     
     def _insert_non_full(self, node, key):
         """Insert key into non-full node"""
-        i = len(node.keys) - 1
-        
         if node.is_leaf:
-            node.keys.append(None)
-            while i >= 0 and key < node.keys[i]:
-                node.keys[i + 1] = node.keys[i]
-                i -= 1
-            node.keys[i + 1] = key
+            i = bisect.bisect_left(node.keys, key)
+            node.keys.insert(i, key)
         else:
-            while i >= 0 and key < node.keys[i]:
-                i -= 1
-            i += 1
-            
+            i = bisect.bisect_left(node.keys, key)
+
             child = node.children[i]
             if child.is_full():
                 self._split_child(node, i)
                 if key > node.keys[i]:
                     i += 1
-            
+
             self._insert_non_full(node.children[i], key)
     
     def _split_child(self, parent, index):
@@ -145,9 +139,7 @@ class BitmapBTree(BaseAllocator):
     
     def _delete_from_node(self, node, key):
         """Delete key from node"""
-        i = 0
-        while i < len(node.keys) and key > node.keys[i]:
-            i += 1
+        i = bisect.bisect_left(node.keys, key)
         
         if i < len(node.keys) and key == node.keys[i]:
             if node.is_leaf:
@@ -233,20 +225,11 @@ class BitmapBTree(BaseAllocator):
         """Merge child with sibling"""
         child = node.children[index]
         sibling = node.children[index + 1]
-        
+
         child.keys.append(node.keys.pop(index))
         child.keys.extend(sibling.keys)
-        
+
         if not child.is_leaf:
             child.children.extend(sibling.children)
-        
+
         node.children.pop(index + 1)
-    
-    def _count_keys(self, node):
-        """Count total keys in tree"""
-        if not node:
-            return 0
-        count = len(node.keys)
-        for child in node.children:
-            count += self._count_keys(child)
-        return count

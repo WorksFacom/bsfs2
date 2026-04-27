@@ -18,13 +18,9 @@ class TreapNode:
     
     def __init__(self, idx):
         self.idx = idx
-        self.priority = random.random()  # Random priority for heap property
+        self.priority = random.random()
         self.left = None
         self.right = None
-    
-    def __lt__(self, other):
-        """Compare by index (BST property)."""
-        return self.idx < other.idx
 
 
 @register("treap", display_name="Treap")
@@ -75,12 +71,24 @@ class BitmapTreap(BaseAllocator):
         return node
     
     def _find_min_node(self, node):
-        """Find node with minimum index (leftmost)."""
+        """Find node with minimum index (leftmost). Returns None if empty."""
         if node is None:
             return None
         while node.left is not None:
             node = node.left
         return node
+    
+    def _select_min_free(self):
+        """Select minimum free index from treap or fresh cursor - O(log n)."""
+        treap_min_node = self._find_min_node(self.treap_root)
+        treap_min = treap_min_node.idx if treap_min_node else None
+        fresh_min = self.next_fresh if self.next_fresh < self.size else None
+        
+        if treap_min is None:
+            return fresh_min
+        if fresh_min is None:
+            return treap_min
+        return treap_min if treap_min < fresh_min else fresh_min
     
     def _delete(self, node, idx):
         """Delete node with given index from treap."""
@@ -92,13 +100,11 @@ class BitmapTreap(BaseAllocator):
         elif idx > node.idx:
             node.right = self._delete(node.right, idx)
         else:
-            # Found the node to delete
             if node.left is None:
                 return node.right
             elif node.right is None:
                 return node.left
             
-            # Both children exist - rotate to push node down
             if node.left.priority > node.right.priority:
                 node = self._rotate_right(node)
                 node.right = self._delete(node.right, idx)
@@ -108,23 +114,8 @@ class BitmapTreap(BaseAllocator):
         
         return node
     
-    def _find_min(self, node):
-        """Find minimum index in treap."""
-        if node is None:
-            return -1
-        return self._find_min_node(node).idx
-
-    def find_free_block(self):
-        treap_min = self._find_min(self.treap_root)
-        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
-        if treap_min == -1:
-            return fresh_min
-        if fresh_min == -1:
-            return treap_min
-        return min(treap_min, fresh_min)
-    
     def allocate_blocks(self, count):
-        """Allocate count blocks using min-finding from treap."""
+        """Allocate count blocks using min-finding from treap - O(count × log n)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -133,12 +124,13 @@ class BitmapTreap(BaseAllocator):
         allocated = []
         
         for _ in range(count):
-            min_idx = self.find_free_block()
-            if min_idx == -1:
+            min_idx = self._select_min_free()
+            if min_idx is None:
                 return []
             
             self.bitmap[min_idx] = 1
             allocated.append(min_idx)
+            
             if min_idx == self.next_fresh:
                 self.next_fresh += 1
             else:
