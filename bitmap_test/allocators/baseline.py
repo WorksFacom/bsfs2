@@ -13,31 +13,23 @@ class BitmapBaseline(BaseAllocator):
         """Initialize bitmap of size blocks, all free (0)."""
         super().__init__(size)
 
-    def find_free_block(self):
-        """Find first free block via sequential scan - O(n)."""
-        for idx in range(self.size):
-            if self.bitmap[idx] == 0:
-                return idx
-        return -1
-
     def allocate_blocks(self, count):
-        """Allocate count free blocks using sequential scans - O(count × n)."""
+        """Allocate count free blocks using single scan for contiguous runs - O(n)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
             return []
+
         allocated = []
+        for i in range(self.size):
+            if self.bitmap[i] == 0:
+                allocated.append(i)
+                if len(allocated) == count:
+                    for idx in allocated:
+                        self.bitmap[idx] = 1
+                    return allocated
 
-        for _ in range(count):
-            idx = self.find_free_block()
-            if idx == -1:
-                for allocated_idx in allocated:
-                    self.bitmap[allocated_idx] = 0
-                return []
-            self.bitmap[idx] = 1
-            allocated.append(idx)
-
-        return allocated
+        return []
 
     def deallocate_blocks(self, indices):
         """Deallocate blocks back to the bitmap."""
