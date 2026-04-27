@@ -93,6 +93,7 @@ class StressScenario(BenchmarkScenario):
             dealloc_times_us=dealloc_times,
             bitmap_size=bitmap_size,
             free_blocks=free_blocks,
+            bitmap=allocator.bitmap,
         )
 
         if show_summary:
@@ -107,18 +108,15 @@ class StressScenario(BenchmarkScenario):
 
             print(f"\nAllocation ({self.blocks_per_alloc} blocks):")
             print(f"  Average: {results['alloc_avg']:.3f} µs")
-            print(f"  Median:  {results['alloc_median']:.3f} µs")
-            print(f"  P95:     {results['alloc_p95']:.3f} µs")
             print(f"  Total calls: {results['num_allocs']:,}")
 
             print(f"\nDeallocation ({self.blocks_per_alloc} blocks):")
             print(f"  Average: {results['dealloc_avg']:.3f} µs")
-            print(f"  Median:  {results['dealloc_median']:.3f} µs")
-            print(f"  P95:     {results['dealloc_p95']:.3f} µs")
             print(f"  Total calls: {results['num_deallocs']:,}")
 
             print("\nFinal state:")
             print(f"  Occupied blocks: {results['occupied']:,}")
             print(f"  Free blocks: {results['free_blocks']:,}")
+            print(f"  Fragmentation: {results['fragmentation']:.2%}")
 
         return results

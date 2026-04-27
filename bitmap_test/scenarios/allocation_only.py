@@ -52,6 +52,7 @@ class AllocationOnlyScenario(BenchmarkScenario):
             dealloc_times_us=[],
             bitmap_size=bitmap_size,
             free_blocks=allocator.count_free_blocks(),
+            bitmap=allocator.bitmap,
         )
         result["mode"] = "allocation_only"
         return result

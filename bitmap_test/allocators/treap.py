@@ -34,10 +34,7 @@ class BitmapTreap(BaseAllocator):
     def __init__(self, size):
         super().__init__(size)
         self.treap_root = None
-        
-        # Initialize treap with all free blocks
-        for i in range(size):
-            self.treap_root = self._insert(self.treap_root, TreapNode(i))
+        self.next_fresh = 0
     
     def _rotate_right(self, node):
         """Right rotation for treap rebalancing."""
@@ -116,30 +113,36 @@ class BitmapTreap(BaseAllocator):
         if node is None:
             return -1
         return self._find_min_node(node).idx
+
+    def find_free_block(self):
+        treap_min = self._find_min(self.treap_root)
+        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
+        if treap_min == -1:
+            return fresh_min
+        if fresh_min == -1:
+            return treap_min
+        return min(treap_min, fresh_min)
     
     def allocate_blocks(self, count):
         """Allocate count blocks using min-finding from treap."""
         if count <= 0:
             return []
+        if self.free_blocks_remaining < count:
+            return []
 
         allocated = []
         
         for _ in range(count):
-            # Find minimum free block
-            min_idx = self._find_min(self.treap_root)
-            
+            min_idx = self.find_free_block()
             if min_idx == -1:
-                for allocated_idx in allocated:
-                    self.bitmap[allocated_idx] = 0
-                    self.treap_root = self._insert(self.treap_root, TreapNode(allocated_idx))
                 return []
             
-            # Mark as occupied
             self.bitmap[min_idx] = 1
             allocated.append(min_idx)
-            
-            # Remove from treap
-            self.treap_root = self._delete(self.treap_root, min_idx)
+            if min_idx == self.next_fresh:
+                self.next_fresh += 1
+            else:
+                self.treap_root = self._delete(self.treap_root, min_idx)
         
         return allocated
     
@@ -155,10 +158,5 @@ class BitmapTreap(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count total free blocks in treap."""
-        def count_nodes(node):
-            if node is None:
-                return 0
-            return 1 + count_nodes(node.left) + count_nodes(node.right)
-        
-        return count_nodes(self.treap_root)
+        """Count total free blocks."""
+        return self.free_blocks_remaining

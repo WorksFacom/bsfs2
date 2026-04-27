@@ -87,22 +87,20 @@ class BitmapTwoLevelIndex(BaseAllocator):
         """Allocate count blocks."""
         if count <= 0:
             return []
+        if self.free_blocks_remaining < count:
+            return []
 
         allocated = []
 
         for _ in range(count):
             block_idx = self._find_first_free_block()
             if block_idx == -1:
-                # Rollback to preserve transactional behavior.
-                for idx in allocated:
-                    self.bitmap[idx] = 0
-                for bucket_idx in {self._get_bucket_idx(i) for i in allocated}:
-                    self._update_bucket_free_count(bucket_idx)
                 return []
 
             self.bitmap[block_idx] = 1
             allocated.append(block_idx)
-            self._update_bucket_free_count(self._get_bucket_idx(block_idx))
+            bucket_idx = self._get_bucket_idx(block_idx)
+            self.bucket_free_count[bucket_idx] -= 1
 
         return allocated
     
@@ -116,9 +114,9 @@ class BitmapTwoLevelIndex(BaseAllocator):
 
             # Update affected bucket
             bucket_idx = self._get_bucket_idx(idx)
-            self._update_bucket_free_count(bucket_idx)
+            self.bucket_free_count[bucket_idx] += 1
         return True
     
     def count_free_blocks(self):
         """Count total free blocks."""
-        return sum(1 for bit in self.bitmap if bit == 0)
+        return self.free_blocks_remaining

@@ -5,12 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from core import FIXED_BITMAP_SIZE_BLOCKS
+
 from .benchmark_runner import BenchmarkRunner
 
 
 class ReportRunner:
     @staticmethod
-    def run_all_benchmarks(strategy_specs, bitmap_size=100000):
+    def run_all_benchmarks(
+        strategy_specs,
+        bitmap_size=FIXED_BITMAP_SIZE_BLOCKS,
+        blocks_per_alloc=2560,
+        num_operations=100,
+    ):
         results = []
         total = len(strategy_specs)
 
@@ -22,7 +29,14 @@ class ReportRunner:
         for i, (_, allocator_class, name) in enumerate(strategy_specs, 1):
             print(f"[{i}/{total}] Testing {name}...", end=" ", flush=True)
             runner = BenchmarkRunner(allocator_class, name, bitmap_size=bitmap_size)
-            results.append(runner.run_stress(show_progress=False, show_summary=False))
+            results.append(
+                runner.run_stress(
+                    blocks_per_alloc=blocks_per_alloc,
+                    num_operations=num_operations,
+                    show_progress=False,
+                    show_summary=False,
+                )
+            )
             print("✓")
 
         return results

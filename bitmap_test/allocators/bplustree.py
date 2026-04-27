@@ -31,20 +31,26 @@ class BitmapBPlusTree(BaseAllocator):
         self.order = order
         self.root = BPNode(order, is_leaf=True)
         self.first_leaf = self.root
-        
-        for i in range(size):
-            self._insert_key(i)
+        self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index"""
+        """Find minimum free index among recycled B+Tree and fresh range."""
+        tree_min = -1
         leaf = self.first_leaf
         if leaf and leaf.keys:
-            return leaf.keys[0]
-        return -1
+            tree_min = leaf.keys[0]
+        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
+        if tree_min == -1:
+            return fresh_min
+        if fresh_min == -1:
+            return tree_min
+        return min(tree_min, fresh_min)
     
     def allocate_blocks(self, count):
         """Allocate count free blocks"""
         if count <= 0:
+            return []
+        if self.free_blocks_remaining < count:
             return []
 
         allocated = []
@@ -52,13 +58,13 @@ class BitmapBPlusTree(BaseAllocator):
         for _ in range(count):
             idx = self.find_free_block()
             if idx == -1:
-                for allocated_idx in allocated:
-                    self._insert_key(allocated_idx)
-                    self.bitmap[allocated_idx] = 0
                 return []
 
             self.bitmap[idx] = 1
-            self._delete_key(idx)
+            if idx == self.next_fresh:
+                self.next_fresh += 1
+            else:
+                self._delete_key(idx)
             allocated.append(idx)
 
         return allocated
@@ -74,13 +80,8 @@ class BitmapBPlusTree(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks by traversing leaves"""
-        count = 0
-        leaf = self.first_leaf
-        while leaf:
-            count += len(leaf.keys)
-            leaf = leaf.next
-        return count
+        """Count free blocks."""
+        return self.free_blocks_remaining
     
     # ===== B+Tree Operations =====
     

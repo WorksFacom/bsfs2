@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import random
 
+from core import FIXED_BITMAP_SIZE_BLOCKS
+
 
 class ValidatorRunner:
     def __init__(self, strategy_specs):
@@ -58,7 +60,13 @@ class ValidatorRunner:
             "tracked_occupied_count": tracked_occupied_count,
         }
 
-    def run(self, bitmap_size=100000, blocks_per_alloc=5, num_operations=10000, seed=42):
+    def run(
+        self,
+        bitmap_size=FIXED_BITMAP_SIZE_BLOCKS,
+        blocks_per_alloc=5,
+        num_operations=10000,
+        seed=42,
+    ):
         print("\n" + "=" * 80)
         print("BITMAP ALLOCATORS - CONSISTENCY VALIDATOR")
         print("=" * 80)

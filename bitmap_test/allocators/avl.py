@@ -20,27 +20,31 @@ class BitmapAVL(BaseAllocator):
     """AVL Tree indexed Bitmap Allocator"""
     
     def __init__(self, size):
-        """Initialize bitmap of size blocks, all free (0)"""
+        """Initialize AVL tree for recycled blocks (lazy free model)."""
         super().__init__(size)
         self.root = None
-        
-        # Insert all indices as free in AVL tree
-        for i in range(size):
-            self.root = self._insert(self.root, i)
+        self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index using AVL tree (O(log n))"""
-        if not self.root:
-            return -1
-        
-        node = self.root
-        while node.left:
-            node = node.left
-        return node.index
+        """Find minimum free index among recycled AVL and fresh range."""
+        tree_min = -1
+        if self.root:
+            node = self.root
+            while node.left:
+                node = node.left
+            tree_min = node.index
+        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
+        if tree_min == -1:
+            return fresh_min
+        if fresh_min == -1:
+            return tree_min
+        return min(tree_min, fresh_min)
     
     def allocate_blocks(self, count):
         """Allocate count free blocks using first-fit (O(count × log n))"""
         if count <= 0:
+            return []
+        if self.free_blocks_remaining < count:
             return []
 
         allocated = []
@@ -48,13 +52,12 @@ class BitmapAVL(BaseAllocator):
         for _ in range(count):
             idx = self.find_free_block()
             if idx == -1:
-                for allocated_idx in allocated:
-                    self.root = self._insert(self.root, allocated_idx)
-                    self.bitmap[allocated_idx] = 0
                 return []
-
             self.bitmap[idx] = 1
-            self.root = self._delete(self.root, idx)
+            if idx == self.next_fresh:
+                self.next_fresh += 1
+            else:
+                self.root = self._delete(self.root, idx)
             allocated.append(idx)
 
         return sorted(allocated)
@@ -70,8 +73,8 @@ class BitmapAVL(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks by tree traversal"""
-        return self._count_recursive(self.root)
+        """Count free blocks."""
+        return self.free_blocks_remaining
     
     # ===== AVL Tree Operations =====
     

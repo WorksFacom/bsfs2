@@ -4,18 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .bitmap_layout import DISK_SIZE_GIB, PAGE_SIZE_KIB, bitmap_size_blocks_from_disk_gib
+
 
 @dataclass(frozen=True)
 class StatBenchmarkConfig:
     num_files: int = 100
     file_size_mib: int = 10
     block_size_kib: int = 4
-    bitmap_multiplier: int = 2
+    disk_size_gib: int = DISK_SIZE_GIB
+    bitmap_size_override: int | None = None
     num_seeds: int = 1000
     seed_base: int = 42
     mode: str = "mixed_7030"  # allocation_only | mixed_7030
     num_operations: int | None = None
     output_dir: str = "."
+    workload_label: str = "default"
 
     @property
     def blocks_per_file(self) -> int:
@@ -27,7 +31,9 @@ class StatBenchmarkConfig:
 
     @property
     def bitmap_size(self) -> int:
-        return self.target_blocks * self.bitmap_multiplier
+        if self.bitmap_size_override is not None:
+            return self.bitmap_size_override
+        return bitmap_size_blocks_from_disk_gib(self.disk_size_gib, PAGE_SIZE_KIB)
 
     @property
     def resolved_num_operations(self) -> int:
@@ -44,8 +50,12 @@ class StatBenchmarkConfig:
             raise ValueError("file_size_mib must be > 0")
         if self.block_size_kib <= 0:
             raise ValueError("block_size_kib must be > 0")
-        if self.bitmap_multiplier <= 0:
-            raise ValueError("bitmap_multiplier must be > 0")
+        if self.disk_size_gib <= 0:
+            raise ValueError("disk_size_gib must be > 0")
+        if self.bitmap_size_override is not None and self.bitmap_size_override <= 0:
+            raise ValueError("bitmap_size_override must be > 0")
+        if self.target_blocks > self.bitmap_size:
+            raise ValueError("target workload exceeds bitmap capacity")
         if self.num_seeds <= 0:
             raise ValueError("num_seeds must be > 0")
         if self.resolved_num_operations <= 0:

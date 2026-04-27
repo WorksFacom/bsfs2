@@ -29,29 +29,43 @@ class BitmapRB(BaseAllocator):
     """Red-Black Tree indexed Bitmap Allocator"""
     
     def __init__(self, size):
-        """Initialize bitmap of size blocks, all free (0)"""
+        """Initialize lazy free-tracking state."""
         super().__init__(size)
         self.root = None
-        self.free_blocks = set(range(size))
+        self.free_blocks = set()
+        self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index - O(log n)"""
-        if not self.free_blocks:
+        """Find minimum free index among recycled and fresh blocks."""
+        recycled_min = min(self.free_blocks) if self.free_blocks else None
+        fresh_min = self.next_fresh if self.next_fresh < self.size else None
+        if recycled_min is None and fresh_min is None:
             return -1
-        return min(self.free_blocks)
+        if recycled_min is None:
+            return fresh_min
+        if fresh_min is None:
+            return recycled_min
+        return min(recycled_min, fresh_min)
     
     def allocate_blocks(self, count):
         """Allocate count free blocks - O(count × log n)"""
         if count <= 0:
             return []
-        if len(self.free_blocks) < count:
+        if self.free_blocks_remaining < count:
             return []
 
         allocated = []
 
         for _ in range(count):
-            idx = self.find_free_block()
-            self.free_blocks.remove(idx)
+            recycled_min = min(self.free_blocks) if self.free_blocks else None
+            if recycled_min is not None and (
+                self.next_fresh >= self.size or recycled_min < self.next_fresh
+            ):
+                idx = recycled_min
+                self.free_blocks.remove(idx)
+            else:
+                idx = self.next_fresh
+                self.next_fresh += 1
             self.bitmap[idx] = 1
             allocated.append(idx)
 
@@ -69,7 +83,7 @@ class BitmapRB(BaseAllocator):
     
     def count_free_blocks(self):
         """Count free blocks"""
-        return len(self.free_blocks)
+        return self.free_blocks_remaining
     
     # ===== Red-Black Tree Operations =====
     

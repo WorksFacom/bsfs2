@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from core import FIXED_BITMAP_SIZE_BLOCKS
 from scenarios import StressScenario
 
 
 class BenchmarkRunner:
-    def __init__(self, allocator_class, allocator_name, bitmap_size=512000):
+    def __init__(
+        self,
+        allocator_class,
+        allocator_name,
+        bitmap_size=FIXED_BITMAP_SIZE_BLOCKS,
+    ):
         self.allocator_class = allocator_class
         self.allocator_name = allocator_name
         self.bitmap_size = bitmap_size
@@ -43,7 +49,7 @@ class BenchmarkRunner:
     def run_stress(
         self,
         blocks_per_alloc=2560,
-        num_operations=196,
+        num_operations=100,
         show_progress=True,
         show_summary=True,
     ):

@@ -28,24 +28,28 @@ class BitmapBTree(BaseAllocator):
         super().__init__(size)
         self.order = order
         self.root = BNode(order, is_leaf=True)
-        
-        for i in range(size):
-            self._insert_key(i)
+        self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index"""
-        if not self.root or not self.root.keys:
-            return -1
-        
-        node = self.root
-        while not node.is_leaf:
-            node = node.children[0]
-        
-        return node.keys[0] if node.keys else -1
+        """Find minimum free index among recycled B-Tree and fresh range."""
+        tree_min = -1
+        if self.root and self.root.keys:
+            node = self.root
+            while not node.is_leaf:
+                node = node.children[0]
+            tree_min = node.keys[0] if node.keys else -1
+        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
+        if tree_min == -1:
+            return fresh_min
+        if fresh_min == -1:
+            return tree_min
+        return min(tree_min, fresh_min)
     
     def allocate_blocks(self, count):
         """Allocate count free blocks"""
         if count <= 0:
+            return []
+        if self.free_blocks_remaining < count:
             return []
 
         allocated = []
@@ -53,13 +57,13 @@ class BitmapBTree(BaseAllocator):
         for _ in range(count):
             idx = self.find_free_block()
             if idx == -1:
-                for allocated_idx in allocated:
-                    self._insert_key(allocated_idx)
-                    self.bitmap[allocated_idx] = 0
                 return []
 
             self.bitmap[idx] = 1
-            self._delete_key(idx)
+            if idx == self.next_fresh:
+                self.next_fresh += 1
+            else:
+                self._delete_key(idx)
             allocated.append(idx)
 
         return allocated
@@ -76,7 +80,7 @@ class BitmapBTree(BaseAllocator):
     
     def count_free_blocks(self):
         """Count free blocks"""
-        return self._count_keys(self.root)
+        return self.free_blocks_remaining
     
     # ===== B-Tree Operations =====
     

@@ -37,8 +37,15 @@ bitmap_test/
 `run.py` mantém os comandos:
 - `--demo`
 - `--stress`
+- `--stress-ops N` (default 100)
+- `--stress-blocks N` (default 2560)
+- `--workload OPS:FILE_MIB` (repetível; para `--stress` e `--stat-bench`)
 - `--report`
+  - usa `--stress-ops` e `--stress-blocks` para definir o cenário do relatório
+- `--bitmap-size N` (override direto do bitmap)
+- `--disk-size-gib N` (simulação de disco; default 250)
 - `--validate`
+- `--validate-bitmap-size N` (somente com `--validate`)
 - `--tui`
 - `--help`
 - `--stat-bench` (benchmark estatístico repetido)
@@ -48,8 +55,12 @@ Exemplos:
 ```bash
 python run.py rb --demo
 python run.py treap --stress
+python run.py rb --stress --stress-ops 100 --stress-blocks 2560
+python run.py rb --stress --workload 100:10 --workload 10:1024
 python run.py --report
+python run.py --report --stress-ops 100 --stress-blocks 2560
 python run.py --validate
+python run.py --validate --validate-bitmap-size 1000000
 ```
 
 ## Benchmark estatístico (robusto)
@@ -64,7 +75,10 @@ Cenário médio padrão:
 - bloco = 4 KiB
 - 2560 blocos por arquivo
 - 256.000 blocos alvo
-- bitmap padrão = **2x** (512.000 blocos)
+- bitmap fixo (simulação de disco) = **65.536.000 páginas/bits**
+  - disco: **250 GiB**
+  - página: **4 KiB**
+  - mapeamento: **1 bit por página**
 
 Exemplos:
 
@@ -75,6 +89,9 @@ python run.py --stat-bench --stat-mode allocation_only --stat-seeds 1000
 # Mixed 70/30 com subset de estratégias
 python run.py --stat-bench --stat-mode mixed_7030 --stat-seeds 1000 \
   --stat-strategies baseline,avl,heap
+
+# Rodar múltiplos workloads em uma execução (ops:tamanho_arquivo_mib)
+python run.py --stat-bench --workload 100:10 --workload 10:1024
 ```
 
 Artefatos gerados:
@@ -98,3 +115,4 @@ As estratégias são registradas automaticamente por decorator (`@register`) em 
 - `allocators/README.md`
 - `scenarios/README.md`
 - `runners/README.md`
+- `PERFORMANCE_ANALYSIS.md` (diagnóstico e otimizações para bitmap fixo 250 GiB)

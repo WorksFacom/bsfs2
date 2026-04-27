@@ -15,13 +15,17 @@ class BitmapBaseline(BaseAllocator):
 
     def find_free_block(self):
         """Find first free block via sequential scan - O(n)."""
-        for idx, value in enumerate(self.bitmap):
-            if value == 0:
+        for idx in range(self.size):
+            if self.bitmap[idx] == 0:
                 return idx
         return -1
 
     def allocate_blocks(self, count):
         """Allocate count free blocks using sequential scans - O(count × n)."""
+        if count <= 0:
+            return []
+        if self.free_blocks_remaining < count:
+            return []
         allocated = []
 
         for _ in range(count):
@@ -46,4 +50,4 @@ class BitmapBaseline(BaseAllocator):
 
     def count_free_blocks(self):
         """Count free blocks."""
-        return self.bitmap.count(0)
+        return self.free_blocks_remaining

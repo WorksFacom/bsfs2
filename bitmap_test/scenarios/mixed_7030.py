@@ -73,6 +73,7 @@ class Mixed7030Scenario(BenchmarkScenario):
             dealloc_times_us=dealloc_times,
             bitmap_size=bitmap_size,
             free_blocks=allocator.count_free_blocks(),
+            bitmap=allocator.bitmap,
         )
         result["mode"] = "mixed_7030"
         return result

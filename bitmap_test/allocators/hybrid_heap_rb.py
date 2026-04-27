@@ -7,6 +7,7 @@ Hybrid Heap + RB-Tree allocator for bitmap block allocation
 import heapq
 from core import BaseAllocator, register
 
+
 class Color:
     RED = 0
     BLACK = 1
@@ -23,16 +24,16 @@ class RBNode:
 
 class HybridRBTreeForDealloc:
     """RB-Tree optimized for deallocation tracking"""
-    
+
     def __init__(self):
         self.root = None
-    
+
     def insert(self, key):
         if not self.root:
             self.root = RBNode(key)
             self.root.color = Color.BLACK
             return
-        
+
         node = self.root
         while True:
             if key < node.key:
@@ -53,24 +54,24 @@ class HybridRBTreeForDealloc:
                     return
             else:
                 return
-    
+
     def delete(self, key):
         node = self._find(self.root, key)
         if not node:
             return
-        
+
         if node.left and node.right:
             successor = self._min_node(node.right)
             node.key = successor.key
             node = successor
-        
+
         child = node.left if node.left else node.right
-        
+
         if node.color == Color.BLACK:
             if child:
                 child.color = Color.BLACK
             self._fix_delete(node)
-        
+
         if node.parent:
             if node.parent.left == node:
                 node.parent.left = child
@@ -82,7 +83,7 @@ class HybridRBTreeForDealloc:
             self.root = child
             if self.root:
                 self.root.color = Color.BLACK
-    
+
     def _find(self, node, key):
         while node:
             if key == node.key:
@@ -92,12 +93,12 @@ class HybridRBTreeForDealloc:
             else:
                 node = node.right
         return None
-    
+
     def _min_node(self, node):
         while node.left:
             node = node.left
         return node
-    
+
     def _fix_insert(self, node):
         while node.parent and node.parent.color == Color.RED:
             if node.parent == node.parent.parent.left:
@@ -128,9 +129,9 @@ class HybridRBTreeForDealloc:
                     node.parent.color = Color.BLACK
                     node.parent.parent.color = Color.RED
                     self._rotate_left(node.parent.parent)
-        
+
         self.root.color = Color.BLACK
-    
+
     def _fix_delete(self, node):
         while node != self.root and self._get_color(node) == Color.BLACK:
             if node == node.parent.left:
@@ -140,9 +141,11 @@ class HybridRBTreeForDealloc:
                     node.parent.color = Color.RED
                     self._rotate_left(node.parent)
                     sibling = node.parent.right
-                
-                if (self._get_color(sibling.left) == Color.BLACK and
-                    self._get_color(sibling.right) == Color.BLACK):
+
+                if (
+                    self._get_color(sibling.left) == Color.BLACK
+                    and self._get_color(sibling.right) == Color.BLACK
+                ):
                     sibling.color = Color.RED
                     node = node.parent
                 else:
@@ -151,7 +154,7 @@ class HybridRBTreeForDealloc:
                         sibling.color = Color.RED
                         self._rotate_right(sibling)
                         sibling = node.parent.right
-                    
+
                     sibling.color = node.parent.color
                     node.parent.color = Color.BLACK
                     sibling.right.color = Color.BLACK
@@ -164,9 +167,11 @@ class HybridRBTreeForDealloc:
                     node.parent.color = Color.RED
                     self._rotate_right(node.parent)
                     sibling = node.parent.left
-                
-                if (self._get_color(sibling.left) == Color.BLACK and
-                    self._get_color(sibling.right) == Color.BLACK):
+
+                if (
+                    self._get_color(sibling.left) == Color.BLACK
+                    and self._get_color(sibling.right) == Color.BLACK
+                ):
                     sibling.color = Color.RED
                     node = node.parent
                 else:
@@ -175,16 +180,16 @@ class HybridRBTreeForDealloc:
                         sibling.color = Color.RED
                         self._rotate_left(sibling)
                         sibling = node.parent.left
-                    
+
                     sibling.color = node.parent.color
                     node.parent.color = Color.BLACK
                     sibling.left.color = Color.BLACK
                     self._rotate_right(node.parent)
                     node = self.root
-    
+
     def _get_color(self, node):
         return Color.BLACK if not node else node.color
-    
+
     def _rotate_left(self, node):
         right = node.right
         node.right = right.left
@@ -199,7 +204,7 @@ class HybridRBTreeForDealloc:
             node.parent.right = right
         right.left = node
         node.parent = right
-    
+
     def _rotate_right(self, node):
         left = node.left
         node.left = left.right
@@ -214,7 +219,7 @@ class HybridRBTreeForDealloc:
             node.parent.left = left
         left.right = node
         node.parent = left
-    
+
     def contains(self, key):
         return self._find(self.root, key) is not None
 
@@ -222,38 +227,40 @@ class HybridRBTreeForDealloc:
 @register("hybrid", display_name="Hybrid Heap+RB")
 class BitmapHybridHeapRB(BaseAllocator):
     """Hybrid Heap + RB-Tree Bitmap Allocator
-    
+
     Strategy:
     - Min-Heap: Fast allocation O(1) to find minimum
     - RB-Tree: Fast deallocation O(log n) with balanced structure
     - Position map: Tracks heap positions for efficient removal
     """
-    
+
     def __init__(self, size, heap_order=256):
         super().__init__(size)
         self.heap_order = heap_order
-        
-        # Min-Heap for allocation
-        self.heap = list(range(size))
-        heapq.heapify(self.heap)
-        self.position_map = {i: i for i in range(size)}
-        
-        # RB-Tree for deallocation
+        self.heap = []
+        self.position_map = {}
+        self.next_fresh = 0
+
+        # Keep RB-Tree instance for API compatibility; no eager preload.
         self.rbtree = HybridRBTreeForDealloc()
-        for i in range(size):
-            self.rbtree.insert(i)
-    
+
     def find_free_block(self):
-        """Find minimum free block via heap (O(1))"""
+        """Find minimum free block via recycled heap or fresh range."""
         while self.heap and self.bitmap[self.heap[0]] == 1:
             heapq.heappop(self.heap)
-        if self.heap:
-            return self.heap[0]
-        return -1
-    
+        recycled_min = self.heap[0] if self.heap else -1
+        fresh_min = self.next_fresh if self.next_fresh < self.size else -1
+        if recycled_min == -1:
+            return fresh_min
+        if fresh_min == -1:
+            return recycled_min
+        return min(recycled_min, fresh_min)
+
     def allocate_blocks(self, count):
         """Allocate blocks using heap for fast finding"""
         if count <= 0:
+            return []
+        if self.free_blocks_remaining < count:
             return []
 
         allocated = []
@@ -261,18 +268,17 @@ class BitmapHybridHeapRB(BaseAllocator):
         for _ in range(count):
             idx = self.find_free_block()
             if idx == -1:
-                # Rollback
-                for allocated_idx in allocated:
-                    self.bitmap[allocated_idx] = 0
-                    heapq.heappush(self.heap, allocated_idx)
                 return []
 
-            heapq.heappop(self.heap)
+            if self.heap and idx == self.heap[0]:
+                heapq.heappop(self.heap)
+            elif idx == self.next_fresh:
+                self.next_fresh += 1
             self.bitmap[idx] = 1
             allocated.append(idx)
 
         return allocated
-    
+
     def deallocate_blocks(self, indices):
         """Deallocate blocks using RB-Tree for fast insertion"""
         if not self.validate_deallocation(indices):
@@ -282,87 +288,87 @@ class BitmapHybridHeapRB(BaseAllocator):
             self.bitmap[idx] = 0
             heapq.heappush(self.heap, idx)
         return True
-    
+
     def count_free_blocks(self):
         """Count free blocks"""
-        return sum(1 for b in self.bitmap if b == 0)
-    
+        return self.free_blocks_remaining
+
     # ===== Internal Operations =====
-    
+
     def _insert_key(self, key):
         """Insert into both heap and RB-Tree (for deallocation)"""
         # Add to RB-Tree for fast deallocation later
         self.rbtree.insert(key)
-        
+
         # Add to heap for fast allocation
         if key not in self.position_map:
             pos = len(self.heap)
             self.heap.append(key)
             self.position_map[key] = pos
             self._sift_up(pos)
-    
+
     def _delete_key(self, key):
         """Remove from both heap and RB-Tree"""
         # Remove from RB-Tree
         self.rbtree.delete(key)
-        
+
         # Remove from heap
         if key in self.position_map:
             pos = self.position_map[key]
             last_key = self.heap[-1]
-            
+
             if key != last_key:
                 self.heap[pos] = last_key
                 self.position_map[last_key] = pos
-                
+
                 # Restore heap property
                 if pos > 0 and self.heap[pos] < self.heap[(pos - 1) // 2]:
                     self._sift_up(pos)
                 else:
                     self._sift_down(pos)
-            
+
             self.heap.pop()
             del self.position_map[key]
-    
+
     def _sift_up(self, pos):
         """Restore min-heap property upward"""
         key = self.heap[pos]
         while pos > 0:
             parent_pos = (pos - 1) // 2
             parent_key = self.heap[parent_pos]
-            
+
             if key < parent_key:
                 self.heap[pos] = parent_key
                 self.position_map[parent_key] = pos
                 pos = parent_pos
             else:
                 break
-        
+
         self.heap[pos] = key
         self.position_map[key] = pos
-    
+
     def _sift_down(self, pos):
         """Restore min-heap property downward"""
         key = self.heap[pos]
         size = len(self.heap)
-        
+
         while True:
             smallest = pos
             left = 2 * pos + 1
             right = 2 * pos + 2
-            
+
             if left < size and self.heap[left] < self.heap[smallest]:
                 smallest = left
-            
+
             if right < size and self.heap[right] < self.heap[smallest]:
                 smallest = right
-            
+
             if smallest != pos:
                 self.heap[pos] = self.heap[smallest]
                 self.position_map[self.heap[pos]] = pos
                 pos = smallest
             else:
                 break
-        
+
         self.heap[pos] = key
         self.position_map[key] = pos
