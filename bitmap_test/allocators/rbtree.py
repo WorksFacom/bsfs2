@@ -32,12 +32,11 @@ class BitmapRB(BaseAllocator):
         """Initialize lazy free-tracking state."""
         super().__init__(size)
         self.root = None
-        self.free_blocks = set()
         self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index among recycled and fresh blocks."""
-        recycled_min = min(self.free_blocks) if self.free_blocks else None
+        """Find minimum free index among recycled and fresh blocks - O(log n)."""
+        recycled_min = self._find_min(self.root).index if self.root else None
         fresh_min = self.next_fresh if self.next_fresh < self.size else None
         if recycled_min is None and fresh_min is None:
             return -1
@@ -57,12 +56,12 @@ class BitmapRB(BaseAllocator):
         allocated = []
 
         for _ in range(count):
-            recycled_min = min(self.free_blocks) if self.free_blocks else None
+            recycled_min = self._find_min(self.root).index if self.root else None
             if recycled_min is not None and (
                 self.next_fresh >= self.size or recycled_min < self.next_fresh
             ):
                 idx = recycled_min
-                self.free_blocks.remove(idx)
+                self._delete_node(idx)
             else:
                 idx = self.next_fresh
                 self.next_fresh += 1
@@ -78,7 +77,7 @@ class BitmapRB(BaseAllocator):
 
         for idx in indices:
             self.bitmap[idx] = 0
-            self.free_blocks.add(idx)
+            self._insert_node(idx)
         return True
     
     def count_free_blocks(self):
@@ -206,6 +205,8 @@ class BitmapRB(BaseAllocator):
     def _fix_insert(self, node):
         """Fix RB properties after insertion"""
         while node.parent and node.parent.color == Color.RED:
+            if not node.parent.parent:
+                break
             if node.parent == node.parent.parent.left:
                 uncle = node.parent.parent.right
                 
