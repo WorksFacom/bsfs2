@@ -1,4 +1,4 @@
-"""Mixed workload scenario with 70% allocation and 30% deallocation."""
+"""Pareto workload scenario with 80% allocation and 20% deallocation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from core.metrics import build_stress_metrics
 from .base import BenchmarkScenario
 
 
-class Mixed7030Scenario(BenchmarkScenario):
+class ParetoScenario(BenchmarkScenario):
     def __init__(self, blocks_per_alloc, num_operations, seed):
         self.blocks_per_alloc = blocks_per_alloc
         self.num_operations = num_operations
@@ -40,7 +40,7 @@ class Mixed7030Scenario(BenchmarkScenario):
                 )
 
             estimated_free_blocks = bitmap_size - len(allocated_blocks)
-            should_allocate = rng.random() < 0.7 or not allocated_blocks
+            should_allocate = rng.random() < 0.8 or not allocated_blocks
             if estimated_free_blocks <= self.blocks_per_alloc and allocated_blocks:
                 should_allocate = False
 
@@ -68,12 +68,12 @@ class Mixed7030Scenario(BenchmarkScenario):
             )
 
         result = build_stress_metrics(
-            name=f"{allocator_name} (mixed_7030)",
+            name=f"{allocator_name} (pareto)",
             alloc_times_us=alloc_times,
             dealloc_times_us=dealloc_times,
             bitmap_size=bitmap_size,
             free_blocks=allocator.count_free_blocks(),
             bitmap=allocator.bitmap,
         )
-        result["mode"] = "mixed_7030"
+        result["mode"] = "pareto"
         return result

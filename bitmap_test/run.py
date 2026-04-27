@@ -272,7 +272,7 @@ def _parse_workloads(args):
 
 
 def run_statistical_benchmark(args):
-    mode = _extract_stat_arg(args, "--stat-mode", str, "mixed_7030")
+    mode = _extract_stat_arg(args, "--stat-mode", str, "pareto")
     num_seeds = _extract_stat_arg(args, "--stat-seeds", int, 1000)
     seed_base = _extract_stat_arg(args, "--stat-seed-base", int, 42)
     num_operations = _extract_stat_arg(args, "--stat-ops", int, None)
@@ -373,7 +373,7 @@ Options:
   --stress-blocks N - Blocks per allocation for --stress mode (default: 2560)
   --workload OPS:FILE_MIB - Repeatable workload for --stress/--stat-bench
   --stat-bench - Run statistical benchmark (seeded repeated runs)
-  --stat-mode [allocation_only|mixed_7030|multisize_pareto] - Statistical benchmark mode
+  --stat-mode [allocation_only|pareto|multisize_pareto] - Statistical benchmark mode
   --stat-seeds N - Number of random seeds (default: 1000)
   --stat-seed-base N - Base seed to generate reproducible random seed list
   --stat-ops N - Operations per run (default: mode dependent)
@@ -397,7 +397,7 @@ Examples:
   python run.py --stress --disk-size-gib 250
   python run.py --stress --bitmap-size 1000000
   python run.py --stat-bench --stat-mode allocation_only
-  python run.py --stat-bench --stat-mode mixed_7030 --stat-seeds 1000
+  python run.py --stat-bench --stat-mode pareto --stat-seeds 1000
   python run.py --stat-bench --stat-mode multisize_pareto --stat-seeds 100
   python run.py --stat-bench --workload 100:10 --workload 10:1024
 

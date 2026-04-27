@@ -7,7 +7,7 @@ from pathlib import Path
 
 from core.io_csv import write_csv
 from core.stats import generate_seeds
-from scenarios import AllocationOnlyScenario, Mixed7030Scenario, MultisizeParetoScenario
+from scenarios import AllocationOnlyScenario, ParetoScenario, MultisizeParetoScenario
 
 
 RUN_FIELDS = [
@@ -79,7 +79,7 @@ class StatisticalRunner:
                 num_operations=self.config.resolved_num_operations,
                 seed=seed,
             )
-        return Mixed7030Scenario(
+        return ParetoScenario(
             blocks_per_alloc=blocks_per_alloc,
             num_operations=self.config.resolved_num_operations,
             seed=seed,
