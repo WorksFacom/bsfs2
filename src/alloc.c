@@ -5,7 +5,7 @@
 #include "../include/alloc.h"
 #include "../include/rec_gc.h"
 
-int allocate_bspan_queue(super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
+int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
   if (blocks_needed == 0 || offset >= sb->total_blocks) {
     return (blocks_needed == 0) ? 0 : -1;
   }
@@ -71,7 +71,7 @@ int allocate_bspan_queue(super_block *sb, bspan_queue_t *queue, __u32 blocks_nee
   return allocate_bspan_queue(disk, sb, queue, blocks_needed, offset);
 }
 
-__u32 allocate_single_block(super_block *sb) {
+__u32 allocate_single_block(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   __u32 i;
@@ -91,7 +91,7 @@ __u32 allocate_single_block(super_block *sb) {
   return allocate_single_block(sb);
 }
 
-int deallocate_single_block(super_block *sb, __u32 block_index) {
+int deallocate_single_block(struct super_block *sb, __u32 block_index) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   if (block_index >= sbi->super->total_blocks) {
@@ -103,7 +103,7 @@ int deallocate_single_block(super_block *sb, __u32 block_index) {
   return 0;
 }
 
-int deallocate_bspan(super_block *sb, const bspan_t *bspan) {
+int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
   // Clear bits corresponding to the span
   for (__u32 i = 0; i < bspan->length; i++) {
     bsfs_clear_bit(sb, bspan->disk_blk + i);

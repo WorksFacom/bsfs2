@@ -47,7 +47,7 @@ typedef struct bsfs_super_block {
 struct bsfs_super_info {
   bsfs_super_block    *super;
   struct buffer_head  *bh;
-  struct __u8        **bitmap;
+  __u8               **bitmap;
   struct buffer_head **bitmap_map;
 };
 

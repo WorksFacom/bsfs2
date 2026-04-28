@@ -148,15 +148,15 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
   size_t size;
 
   if (node_block == 0)
-    return;
+    return 0;
 
   size = handle->entry_size;
 
-  btree_node_t *node    = btree_read_node(sb, handle, node_block);
-  __u8         *entries = btree_entries(node);
+  struct btree_node *node    = btree_read_node(sb, node_block);
+  __u8              *entries = btree_entries(node);
 
   i = 0;
-  while (i < node->num_entries) {
+  while (i < node->node->num_entries) {
     __u32 entry_key = handle->get_key(entries + i * size);
 
     if (key <= entry_key)
@@ -165,7 +165,7 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
     i++;
   }
 
-  if (i < node->num_entries) {
+  if (i < node->node->num_entries) {
     __u32 entry_key = handle->get_key(entries + i * size);
 
     if (key == entry_key) {
@@ -181,7 +181,7 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
     goto out;
   }
 
-  __u32 *children = btree_children(node);
+  __u32 *children = btree_children(node, handle);
 
   ret = btree_search(sb, handle, children[i], key, output);
 
@@ -190,17 +190,22 @@ out:
   return ret;
 }
 
-int btree_search_entry(FILE *disk, btree_handle_t *handle, __u32 node_block, const void *needle, void *output) {
+int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, void *output) {
+  int    i;
+  __u32 *children;
+
   if (node_block == 0)
     return 0;
 
-  btree_node_t *node = btree_read_node(disk, handle, node_block);
+  struct btree_node *node = btree_read_node(sb, node_block);
+
   if (!node)
     return 0;
 
-  __u8 *entries = node->entries;
-  int   i       = 0;
-  while (i < (int)node->num_entries) {
+  __u8 *entries = btree_entries(node);
+
+  i = 0;
+  while (i < (int)node->node->num_entries) {
     void *e   = entries + i * handle->entry_size;
     int   cmp = handle->cmp(e, needle);
     (void)node_block; // suppress debug-only variables
@@ -209,48 +214,49 @@ int btree_search_entry(FILE *disk, btree_handle_t *handle, __u32 node_block, con
     i++;
   }
 
-  if (i < (int)node->num_entries) {
-    void *e      = entries + i * handle->entry_size;
-    int   cmp_eq = handle->cmp(e, needle);
+  if (i < (int)node->node->num_entries) {
+    void *e = entries + i * handle->entry_size;
+
+    int cmp_eq = handle->cmp(e, needle);
     if (cmp_eq == 0) {
       memcpy(output, e, handle->entry_size);
       btree_free_node(node);
       return 1;
     }
+
     // If key > entries[i], descend to right child i+1
-    if (!node->is_leaf && cmp_eq < 0) {
-      __u32 right_child = node->children[i + 1];
+    if (!node->node->is_leaf && cmp_eq < 0) {
+      children = btree_children(node, handle);
+      // TODO: i think it's broken right here 👇
+      __u32 right_child = children[i + 1];
       btree_free_node(node);
-      return btree_search_entry(disk, handle, right_child, needle, output);
+      return btree_search_entry(sb, handle, right_child, needle, output);
     }
   }
 
-  if (node->is_leaf) {
+  if (node->node->is_leaf) {
     btree_free_node(node);
     return 0;
   }
 
   // Otherwise, key is less than entries[i] (or i == num_entries): go to child i
-  __u32 child_block = node->children[(__u32)i];
-  (void)i;
-  (void)child_block;
+  children          = btree_children(node, handle);
+  __u32 child_block = children[(__u32)i];
   btree_free_node(node);
-  return btree_search_entry(disk, handle, child_block, needle, output);
+  return btree_search_entry(sb, handle, child_block, needle, output);
 }
 
-int btree_insert(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, void *entry) {
+int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry) {
   if (handle->root_block == 0) {
-    btree_node_t *root = malloc(sizeof(btree_node_t));
+    struct btree_node_t *root = kmalloc(sizeof(struct btree_node_t), GFP_NOFS);
+
     if (!root)
-      return -1;
+      return -ENOMEM;
+
     root->is_leaf     = 1;
     root->num_entries = 0;
-    root->entries     = calloc(2 * handle->min_degree - 1, handle->entry_size);
-    root->children    = calloc(2 * handle->min_degree, sizeof(__u32));
-    if (!root->entries || !root->children) {
-      btree_free_node(root);
-      return -1;
-    }
+
+    // TODO: eu estava aqui
 
     handle->root_block = allocate_single_block(disk, sb);
     if (handle->root_block == INVALID_BLOCK) {

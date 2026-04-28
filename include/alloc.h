@@ -20,8 +20,7 @@
 #ifndef ALLOCATE_H
 #define ALLOCATE_H
 
-#include "bitmap.h"
-#include "bsfs.h"
+#include "../bsfs.h"
 #include "bspan_queue.h"
 
 /**
@@ -44,7 +43,7 @@
  * @return 0 on success, or -1 if there are not enough free blocks.
  */
 
-int allocate_bspan_queue(super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset);
+int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset);
 
 /**
  * @brief Allocates a single free block and updates the block bitmap.
@@ -64,7 +63,7 @@ int allocate_bspan_queue(super_block *sb, bspan_queue_t *queue, __u32 blocks_nee
  * free blocks are available or if an error occurs during bitmap saving.
  */
 
-__u32 allocate_single_block(super_block *sb);
+__u32 allocate_single_block(struct super_block *sb);
 
 /**
  * @brief Deallocates a single block in the filesystem.
@@ -80,7 +79,7 @@ __u32 allocate_single_block(super_block *sb);
  * fails.
  */
 
-int deallocate_single_block(super_block *sb, __u32 block_index);
+int deallocate_single_block(struct super_block *sb, __u32 block_index);
 
 /**
  * @brief Frees a contiguous range of disk blocks described by a bspan and
@@ -101,6 +100,6 @@ int deallocate_single_block(super_block *sb, __u32 block_index);
  * free.
  * @return 0 on success, -1 on failure to read or write the bitmap.
  */
-int deallocate_bspan(super_block *sb, const bspan_t *bspan);
+int deallocate_bspan(struct super_block *sb, const bspan_t *bspan);
 
 #endif

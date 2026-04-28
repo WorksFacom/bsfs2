@@ -25,11 +25,11 @@ void init_bspan_queue(bspan_queue_t *queue) {
   queue->rear  = NULL;
 }
 
-int enqueue_bspan(bspan_queue_t *queue, uint32_t file_blk, uint32_t disk_blk, uint16_t length) {
-  bspan_node_t *new_node = (bspan_node_t *)malloc(sizeof(bspan_node_t));
+int enqueue_bspan(bspan_queue_t *queue, __u32 file_blk, __u32 disk_blk, __u16 length) {
+  bspan_node_t *new_node = (bspan_node_t *)kmalloc(sizeof(bspan_node_t), GFP_NOFS);
+
   if (!new_node) {
-    fprintf(stderr, "Error allocating memory for bspan on queue.\n");
-    return -1;
+    return -ENOMEM;
   }
   new_node->bspan.file_blk = file_blk;
   new_node->bspan.disk_blk = disk_blk;
@@ -48,8 +48,13 @@ int enqueue_bspan(bspan_queue_t *queue, uint32_t file_blk, uint32_t disk_blk, ui
 
 bspan_t dequeue_bspan(bspan_queue_t *queue) {
   if (queue->front == NULL) {
-    fprintf(stderr, "Bspan queue is empty\n");
-    exit(EXIT_FAILURE);
+    printk(KERN_ERR "Bspan queue is empty\n");
+    return (bspan_t){
+        .file_blk = 0,
+        .disk_blk = INVALID_BLOCK,
+        .length   = 0,
+        .padding  = 0,
+    };
   }
 
   bspan_node_t *temp  = queue->front;
@@ -60,25 +65,8 @@ bspan_t dequeue_bspan(bspan_queue_t *queue) {
     queue->rear = NULL;
   }
 
-  free(temp);
+  kfree(temp);
   return bspan;
-}
-
-bspan_queue_t *copy_bspan_queue(bspan_queue_t *original) {
-  bspan_queue_t *copy = (bspan_queue_t *)malloc(sizeof(bspan_queue_t));
-  if (!copy) {
-    fprintf(stderr, "Error allocating memory for bspan queue copy.\n");
-    return NULL;
-  }
-
-  init_bspan_queue(copy);
-
-  bspan_node_t *current = original->front;
-  while (current != NULL) {
-    enqueue_bspan(copy, current->bspan.file_blk, current->bspan.disk_blk, current->bspan.length);
-    current = current->next;
-  }
-  return copy;
 }
 
 int is_bspan_queue_empty(bspan_queue_t *queue) {

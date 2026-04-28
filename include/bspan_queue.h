@@ -76,7 +76,7 @@ void init_bspan_queue(bspan_queue_t *queue);
  * @param length The length of the bspan.
  * @return 0 on success, -1 if memory allocation fails.
  */
-int enqueue_bspan(bspan_queue_t *queue, uint32_t file_blk, uint32_t disk_blk, uint16_t length);
+int enqueue_bspan(bspan_queue_t *queue, __u32 file_blk, __u32 disk_blk, __u16 length);
 
 /**
  * @brief Dequeues and returns the bspan from the front of the queue.
@@ -89,17 +89,6 @@ int enqueue_bspan(bspan_queue_t *queue, uint32_t file_blk, uint32_t disk_blk, ui
  * @return The bspan removed from the front of the queue.
  */
 bspan_t dequeue_bspan(bspan_queue_t *queue);
-
-/**
- * @brief Copies a bspan queue.
- *
- * This function creates a new queue and copies all the elements from the
- * original queue into the new queue. The new queue is returned.
- *
- * @param original Pointer to the bspan queue to be copied.
- * @return Pointer to the new copied bspan queue.
- */
-bspan_queue_t *copy_bspan_queue(bspan_queue_t *original);
 
 /**
  * @brief Checks if the bspan queue is empty.
