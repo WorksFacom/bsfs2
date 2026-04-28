@@ -16,6 +16,11 @@ class MultisizeParetoScenario(BenchmarkScenario):
         (0.25, 2560),     # 10 MB → 2560 blocks
         (0.05, 262144),   # 1 GB → 262144 blocks
     ]
+    SIZE_KEYS = {
+        256: "1mib",
+        2560: "10mib",
+        262144: "1gib",
+    }
 
     def __init__(self, num_operations, seed):
         self.num_operations = num_operations
@@ -35,6 +40,10 @@ class MultisizeParetoScenario(BenchmarkScenario):
         alloc_times = []
         dealloc_times = []
         allocated = {256: [], 2560: [], 262144: []}
+        alloc_counts_by_size = {256: 0, 2560: 0, 262144: 0}
+        dealloc_counts_by_size = {256: 0, 2560: 0, 262144: 0}
+        alloc_times_by_size = {256: [], 2560: [], 262144: []}
+        dealloc_times_by_size = {256: [], 2560: [], 262144: []}
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -65,8 +74,11 @@ class MultisizeParetoScenario(BenchmarkScenario):
                 t_end = time.perf_counter_ns()
 
                 if allocated_blocks:
-                    alloc_times.append((t_end - t_start) / 1000.0)
+                    elapsed_us = (t_end - t_start) / 1000.0
+                    alloc_times.append(elapsed_us)
+                    alloc_times_by_size[file_size].append(elapsed_us)
                     allocated[file_size].extend(allocated_blocks)
+                    alloc_counts_by_size[file_size] += 1
             else:
                 free_count = min(file_size, len(allocated[file_size]))
                 if free_count > 0:
@@ -76,9 +88,12 @@ class MultisizeParetoScenario(BenchmarkScenario):
                     t_end = time.perf_counter_ns()
 
                     if success:
-                        dealloc_times.append((t_end - t_start) / 1000.0)
+                        elapsed_us = (t_end - t_start) / 1000.0
+                        dealloc_times.append(elapsed_us)
+                        dealloc_times_by_size[file_size].append(elapsed_us)
                         freed = set(blocks_to_free)
                         allocated[file_size] = [b for b in allocated[file_size] if b not in freed]
+                        dealloc_counts_by_size[file_size] += 1
 
         if show_progress:
             print(
@@ -94,4 +109,20 @@ class MultisizeParetoScenario(BenchmarkScenario):
             bitmap=allocator.bitmap,
         )
         result["mode"] = "multisize_pareto"
+        for size_blocks, size_key in self.SIZE_KEYS.items():
+            alloc_size_times = alloc_times_by_size[size_blocks]
+            dealloc_size_times = dealloc_times_by_size[size_blocks]
+            total_time_us = sum(alloc_size_times) + sum(dealloc_size_times)
+            total_time_s = total_time_us / 1e6
+            total_ops = alloc_counts_by_size[size_blocks] + dealloc_counts_by_size[size_blocks]
+            ops_per_sec = total_ops / total_time_s if total_time_s > 0 else 0.0
+            alloc_avg = sum(alloc_size_times) / len(alloc_size_times) if alloc_size_times else 0.0
+            dealloc_avg = sum(dealloc_size_times) / len(dealloc_size_times) if dealloc_size_times else 0.0
+
+            result[f"alloc_{size_key}"] = alloc_counts_by_size[size_blocks]
+            result[f"dealloc_{size_key}"] = dealloc_counts_by_size[size_blocks]
+            result[f"ops_per_sec_{size_key}"] = ops_per_sec
+            result[f"total_time_s_{size_key}"] = total_time_s
+            result[f"alloc_avg_{size_key}"] = alloc_avg
+            result[f"dealloc_avg_{size_key}"] = dealloc_avg
         return result

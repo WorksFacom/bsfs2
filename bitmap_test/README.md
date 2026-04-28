@@ -96,6 +96,23 @@ python run.py --stat-bench --workload 100:10 --workload 10:1024
 
 Artefatos gerados:
 - `benchmark_runs_<mode>_<YYYYMMDD-HHMMSS>.csv` (resultado por seed/estratégia)
+  - `allocation_only` e `pareto`: mantêm colunas globais de workload e métricas agregadas.
+  - `multisize_pareto`: usa schema específico por tamanho (1 MiB, 10 MiB, 1 GiB), sem colunas globais de workload (`workload_*`, `target_blocks`, `blocks_per_file`).
+    - contagens por tamanho: `alloc_1mib`, `dealloc_1mib`, `alloc_10mib`, `dealloc_10mib`, `alloc_1gib`, `dealloc_1gib`
+    - tempos por tamanho: `ops_per_sec_*`, `total_time_*`, `alloc_avg_*`, `dealloc_avg_*`
+
+## Métricas principais
+
+- `ops_per_sec`: operações por segundo (alloc + dealloc no recorte medido). Maior é melhor.
+- `total_time[s]`: tempo total acumulado das operações medidas. Menor é melhor.
+- `alloc_avg[us]` / `dealloc_avg[us]`: latência média por chamada de alocação/desalocação. Menor é melhor.
+- `num_allocs[calls]` / `num_deallocs[calls]`: quantidade de operações bem-sucedidas contabilizadas.
+- `occupied[blocks]` / `free_blocks[blocks]`: blocos ocupados/livres ao final do cenário.
+- `fragmentation[ratio]`: mede continuidade dos blocos ocupados no bitmap:
+  - fórmula: `(total_occupied_blocks - contiguous_segments) / total_occupied_blocks`
+  - `total_occupied_blocks`: total de bits `1` no bitmap
+  - `contiguous_segments`: número de sequências contíguas de bits `1`
+  - interpretação: **quanto maior, melhor** (mais contíguo, menos fragmentado); valores menores indicam maior fragmentação.
 
 ## Estratégias disponíveis
 

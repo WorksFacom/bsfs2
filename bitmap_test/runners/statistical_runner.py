@@ -10,7 +10,7 @@ from core.stats import generate_seeds
 from scenarios import AllocationOnlyScenario, ParetoScenario, MultisizeParetoScenario
 
 
-RUN_FIELDS = [
+RUN_FIELDS_DEFAULT = [
     "workload_label",
     "workload_file_size_mib",
     "workload_ops",
@@ -36,7 +36,44 @@ RUN_FIELDS = [
     "fragmentation",
 ]
 
-RUN_FIELD_HEADERS = {
+RUN_FIELDS_MULTISIZE = [
+    "seed",
+    "mode",
+    "strategy_key",
+    "strategy_name",
+    "bitmap_size",
+    "num_operations",
+    "status",
+    "error",
+    "total_time_s",
+    "alloc_avg",
+    "dealloc_avg",
+    "num_allocs",
+    "num_deallocs",
+    "alloc_1mib",
+    "dealloc_1mib",
+    "ops_per_sec_1mib",
+    "total_time_s_1mib",
+    "alloc_avg_1mib",
+    "dealloc_avg_1mib",
+    "alloc_10mib",
+    "dealloc_10mib",
+    "ops_per_sec_10mib",
+    "total_time_s_10mib",
+    "alloc_avg_10mib",
+    "dealloc_avg_10mib",
+    "alloc_1gib",
+    "dealloc_1gib",
+    "ops_per_sec_1gib",
+    "total_time_s_1gib",
+    "alloc_avg_1gib",
+    "dealloc_avg_1gib",
+    "occupied",
+    "free_blocks",
+    "fragmentation",
+]
+
+RUN_FIELD_HEADERS_DEFAULT = {
     "workload_label": "workload[label]",
     "workload_file_size_mib": "workload_file_size_mib[MiB]",
     "workload_ops": "workload_ops[count]",
@@ -62,6 +99,44 @@ RUN_FIELD_HEADERS = {
     "fragmentation": "fragmentation[ratio]",
 }
 
+RUN_FIELD_HEADERS_MULTISIZE = {
+    "seed": "seed[id]",
+    "mode": "mode[label]",
+    "strategy_key": "strategy_key[label]",
+    "strategy_name": "strategy_name[label]",
+    "total_time_s": "total_time[s]",
+    "alloc_avg": "alloc_avg[us]",
+    "dealloc_avg": "dealloc_avg[us]",
+    "num_allocs": "num_allocs[calls]",
+    "num_deallocs": "num_deallocs[calls]",
+    "status": "status[label]",
+    "error": "error[text]",
+    "bitmap_size": "bitmap_size[blocks]",
+    "num_operations": "num_operations[ops]",
+    "alloc_1mib": "alloc_1mib[calls]",
+    "dealloc_1mib": "dealloc_1mib[calls]",
+    "ops_per_sec_1mib": "ops_per_sec_1mib[ops/s]",
+    "total_time_s_1mib": "total_time_1mib[s]",
+    "alloc_avg_1mib": "alloc_avg_1mib[us]",
+    "dealloc_avg_1mib": "dealloc_avg_1mib[us]",
+    "alloc_10mib": "alloc_10mib[calls]",
+    "dealloc_10mib": "dealloc_10mib[calls]",
+    "ops_per_sec_10mib": "ops_per_sec_10mib[ops/s]",
+    "total_time_s_10mib": "total_time_10mib[s]",
+    "alloc_avg_10mib": "alloc_avg_10mib[us]",
+    "dealloc_avg_10mib": "dealloc_avg_10mib[us]",
+    "alloc_1gib": "alloc_1gib[calls]",
+    "dealloc_1gib": "dealloc_1gib[calls]",
+    "ops_per_sec_1gib": "ops_per_sec_1gib[ops/s]",
+    "total_time_s_1gib": "total_time_1gib[s]",
+    "alloc_avg_1gib": "alloc_avg_1gib[us]",
+    "dealloc_avg_1gib": "dealloc_avg_1gib[us]",
+    "occupied": "occupied[blocks]",
+    "free_blocks": "free_blocks[blocks]",
+    "fragmentation": "fragmentation[ratio]",
+}
+
+
 class StatisticalRunner:
     def __init__(self, strategy_specs, config):
         self.strategy_specs = strategy_specs
@@ -85,8 +160,10 @@ class StatisticalRunner:
             seed=seed,
         )
 
-    def _row_from_metrics(self, seed, strategy_key, strategy_name, metrics, status="ok", error=""):
-        return {
+    def _row_from_metrics(
+        self, seed, strategy_key, strategy_name, metrics, status="ok", error=""
+    ):
+        row = {
             "seed": seed,
             "workload_label": self.config.workload_label,
             "workload_file_size_mib": self.config.file_size_mib,
@@ -106,11 +183,32 @@ class StatisticalRunner:
             "dealloc_avg": metrics.get("dealloc_avg", 0.0),
             "num_allocs": metrics.get("num_allocs", 0),
             "num_deallocs": metrics.get("num_deallocs", 0),
+            "alloc_1mib": metrics.get("alloc_1mib", 0),
+            "alloc_10mib": metrics.get("alloc_10mib", 0),
+            "alloc_1gib": metrics.get("alloc_1gib", 0),
+            "dealloc_1mib": metrics.get("dealloc_1mib", 0),
+            "dealloc_10mib": metrics.get("dealloc_10mib", 0),
+            "dealloc_1gib": metrics.get("dealloc_1gib", 0),
+            "ops_per_sec_1mib": metrics.get("ops_per_sec_1mib", 0.0),
+            "total_time_s_1mib": metrics.get("total_time_s_1mib", 0.0),
+            "alloc_avg_1mib": metrics.get("alloc_avg_1mib", 0.0),
+            "dealloc_avg_1mib": metrics.get("dealloc_avg_1mib", 0.0),
+            "ops_per_sec_10mib": metrics.get("ops_per_sec_10mib", 0.0),
+            "total_time_s_10mib": metrics.get("total_time_s_10mib", 0.0),
+            "alloc_avg_10mib": metrics.get("alloc_avg_10mib", 0.0),
+            "dealloc_avg_10mib": metrics.get("dealloc_avg_10mib", 0.0),
+            "ops_per_sec_1gib": metrics.get("ops_per_sec_1gib", 0.0),
+            "total_time_s_1gib": metrics.get("total_time_s_1gib", 0.0),
+            "alloc_avg_1gib": metrics.get("alloc_avg_1gib", 0.0),
+            "dealloc_avg_1gib": metrics.get("dealloc_avg_1gib", 0.0),
             "avg_time_per_op": metrics.get("avg_time_per_op", 0.0),
             "occupied": metrics.get("occupied", 0),
             "free_blocks": metrics.get("free_blocks", 0),
             "fragmentation": metrics.get("fragmentation", 0.0),
         }
+        if self.config.mode == "multisize_pareto":
+            return {key: row.get(key) for key in RUN_FIELDS_MULTISIZE}
+        return {key: row.get(key) for key in RUN_FIELDS_DEFAULT}
 
     def run(self, strategy_keys=None):
         self.config.validate()
@@ -119,7 +217,9 @@ class StatisticalRunner:
 
         selected = set(strategy_keys) if strategy_keys else None
         strategy_specs = [
-            spec for spec in self.strategy_specs if selected is None or spec[0] in selected
+            spec
+            for spec in self.strategy_specs
+            if selected is None or spec[0] in selected
         ]
         if not strategy_specs:
             raise ValueError("No strategies selected for statistical benchmark")
@@ -185,8 +285,14 @@ class StatisticalRunner:
         runs_path = write_csv(
             output_dir / f"benchmark_runs_{mode_suffix}_{timestamp}.csv",
             run_rows,
-            RUN_FIELDS,
-            header_labels=RUN_FIELD_HEADERS,
+            RUN_FIELDS_MULTISIZE
+            if self.config.mode == "multisize_pareto"
+            else RUN_FIELDS_DEFAULT,
+            header_labels=(
+                RUN_FIELD_HEADERS_MULTISIZE
+                if self.config.mode == "multisize_pareto"
+                else RUN_FIELD_HEADERS_DEFAULT
+            ),
         )
         failed_runs = sum(1 for row in run_rows if row["status"] != "ok")
 
