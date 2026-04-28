@@ -1,4 +1,14 @@
-"""Allocation-only workload scenario."""
+"""
+Allocation-only workload scenario with no deallocations.
+
+Workload:
+- performs `num_operations` consecutive allocations of `blocks_per_alloc` blocks each.
+- the bitmap fills progressively with no blocks ever freed.
+- useful for measuring pure allocation throughput and behaviour under high occupancy.
+
+Metrics:
+- `dealloc_avg` is always 0; `fragmentation` tends toward 0 since blocks are allocated contiguously.
+"""
 
 from __future__ import annotations
 

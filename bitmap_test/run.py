@@ -1,7 +1,27 @@
 #!/usr/bin/env python3
 """
-Bitmap Allocators Benchmark Suite
-Entry point for running all allocator tests with optional comparison report
+Entry point for the Bitmap Allocators Benchmark Suite.
+
+Execution modes:
+- Interactive TUI (no args or --tui): numbered menu to select strategy and mode.
+- Direct CLI: `python run.py [STRATEGY] [--demo] [--stress] [--stress-ops N] [--stress-blocks N]`
+- Report: `--report` runs all strategies and saves a report-YYYYMMDD-HHMMSS.md file.
+- Validation: `--validate` verifies that all allocators produce the same bitmap on a fixed workload.
+- Statistical benchmark: `--stat-bench` runs multiple seeded experiments and saves a CSV of results.
+
+Key functions:
+- `run_tui`: interactive loop with strategy and mode selectors.
+- `run_single_test` / `run_all_tests`: runs demo and/or stress for one or all strategies.
+- `run_and_save_report`: runs stress across all strategies and saves a Markdown report.
+- `run_consistency_validator`: delegates to `ValidatorRunner` and returns True/False.
+- `run_statistical_benchmark`: builds a `StatBenchmarkConfig` and runs `StatisticalRunner`
+  for each workload defined via `--workload OPS:FILE_MIB`.
+
+Argument helpers:
+- `_extract_stat_arg`: extracts the value of the next token after `--flag` in the args list.
+- `_extract_stat_args`: collects all values from repeatable flags (e.g. multiple `--workload`).
+- `_resolve_bitmap_config`: resolves `--bitmap-size` or `--disk-size-gib` to a block count.
+- `_parse_workloads`: converts `--workload OPS:FILE_MIB` into dicts with pre-computed `blocks_per_alloc`.
 """
 
 import os

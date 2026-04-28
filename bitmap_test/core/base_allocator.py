@@ -1,4 +1,16 @@
-"""Shared allocator base class and validation helpers."""
+"""
+Base classes for all bitmap allocators.
+
+BitmapBits:
+- compact bitmap storage backed by a bytearray with O(1) free-block accounting.
+- `free_count` is maintained incrementally via __setitem__, avoiding full scans on every query.
+- supports slice assignment with length consistency checks.
+
+BaseAllocator:
+- abstract contract every allocator must implement: `allocate_blocks`, `deallocate_blocks`, `count_free_blocks`.
+- `validate_deallocation` checks for duplicates, out-of-bounds indices, and double-free before releasing.
+- `rollback_bitmap_allocation` undoes a partial allocation if a multi-block request fails mid-way.
+"""
 
 from __future__ import annotations
 

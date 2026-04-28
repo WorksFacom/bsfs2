@@ -1,4 +1,19 @@
-"""Multisize workload scenario with Pareto distribution (80% alloc / 20% dealloc)."""
+"""
+Pareto workload scenario with three file sizes.
+
+File size distribution:
+- 70% of operations use 1 MiB files (256 blocks at 4 KiB each).
+- 25% use 10 MiB files (2,560 blocks).
+- 5% use 1 GiB files (262,144 blocks).
+
+Workload:
+- each operation the RNG picks a file size then decides alloc/dealloc (80/20 split).
+- each size class maintains its own allocated block list and separate timing lists.
+
+Extra metrics:
+- in addition to global metrics, returns `ops_per_sec_<size>`, `alloc_avg_<size>`, etc.
+  for each size class (1mib, 10mib, 1gib), enabling per-file-class analysis.
+"""
 
 from __future__ import annotations
 

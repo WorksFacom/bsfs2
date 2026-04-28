@@ -1,4 +1,16 @@
-"""Benchmark metrics aggregation helpers."""
+"""
+Metrics aggregation helpers for benchmark results.
+
+`build_stress_metrics`:
+- takes lists of allocation and deallocation times in microseconds and builds a dict with
+  ops/sec, average times, counts, and final bitmap state.
+- `fragmentation` is computed as `(total_frags - total_files) / total_frags`, where each
+  contiguous run of occupied blocks counts as one "file".
+
+`_calculate_fragmentation`:
+- linearly scans the bitmap counting contiguous occupied fragments.
+- returns 0.0 when no blocks are allocated.
+"""
 
 from __future__ import annotations
 

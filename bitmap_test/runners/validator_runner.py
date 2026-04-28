@@ -1,4 +1,15 @@
-"""Consistency validation runner."""
+"""
+Cross-allocator consistency validation runner.
+
+ValidatorRunner:
+- runs the same deterministic workload (fixed seed) across all allocators and compares the resulting bitmaps.
+- `_run_validation_workload`: simulates a 70/30 alloc/dealloc mix while tracking allocated blocks externally
+  to verify that the allocator's internal state agrees with the external tracker at the end.
+- `run` checks two classes of inconsistency:
+  - *internal*: `count_free_blocks()` disagrees with the actual free count in the bitmap.
+  - *divergence*: a strategy's bitmap differs from the baseline (first strategy in the list).
+- returns `True` if all checks pass, `False` otherwise.
+"""
 
 from __future__ import annotations
 

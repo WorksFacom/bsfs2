@@ -1,4 +1,11 @@
-"""Benchmark execution runner."""
+"""
+Single-strategy benchmark runner.
+
+BenchmarkRunner:
+- wraps an `allocator_class` and `allocator_name` to run two test modes.
+- `run_demo`: executes a fixed sequence of 7 alloc/dealloc operations, printing the bitmap state after each.
+- `run_stress`: delegates to `StressScenario` with a fixed seed of 42, useful for quick cross-strategy comparison.
+"""
 
 from __future__ import annotations
 

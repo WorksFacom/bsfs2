@@ -1,4 +1,11 @@
-"""Fixed bitmap layout constants used across bitmap benchmark tests."""
+"""
+Bitmap layout constants derived from the simulated disk configuration.
+
+Model:
+- a 250 GiB disk with 4 KiB pages yields 65,536,000 blocks (1 bit per page).
+- `FIXED_BITMAP_SIZE_BLOCKS` is the default constant used by all benchmarks.
+- `bitmap_size_blocks_from_disk_gib` lets callers derive alternative sizes for parametric tests.
+"""
 
 from __future__ import annotations
 
