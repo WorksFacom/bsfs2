@@ -1,5 +1,26 @@
 """
-Min-Heap implementation for bitmap block allocation
+Allocator with a lazy model using a min-heap for recycled blocks.
+
+Strategy idea:
+- use a min-heap for fast access to the smallest recycled block.
+- combine heap with fresh range (`next_fresh`) to avoid preloading all free
+  blocks into the heap.
+
+How `next_fresh` works:
+- points to the smallest index never allocated.
+- when the selected minimum free block is fresh, the cursor advances.
+- deallocated blocks do not return to fresh range; they go into the heap.
+
+Allocation:
+- picks the smallest free index between heap top (recycled) and
+  `next_fresh` (never-used blocks).
+- when using `next_fresh`, advances cursor; when using recycled block, pops
+  from heap.
+- marks each selected index as occupied in the bitmap.
+
+Deallocation:
+- validates indices, marks blocks as free in the bitmap, and pushes indices
+  into the min-heap for reuse.
 """
 
 import heapq

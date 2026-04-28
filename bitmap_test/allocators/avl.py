@@ -1,5 +1,26 @@
 """
-AVL Tree implementation for bitmap block allocation
+Allocator with a lazy model using AVL for recycled blocks.
+
+Strategy idea:
+- split free blocks into two sources: fresh range (`next_fresh`) and
+  recycled blocks indexed in an AVL tree.
+- always pick the smallest index between those two sources.
+
+How `next_fresh` works:
+- `next_fresh` points to the smallest index never allocated.
+- when allocation uses this index, the cursor advances by +1.
+- deallocated blocks do not move the cursor; they return through the AVL tree.
+
+Allocation:
+- combines two free-block sources: `next_fresh` (never-used blocks) and
+  the AVL-tree minimum (previously deallocated blocks).
+- always picks the smallest index between both sources.
+- if it comes from `next_fresh`, advances the cursor; if from AVL, removes it
+  from the tree.
+
+Deallocation:
+- validates indices, marks each block as free in the bitmap, and reinserts
+  indices into the AVL tree for ordered reuse.
 """
 
 from core import BaseAllocator, register

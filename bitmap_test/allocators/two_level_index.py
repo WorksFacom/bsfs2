@@ -1,9 +1,22 @@
 """
-Two-Level Index allocator for bitmap block management.
+Allocator with two-level index (buckets + local bitmap scan).
 
-Uses a two-level hierarchy:
-- Level 1: Bucket metadata (free count per bucket)
-- Level 2: Sequential scan within the selected bucket
+Strategy idea:
+- reduce search cost with per-bucket metadata (`free_count`), avoiding full
+  bitmap scans for every block.
+- after selecting a bucket, use simple local scan inside that bucket.
+
+Allocation:
+- Level 1: uses `bucket_free_count` to find a bucket with free space
+  (search starts from `last_bucket_idx` cursor to reduce rescans).
+- Level 2: performs sequential scan inside selected bucket to find first free
+  bit and marks block as occupied.
+- decrements free counter of the allocated bucket.
+
+Deallocation:
+- validates indices, clears bitmap bits, and increments counters of affected
+  buckets.
+- resets bucket cursor to prioritize earlier buckets again.
 """
 
 from core import BaseAllocator, register

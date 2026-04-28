@@ -1,5 +1,25 @@
 """
-B-Tree implementation for bitmap block allocation
+Allocator with a lazy model using a B-Tree for recycled blocks.
+
+Strategy idea:
+- keep recycled blocks in a B-Tree to retrieve the smallest index in order.
+- combine that set with the fresh range of never-used indices.
+
+How `next_fresh` works:
+- monotonic cursor for the next never-allocated block.
+- advances only when allocation uses fresh range.
+- freed blocks are reinserted into the B-Tree, not into the cursor.
+
+Allocation:
+- searches the smallest free index between `next_fresh` and the smallest index
+  stored in the B-Tree (leftmost leaf).
+- if allocating from `next_fresh`, increments cursor; if allocating recycled
+  index, removes it from the B-Tree.
+- marks selected blocks as occupied in the bitmap.
+
+Deallocation:
+- validates indices, marks them as free in the bitmap, and inserts each index
+  into the B-Tree for future reuse.
 """
 
 import bisect

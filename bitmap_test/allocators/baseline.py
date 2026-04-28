@@ -1,5 +1,18 @@
 """
-Baseline sequential-scan implementation for bitmap block allocation.
+Baseline allocator (linear bitmap scan).
+
+Strategy idea:
+- no auxiliary index: the bitmap itself is the search structure.
+- prioritizes simplicity, with linear scan cost.
+
+Allocation:
+- scans the bitmap from start to end and collects the first free blocks
+  until reaching `count` (does not require contiguity).
+- only marks blocks as occupied after finding enough blocks.
+
+Deallocation:
+- validates input indices and, if valid, writes 0 to return blocks
+  directly to the bitmap.
 """
 
 from core import BaseAllocator, register

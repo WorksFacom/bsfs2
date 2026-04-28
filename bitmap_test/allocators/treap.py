@@ -1,12 +1,26 @@
 """
-Treap (Tree + Heap) allocator for bitmap block management.
+Allocator with a lazy model using Treap for recycled blocks.
 
-A randomized self-balancing BST that combines:
-- BST property for ordering (fast search)
-- Heap property for balancing (simpler than RB-Tree rotations)
+Strategy idea:
+- keep recycled blocks in a probabilistically balanced BST (treap) to support
+  insert/remove with expected logarithmic cost.
+- combine with fresh range (`next_fresh`) and always pick smallest index.
 
-Uses random priorities to maintain expected O(log n) height.
-Simpler to implement than Red-Black Trees while maintaining same complexity.
+How `next_fresh` works:
+- points to the first never-allocated block.
+- advances only when allocation consumes fresh range.
+- freed blocks return to treap and do not change this cursor.
+
+Allocation:
+- selects the smallest free index between `next_fresh` and treap minimum
+  (leftmost node).
+- if consuming `next_fresh`, advances cursor; if consuming recycled index,
+  removes index from treap while preserving BST/heap properties.
+- marks selected blocks as occupied in the bitmap.
+
+Deallocation:
+- validates indices, clears bitmap bits, and reinserts each index into treap
+  with random priority to maintain expected balancing.
 """
 
 import random

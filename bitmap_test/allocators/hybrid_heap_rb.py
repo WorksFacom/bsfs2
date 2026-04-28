@@ -1,7 +1,26 @@
 """
-Hybrid Heap + RB-Tree allocator for bitmap block allocation
-- Min-Heap: O(1) minimum finding for fast allocation
-- RB-Tree: O(log n) insertion/deletion for efficient deallocation
+Hybrid Heap + RB-Tree allocator for free-block recycling.
+
+Strategy idea:
+- heap provides fast minimum selection for recycled-block allocation.
+- RB tree tracks the same recycled set in a balanced structure.
+- `position_map` enables efficient key removal from heap.
+
+How `next_fresh` works:
+- references the next never-used index in fresh range.
+- is used when its value is smaller than heap recycled minimum.
+- advances only when allocation consumes fresh range.
+
+Allocation:
+- chooses the smallest index between heap top (recycled) and `next_fresh`.
+- when selected index comes from heap, removes it from heap (using
+  `position_map`) and RB tree via `_delete_key`; when from fresh, increments
+  `next_fresh`.
+- marks the block as occupied in the bitmap.
+
+Deallocation:
+- validates indices, frees blocks in bitmap, and inserts each index into both
+  structures: RB tree (ordered/balanced index) and heap (fast minimum access).
 """
 
 from core import BaseAllocator, register

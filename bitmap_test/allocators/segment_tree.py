@@ -1,8 +1,20 @@
-"""Segment Tree allocator for bitmap block management.
+"""Allocator with an implicit sparse Segment Tree for bitmap management.
 
-This implementation uses a sparse implicit segment tree that tracks
-occupied blocks per range. Untouched nodes are considered fully free,
-keeping memory proportional to touched regions instead of bitmap size.
+Strategy idea:
+- maintain occupied-count per interval to quickly locate the first free block
+  without scanning the entire bitmap.
+- structure is sparse: only touched-region nodes are created/updated.
+
+Allocation:
+- tree stores occupied counts per interval (untouched nodes are implicitly
+  free).
+- for each block, descends from root choosing first left child that still has
+  capacity; when left is full, goes right.
+- when occupying a block, updates counts along the path back to root.
+
+Deallocation:
+- validates indices, clears bitmap bits, and propagates occupied-count removal
+  in tree (dropping zero-occupied nodes).
 """
 
 from core import BaseAllocator, register

@@ -1,5 +1,26 @@
 """
-Red-Black Tree implementation for bitmap block allocation
+Allocator with a lazy model using a Red-Black Tree for recycled blocks.
+
+Strategy idea:
+- combine the fresh cursor (`next_fresh`) with an ordered set of recycled
+  blocks in a RB tree.
+- keep smallest-free-index selection with balanced-tree operations.
+
+How `next_fresh` works:
+- represents the first block not yet consumed in the fresh range.
+- increments only when allocation comes from fresh range.
+- deallocated blocks go to the RB tree and then compete with fresh blocks.
+
+Allocation:
+- computes the smallest free index between `next_fresh` (never-used range) and
+  the RB-tree minimum (deallocated indices).
+- if the selected index comes from RB tree, removes it from the tree; otherwise
+  consumes `next_fresh` by incrementing the cursor.
+- then marks the block as occupied in the bitmap.
+
+Deallocation:
+- validates indices, marks blocks as free in the bitmap, and inserts indices
+  back into the RB tree for ordered reuse.
 """
 
 from enum import IntEnum
@@ -386,4 +407,3 @@ class BitmapRB(BaseAllocator):
     def _get_color(self, node):
         """Get color, treating None as BLACK"""
         return node.color if node else Color.BLACK
-
