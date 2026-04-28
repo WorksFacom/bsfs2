@@ -16,6 +16,7 @@ Todos os allocators:
 ## Estratégias atuais
 
 - `baseline.py` (`baseline`): varredura sequencial.
+- `needle_sequential.py` (`needle`): varredura sequencial com agulha (first-free).
 - `avl.py` (`avl`): árvore AVL.
 - `rbtree.py` (`rb`): estrutura de árvore rubro-negra.
 - `heap.py` (`heap`): min-heap.

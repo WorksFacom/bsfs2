@@ -358,6 +358,7 @@ Strategies:
   twolevel    - Two-Level Index
   treap       - Treap
   baseline    - Baseline Sequential Scan
+  needle      - Sequential Needle
   all         - Run all strategies (default)
 
 Options:

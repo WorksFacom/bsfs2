@@ -14,6 +14,7 @@ from .segment_tree import BitmapSegmentTree
 from .two_level_index import BitmapTwoLevelIndex
 from .treap import BitmapTreap
 from .baseline import BitmapBaseline
+from .needle_sequential import BitmapNeedleSequential
 
 
 def get_strategy_specs():
@@ -23,6 +24,7 @@ def get_strategy_specs():
     }
     preferred_order = [
         "baseline",
+        "needle",
         "avl",
         "rb",
         "heap",
@@ -51,4 +53,5 @@ __all__ = [
     'BitmapTwoLevelIndex',
     'BitmapTreap',
     'BitmapBaseline',
+    'BitmapNeedleSequential',
 ]
