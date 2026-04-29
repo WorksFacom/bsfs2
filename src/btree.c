@@ -4,15 +4,13 @@
 /*
  * Static functions prototypes
  */
-static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node_t *node, void *entry);
-static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int index);
+static int  __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node *node, void *entry);
+static int  __btree_split_child(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int index);
 static void __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, int *success);
-static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int idx);
-static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent, int idx);
-static void __btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent,
-                                     int idx);
-static void __btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node_t *parent,
-                                     int idx);
+static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -62,17 +60,25 @@ __u32 hash_filename(const char *name) {
 }
 
 // TODO: properly handle alignment (e.g: get_unaligned_le32)
-struct btree_node *btree_read_node(struct super_block *sb, __u32 block) {
+int btree_read_node(struct super_block *sb, __u32 block, struct btree_node **out_node) {
   struct buffer_head *bh;
 
   bh = sb_bread(sb, block);
 
-  struct btree_node *node = kzalloc(sizeof(struct btree_node), GFP_KERNEL);
+  if (!bh)
+    return -1;
 
-  node->bh   = bh;
-  node->node = (struct btree_node_t *)bh->b_data;
+  *out_node = kzalloc(sizeof(struct btree_node), GFP_KERNEL);
 
-  return node;
+  if (!out_node) {
+    brelse(bh);
+    return -ENOMEM;
+  }
+
+  (*out_node)->bh   = bh;
+  (*out_node)->node = (struct btree_node_t *)bh->b_data;
+
+  return 0;
 }
 
 void btree_free_node(struct btree_node *node) {
@@ -246,31 +252,34 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
 
+void btree_clear_node(struct super_block *sb, struct btree_node *node) {
+  memset(node->bh->b_data, 0, sb->s_blocksize);
+}
+
 int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry) {
-  if (handle->root_block == 0) {
-    struct btree_node_t *root = kmalloc(sizeof(struct btree_node_t), GFP_NOFS);
+  __u32              blocknr;
+  struct btree_node *node;
 
-    if (!root)
-      return -ENOMEM;
+  if (unlikely(handle->root_block == 0)) {
+    blocknr = allocate_single_block(sb);
 
-    root->is_leaf     = 1;
-    root->num_entries = 0;
+    if (blocknr == INVALID_BLOCK)
+      return -1;
 
-    // TODO: eu estava aqui
+    btree_read_node(sb, blocknr, &node);
+    btree_clear_node(sb, node);
 
-    handle->root_block = allocate_single_block(disk, sb);
-    if (handle->root_block == INVALID_BLOCK) {
-      btree_free_node(root);
+    node->node->is_leaf = 1;
+
+    // TODO: useless?
+    // handle->root_block = blocknr;
+
+    if (__btree_insert_nonfull(sb, handle, blocknr, node, entry) != 0) {
+      btree_free_node(node);
       return -1;
     }
 
-    if (__btree_insert_nonfull(disk, sb, handle, handle->root_block, root, entry) != 0 ||
-        btree_write_node(disk, handle, handle->root_block, root) != 0) {
-      btree_free_node(root);
-      return -1;
-    }
-
-    btree_free_node(root);
+    btree_free_node(node);
     return 0;
   }
 
@@ -325,76 +334,96 @@ int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry) {
   return 0;
 }
 
-static int __btree_insert_nonfull(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block, btree_node_t *node,
-                                  void *entry) {
-  int   i       = node->num_entries - 1;
-  __u8 *entries = node->entries;
-  __u32 key     = handle->get_key(entry);
+static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node *node, void *entry) {
+  int ret;
+  int i = node->node->num_entries - 1;
 
-  if (node->is_leaf) {
+  __u32 key = handle->get_key(entry);
+
+  __u8  *entries  = btree_entries(node);
+  __u32 *children = btree_children(node, handle);
+
+  struct btree_node *child;
+
+  __u64 size = handle->entry_size;
+
+  if (node->node->is_leaf) {
     while (i >= 0) {
-      void *e   = entries + i * handle->entry_size;
+      void *e   = entries + i * size;
       int   cmp = handle->cmp ? handle->cmp(e, entry) : ((int)handle->get_key(e) - (int)key);
+
       if (cmp <= 0)
         break;
-      memcpy(entries + (i + 1) * handle->entry_size, entries + i * handle->entry_size, handle->entry_size);
+
+      memcpy(entries + (i + 1) * size, entries + i * size, size);
       i--;
     }
-    memcpy(entries + (i + 1) * handle->entry_size, entry, handle->entry_size);
-    node->num_entries++;
-    // persist leaf update immediately
-    return btree_write_node(disk, handle, node_block, node);
+    memcpy(entries + (i + 1) * size, entry, size);
+    node->node->num_entries++;
+
+    return 0;
   } else {
     while (i >= 0) {
-      void *e   = entries + i * handle->entry_size;
+      void *e   = entries + i * size;
       int   cmp = handle->cmp ? handle->cmp(e, entry) : ((int)handle->get_key(e) - (int)key);
+
       if (cmp <= 0)
         break;
+
       i--;
     }
     i++;
-    __u32         child_block = node->children[i];
-    btree_node_t *child       = btree_read_node(disk, handle, child_block);
-    if (!child)
-      return -1;
 
-    if (child->num_entries == (__u32)(2 * handle->min_degree - 1)) {
-      if (__btree_split_child(disk, sb, handle, node_block, node, i) != 0) {
+    __u32 child_block = children[i];
+    ret               = btree_read_node(sb, child_block, &child);
+
+    if (ret != 0)
+      return ret;
+
+    if (child->node->num_entries == (__u32)(2 * handle->min_degree - 1)) {
+      if (__btree_split_child(sb, handle, node_block, node, i) != 0) {
         btree_free_node(child);
         return -1;
       }
+
       {
-        void *mid = entries + i * handle->entry_size;
+        void *mid = entries + i * size;
         int   cmp = handle->cmp ? handle->cmp(entry, mid) : ((int)key - (int)handle->get_key(mid));
+
         if (cmp > 0)
           i++;
       }
       btree_free_node(child);
-      child_block = node->children[i];
-      child       = btree_read_node(disk, handle, child_block);
-      if (!child)
-        return -1;
+      child_block = children[i];
+      ret         = btree_read_node(sb, child_block, &child);
+
+      if (ret != 0)
+        return ret;
     }
 
-    int result = __btree_insert_nonfull(disk, sb, handle, child_block, child, entry);
-    if (result == 0) {
-      // persist child and updated parent
-      if (btree_write_node(disk, handle, child_block, child) != 0)
-        result = -1;
-      if (btree_write_node(disk, handle, node_block, node) != 0)
-        result = -1;
-    }
+    ret = __btree_insert_nonfull(sb, handle, child_block, child, entry);
 
     btree_free_node(child);
-    return result;
+
+    if (ret != 0) {
+      return ret;
+    }
   }
 }
 
-static int __btree_split_child(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent,
-                               int index) {
-  btree_node_t *child = btree_read_node(disk, handle, parent->children[index]);
-  if (!child)
-    return -1;
+static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int index) {
+  int                ret;
+  struct btree_node *child;
+
+  __u8  *entries  = btree_entries(parent);
+  __u32 *children = btree_children(parent, handle);
+
+  ret = btree_read_node(sb, children[index], &child);
+
+  if (ret != 0)
+    return ret;
+
+  // TODO: parei aqui
 
   btree_node_t *new_node = malloc(sizeof(btree_node_t));
   if (!new_node) {

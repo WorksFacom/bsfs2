@@ -15,6 +15,7 @@
 #define BTREE_BSFS_H
 
 #include "../bsfs.h"
+#include "alloc.h"
 #include <linux/fs.h>
 #include <linux/types.h>
 
@@ -314,7 +315,7 @@ int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block
  * @param block The disk block number to read from.
  * @return Pointer to a newly allocated and populated `btree_node_t` structure.
  */
-struct btree_node *btree_read_node(struct super_block *sb, __u32 block);
+int btree_read_node(struct super_block *sb, __u32 block, struct btree_node **out_node);
 
 /**
  * @brief Frees the memory allocated for a B-tree node.

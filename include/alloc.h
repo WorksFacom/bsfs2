@@ -21,6 +21,7 @@
 #define ALLOCATE_H
 
 #include "../bsfs.h"
+#include "bitmap.h"
 #include "bspan_queue.h"
 
 /**
