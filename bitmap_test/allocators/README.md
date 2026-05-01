@@ -18,6 +18,7 @@ Todos os allocators:
 - `baseline.py` (`baseline`): varredura sequencial.
 - `needle_sequential.py` (`needle`): varredura sequencial com agulha (first-free).
 - `avl.py` (`avl`): árvore AVL.
+- `avl_range.py` (`avl_range`): árvore AVL de intervalos livres.
 - `rbtree.py` (`rb`): estrutura de árvore rubro-negra.
 - `heap.py` (`heap`): min-heap.
 - `btree.py` (`btree`): B-Tree.

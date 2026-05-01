@@ -5,6 +5,7 @@ Bitmap Allocators Package - Multiple strategies for bitmap block allocation
 from core.registry import list_strategies
 
 from .avl import BitmapAVL
+from .avl_range import BitmapAVLRange
 from .rbtree import BitmapRB
 from .heap import BitmapHeap
 from .btree import BitmapBTree
@@ -26,6 +27,7 @@ def get_strategy_specs():
         "baseline",
         "needle",
         "avl",
+        "avl_range",
         "rb",
         "heap",
         "btree",
@@ -44,6 +46,7 @@ def get_strategy_specs():
 __all__ = [
     'get_strategy_specs',
     'BitmapAVL',
+    'BitmapAVLRange',
     'BitmapRB',
     'BitmapHeap',
     'BitmapBTree',

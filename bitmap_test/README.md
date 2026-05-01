@@ -118,7 +118,7 @@ Artefatos gerados:
 
 As estratégias são registradas automaticamente por decorator (`@register`) em `allocators/` e expostas no CLI:
 
-`baseline`, `needle`, `avl`, `rb`, `heap`, `btree`, `bplustree`, `hybrid`, `segtree`, `twolevel`, `treap`.
+`baseline`, `needle`, `avl`, `avl_range`, `rb`, `heap`, `btree`, `bplustree`, `hybrid`, `segtree`, `twolevel`, `treap`.
 
 ## Como estender
 
