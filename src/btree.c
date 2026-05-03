@@ -587,23 +587,32 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
   return ret;
 }
 
-static int btree_find_max_entry(FILE *disk, btree_handle_t *handle, __u32 node_block, void *out_entry) {
+static int btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry) {
+  int                ret, ok;
+  struct btree_node *node;
+  __u8              *entries;
+  __u32             *children;
+
   if (node_block == 0)
     return 0;
-  btree_node_t *node = btree_read_node(disk, handle, node_block);
-  if (!node)
+
+  ret = btree_read_node(sb, node_block, &node);
+  if (ret != 0 || !node)
     return 0;
-  int ok;
-  if (node->is_leaf) {
-    if (node->num_entries > 0) {
-      memcpy(out_entry, (__u8 *)node->entries + (node->num_entries - 1) * handle->entry_size, handle->entry_size);
+
+  entries = bentries(node);
+  if (node->node->is_leaf) {
+    if (node->node->num_entries > 0) {
+      memcpy(out_entry, entries + (node->node->num_entries - 1) * handle->entry_size, handle->entry_size);
       ok = 1;
     } else {
       ok = 0;
     }
   } else {
-    ok = btree_find_max_entry(disk, handle, node->children[node->num_entries], out_entry);
+    children = bchildren(node, handle);
+    ok       = btree_find_max_entry(sb, handle, children[node->node->num_entries], out_entry);
   }
+
   btree_free_node(node);
   return ok;
 }
