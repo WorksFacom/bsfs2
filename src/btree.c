@@ -9,8 +9,8 @@ static int  __btree_split_child(struct super_block *sb, btree_handle_t *handle, 
 static int  __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key);
 static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
 static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
-static void __btree_borrow_from_prev(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
-static void __btree_borrow_from_next(struct super_block sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -895,94 +895,148 @@ static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 
   btree_free_node(right);
 }
 
-static void __btree_fill(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
+static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx) {
+  int                ret;
+  __u32             *children;
+  struct btree_node *left = NULL, *right = NULL;
+
+  children = bchildren(parent, handle);
+
   if (idx > 0) {
-    btree_node_t *left = btree_read_node(disk, handle, parent->children[idx - 1]);
-    if (left->num_entries >= (__u32)handle->min_degree) {
-      __btree_borrow_from_prev(disk, handle, parent_block, parent, idx);
+    ret = btree_read_node(sb, children[idx - 1], &left);
+    if (ret == 0 && left && left->node->num_entries >= (__u32)handle->min_degree) {
+      __btree_borrow_from_prev(sb, handle, parent_block, parent, idx);
       btree_free_node(left);
       return;
     }
-    btree_free_node(left);
+    if (left)
+      btree_free_node(left);
   }
-  if ((__u32)idx < parent->num_entries) {
-    btree_node_t *right = btree_read_node(disk, handle, parent->children[idx + 1]);
-    if (right->num_entries >= (__u32)handle->min_degree) {
-      __btree_borrow_from_next(disk, handle, parent_block, parent, idx);
+
+  if ((__u32)idx < parent->node->num_entries) {
+    ret = btree_read_node(sb, children[idx + 1], &right);
+    if (ret == 0 && right && right->node->num_entries >= (__u32)handle->min_degree) {
+      __btree_borrow_from_next(sb, handle, parent_block, parent, idx);
       btree_free_node(right);
       return;
     }
-    btree_free_node(right);
+    if (right)
+      btree_free_node(right);
   }
-  btree_merge(disk, sb, handle, parent_block, parent, (idx > 0) ? idx - 1 : idx);
+
+  __btree_merge(sb, handle, parent_block, parent, (idx > 0) ? idx - 1 : idx);
 }
 
-static void __btree_borrow_from_prev(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
-  btree_node_t *child   = btree_read_node(disk, handle, parent->children[idx]);
-  btree_node_t *sibling = btree_read_node(disk, handle, parent->children[idx - 1]);
+static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx) {
+  int                ret;
+  __u64              size;
+  __u8              *parent_entries, *child_entries, *sibling_entries;
+  __u32             *parent_children, *child_children, *sibling_children;
+  struct btree_node *child = NULL, *sibling = NULL;
 
-  for (int i = child->num_entries - 1; i >= 0; i--) {
-    memcpy((__u8 *)child->entries + (i + 1) * handle->entry_size, (__u8 *)child->entries + i * handle->entry_size, handle->entry_size);
+  (void)parent_block;
+
+  size            = handle->entry_size;
+  parent_entries  = bentries(parent);
+  parent_children = bchildren(parent, handle);
+
+  ret = btree_read_node(sb, parent_children[idx], &child);
+  if (ret != 0 || !child)
+    return;
+
+  ret = btree_read_node(sb, parent_children[idx - 1], &sibling);
+  if (ret != 0 || !sibling) {
+    btree_free_node(child);
+    return;
   }
 
-  if (!child->is_leaf) {
-    for (int i = child->num_entries; i >= 0; i--) {
-      child->children[i + 1] = child->children[i];
+  child_entries   = bentries(child);
+  sibling_entries = bentries(sibling);
+
+  for (int i = child->node->num_entries - 1; i >= 0; i--) {
+    memcpy(child_entries + (i + 1) * size, child_entries + i * size, size);
+  }
+
+  child_children = bchildren(child, handle);
+  if (!child->node->is_leaf) {
+    for (int i = child->node->num_entries; i >= 0; i--) {
+      child_children[i + 1] = child_children[i];
     }
   }
 
-  memcpy(child->entries, (__u8 *)parent->entries + (idx - 1) * handle->entry_size, handle->entry_size);
+  memcpy(child_entries, parent_entries + (idx - 1) * size, size);
 
-  if (!child->is_leaf) {
-    child->children[0] = sibling->children[sibling->num_entries];
+  sibling_children = bchildren(sibling, handle);
+  if (!child->node->is_leaf) {
+    child_children[0] = sibling_children[sibling->node->num_entries];
   }
 
-  memcpy((__u8 *)parent->entries + (idx - 1) * handle->entry_size,
-         (__u8 *)sibling->entries + (sibling->num_entries - 1) * handle->entry_size, handle->entry_size);
+  memcpy(parent_entries + (idx - 1) * size, sibling_entries + (sibling->node->num_entries - 1) * size, size);
 
-  child->num_entries++;
-  sibling->num_entries--;
+  child->node->num_entries++;
+  sibling->node->num_entries--;
 
-  btree_write_node(disk, handle, parent->children[idx], child);
-  btree_write_node(disk, handle, parent->children[idx - 1], sibling);
-  btree_write_node(disk, handle, parent_block, parent);
+  mark_buffer_dirty(child->bh);
+  mark_buffer_dirty(sibling->bh);
+  mark_buffer_dirty(parent->bh);
 
   btree_free_node(child);
   btree_free_node(sibling);
 }
 
-static void __btree_borrow_from_next(FILE *disk, btree_handle_t *handle, __u32 parent_block, btree_node_t *parent, int idx) {
-  btree_node_t *child   = btree_read_node(disk, handle, parent->children[idx]);
-  btree_node_t *sibling = btree_read_node(disk, handle, parent->children[idx + 1]);
+static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx) {
+  int                ret;
+  __u64              size;
+  __u8              *parent_entries, *child_entries, *sibling_entries;
+  __u32             *parent_children, *child_children, *sibling_children;
+  struct btree_node *child = NULL, *sibling = NULL;
 
-  memcpy((__u8 *)child->entries + child->num_entries * handle->entry_size, (__u8 *)parent->entries + idx * handle->entry_size,
-         handle->entry_size);
+  (void)parent_block;
 
-  if (!child->is_leaf) {
-    child->children[child->num_entries + 1] = sibling->children[0];
+  size            = handle->entry_size;
+  parent_entries  = bentries(parent);
+  parent_children = bchildren(parent, handle);
+
+  ret = btree_read_node(sb, parent_children[idx], &child);
+  if (ret != 0 || !child)
+    return;
+
+  ret = btree_read_node(sb, parent_children[idx + 1], &sibling);
+  if (ret != 0 || !sibling) {
+    btree_free_node(child);
+    return;
   }
 
-  memcpy((__u8 *)parent->entries + idx * handle->entry_size, sibling->entries, handle->entry_size);
+  child_entries   = bentries(child);
+  sibling_entries = bentries(sibling);
 
-  for (__u32 i = 1; i < sibling->num_entries; i++) {
-    memcpy((__u8 *)sibling->entries + (i - 1) * handle->entry_size, (__u8 *)sibling->entries + i * handle->entry_size, handle->entry_size);
+  memcpy(child_entries + child->node->num_entries * size, parent_entries + idx * size, size);
+
+  child_children   = bchildren(child, handle);
+  sibling_children = bchildren(sibling, handle);
+  if (!child->node->is_leaf) {
+    child_children[child->node->num_entries + 1] = sibling_children[0];
   }
 
-  if (!sibling->is_leaf) {
-    if (sibling->num_entries > 0) {
-      __u32 end = sibling->num_entries - 1;
-      for (__u32 i = 0; i <= end; i++) {
-        sibling->children[i] = sibling->children[i + 1];
-      }
+  memcpy(parent_entries + idx * size, sibling_entries, size);
+
+  for (__u32 i = 1; i < sibling->node->num_entries; i++) {
+    memcpy(sibling_entries + (i - 1) * size, sibling_entries + i * size, size);
+  }
+
+  if (!sibling->node->is_leaf && sibling->node->num_entries > 0) {
+    __u32 end = sibling->node->num_entries - 1;
+    for (__u32 i = 0; i <= end; i++) {
+      sibling_children[i] = sibling_children[i + 1];
     }
   }
 
-  child->num_entries++;
-  sibling->num_entries--;
+  child->node->num_entries++;
+  sibling->node->num_entries--;
 
-  btree_write_node(disk, handle, parent->children[idx], child);
-  btree_write_node(disk, handle, parent->children[idx + 1], sibling);
-  btree_write_node(disk, handle, parent_block, parent);
+  mark_buffer_dirty(child->bh);
+  mark_buffer_dirty(sibling->bh);
+  mark_buffer_dirty(parent->bh);
 
   btree_free_node(child);
   btree_free_node(sibling);
