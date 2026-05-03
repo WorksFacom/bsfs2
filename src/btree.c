@@ -1042,48 +1042,57 @@ static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *han
   btree_free_node(sibling);
 }
 
-int btree_deallocate_all(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, __u32 node_block) {
+int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
+  int                    ret;
+  __u8                  *entries;
+  __u32                 *children;
+  struct btree_node     *node;
+  struct bsfs_super_info *sbi;
+
   if (node_block == INVALID_BLOCK || node_block == 0)
     return 0;
 
-  btree_node_t *node = btree_read_node(disk, handle, node_block);
-  if (!node) {
-    fprintf(stderr, "Failed to read B-tree node at block %u.\n", node_block);
+  ret = btree_read_node(sb, node_block, &node);
+  if (ret != 0 || !node) {
+    printk(KERN_ERR "BSFS: failed to read B-tree node at block %u\n", node_block);
     return -1;
   }
 
-  // Recursively deallocate children
-  if (!node->is_leaf) {
-    for (__u32 i = 0; i <= node->num_entries; i++) {
-      if (btree_deallocate_all(disk, sb, handle, node->children[i]) != 0) {
+  if (!node->node->is_leaf) {
+    children = bchildren(node, handle);
+    for (__u32 i = 0; i <= node->node->num_entries; i++) {
+      if (btree_deallocate_all(sb, handle, children[i]) != 0) {
         btree_free_node(node);
         return -1;
       }
     }
   }
 
-  // Deallocate data blocks if this is a BSPAN tree
   if (handle->type == BTREE_TYPE_BSPAN) {
-    for (__u32 i = 0; i < node->num_entries; i++) {
-      bspan_t *entry = (bspan_t *)(node->entries + i * handle->entry_size);
+    sbi = bsfs_sb(sb);
+    if (!sbi || !sbi->super) {
+      btree_free_node(node);
+      return -1;
+    }
+
+    entries = bentries(node);
+    for (__u32 i = 0; i < node->node->num_entries; i++) {
+      bspan_t *entry = (bspan_t *)(entries + i * handle->entry_size);
       if (entry->length == 0)
         continue;
-      if (entry->disk_blk >= sb->total_blocks || entry->disk_blk + entry->length > sb->total_blocks) {
-        fprintf(stderr,
-                "btree_deallocate_all: skipping invalid span "
-                "(disk=%u len=%u total=%u)\n",
-                entry->disk_blk, entry->length, sb->total_blocks);
+      if (entry->disk_blk >= sbi->super->total_blocks || entry->disk_blk + entry->length > sbi->super->total_blocks) {
+        printk(KERN_WARNING "BSFS: btree_deallocate_all skipping invalid span (disk=%u len=%u total=%u)\n", entry->disk_blk, entry->length,
+               sbi->super->total_blocks);
         continue;
       }
-      if (deallocate_bspan(disk, sb, entry) != 0) {
+      if (deallocate_bspan(sb, entry) != 0) {
         btree_free_node(node);
         return -1;
       }
     }
   }
 
-  // Deallocate the node block itself
-  if (deallocate_single_block(disk, sb, node_block) != 0) {
+  if (deallocate_single_block(sb, node_block) != 0) {
     btree_free_node(node);
     return -1;
   }
