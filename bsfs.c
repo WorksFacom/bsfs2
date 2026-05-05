@@ -17,9 +17,9 @@
 
 static struct kmem_cache *bsfs_inode_cache;
 
-static inline struct inode_info *bsfs_i(struct inode *inode) {
-  return container_of(inode, struct inode_info, vfs_inode);
-}
+// static inline struct inode_info *bsfs_i(struct inode *inode) {
+//   return container_of(inode, struct inode_info, vfs_inode);
+// }
 
 static struct inode *bsfs_alloc_inode(struct super_block *sb) {
   struct inode_info *bsfs_i;
@@ -30,24 +30,6 @@ static struct inode *bsfs_alloc_inode(struct super_block *sb) {
   return &bsfs_i->vfs_inode;
 }
 
-// static int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
-//   int                 err = 0;
-//   struct buffer_head *bh;
-//
-//   bh = v2_update_inode(inode);
-//   if (!bh)
-//     return -EIO;
-//   if (wbc->sync_mode == WB_SYNC_ALL && buffer_dirty(bh)) {
-//     sync_dirty_buffer(bh);
-//     if (buffer_req(bh) && !buffer_uptodate(bh)) {
-//       printk("IO error syncing inode [%s:%08lx]\n", inode->i_sb->s_id, inode->i_ino);
-//       err = -EIO;
-//     }
-//   }
-//   brelse(bh);
-//   return err;
-// }
-//
 // static void bsfs_free_inode(struct inode *inode) {
 //   kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
 // }
@@ -63,27 +45,6 @@ static struct inode *bsfs_alloc_inode(struct super_block *sb) {
 //   if (!inode->i_nlink)
 //     bsfs_free_inode(inode);
 // }
-
-// old read_inode() on btree.c
-struct bsfs_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
-  int ret;
-
-  struct bsfs_super_info *sbi   = sb->s_fs_info;
-  struct bsfs_inode      *inode = kzalloc(sizeof(bsfs_inode), GFP_KERNEL);
-
-  btree_handle_t *inode_h = btree_create_inode_handle();
-  inode_h->root_block     = sbi->super->inode_root;
-
-  ret = btree_search(sb, inode_h, inode_h->root_block, ino, inode);
-
-  // TODO: applicable?
-  // if (!ino || ino > sbi->s_ninodes) {
-  //   printk("Bad inode number on dev %s: %ld is out of range\n", sb->s_id, (long)ino);
-  //   return NULL;
-  // }
-
-  return inode;
-}
 
 void bsfs_set_inode(struct inode *inode, dev_t rdev) {
   if (S_ISREG(inode->i_mode)) {
@@ -168,7 +129,7 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
 
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
-    // .write_inode = bsfs_write_inode,
+    .write_inode = bsfs_write_inode,
     // .free_inode  = bsfs_free_inode,
     // .evict_inode = bsfs_evict_inode,
     // .put_super	= bsfs_put_super,

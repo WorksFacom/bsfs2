@@ -9,8 +9,10 @@ static int  __btree_split_child(struct super_block *sb, btree_handle_t *handle, 
 static int  __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key);
 static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
 static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
-static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
-static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx);
+static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
+                                     int idx);
+static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
+                                     int idx);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -149,52 +151,57 @@ out:
 
 // TODO: duplicated code with btree_update
 // TODO: is this working?
-// TODO: remove recursion? not common in kernel
-int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void *output) {
-  __u32  i, ret;
+int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void **output, struct btree_node **out_node) {
+  __u32  i;
+  __u32  next_block;
   size_t size;
 
-  if (node_block == 0)
+  if (node_block == 0 || node_block == INVALID_BLOCK)
     return 0;
 
   size = handle->entry_size;
 
-  struct btree_node *node    = btree_read_node(sb, node_block);
-  __u8              *entries = bentries(node);
+  while (node_block != 0 && node_block != INVALID_BLOCK) {
+    struct btree_node *node = NULL;
 
-  i = 0;
-  while (i < node->node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * size);
+    if (btree_read_node(sb, node_block, &node) != 0 || !node)
+      return 0;
 
-    if (key <= entry_key)
-      break;
+    __u8 *entries = bentries(node);
 
-    i++;
-  }
+    i = 0;
+    while (i < node->node->num_entries) {
+      __u32 entry_key = handle->get_key(entries + i * size);
 
-  if (i < node->node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * size);
+      if (key <= entry_key)
+        break;
 
-    if (key == entry_key) {
-      memcpy(output, entries + i * size, size);
-
-      ret = 1;
-      goto out;
+      i++;
     }
+
+    if (i < node->node->num_entries) {
+      __u32 entry_key = handle->get_key(entries + i * size);
+
+      if (key == entry_key) {
+        *output   = entries + i * size;
+        *out_node = node;
+        // Keep the matching node alive so the returned pointer remains valid.
+        // Ownership of this node is transferred to the caller.
+        return 1;
+      }
+    }
+
+    if (node->node->is_leaf) {
+      btree_free_node(node);
+      return 0;
+    }
+
+    next_block = bchildren(node, handle)[i];
+    btree_free_node(node);
+    node_block = next_block;
   }
 
-  if (node->node->is_leaf) {
-    ret = 0;
-    goto out;
-  }
-
-  __u32 *children = bchildren(node, handle);
-
-  ret = btree_search(sb, handle, children[i], key, output);
-
-out:
-  btree_free_node(node);
-  return ret;
+  return 0;
 }
 
 int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, void *output) {
@@ -617,7 +624,8 @@ static int btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, 
   return ok;
 }
 
-static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, int *success) {
+static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle,
+                                        int *success) {
   int                ret;
   __u32              i;
   __u64              size;
@@ -927,7 +935,8 @@ static void __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 p
   __btree_merge(sb, handle, parent_block, parent, (idx > 0) ? idx - 1 : idx);
 }
 
-static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx) {
+static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
+                                     int idx) {
   int                ret;
   __u64              size;
   __u8              *parent_entries, *child_entries, *sibling_entries;
@@ -984,7 +993,8 @@ static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *han
   btree_free_node(sibling);
 }
 
-static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx) {
+static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
+                                     int idx) {
   int                ret;
   __u64              size;
   __u8              *parent_entries, *child_entries, *sibling_entries;
@@ -1043,10 +1053,10 @@ static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *han
 }
 
 int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
-  int                    ret;
-  __u8                  *entries;
-  __u32                 *children;
-  struct btree_node     *node;
+  int                     ret;
+  __u8                   *entries;
+  __u32                  *children;
+  struct btree_node      *node;
   struct bsfs_super_info *sbi;
 
   if (node_block == INVALID_BLOCK || node_block == 0)

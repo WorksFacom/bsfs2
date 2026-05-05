@@ -1,4 +1,6 @@
 #include "../bsfs.h"
+#include "../include/btree.h"
+#include <linux/writeback.h>
 
 static __u32 s_next_inode_number = 1;
 static __u32 s_cached_inode_root = INVALID_BLOCK;
@@ -329,46 +331,86 @@ int bsfs_block_write_begin(struct folio *folio, loff_t pos, unsigned len, get_bl
   return err;
 }
 
-static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop,
-                            void **fsdata) {
-  int ret, retries = 0;
+// old read_inode() on btree.c
+struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
+  int ret;
 
-  struct folio *folio;
-  pgoff_t       index;
-  struct inode *inode = mapping->host;
+  struct bsfs_super_info     *sbi = sb->s_fs_info;
+  struct btree_node          *node;
+  struct disk_mapped_inode_t *inode;
 
-  index = pos >> PAGE_SHIFT;
+  btree_handle_t *inode_h = btree_create_inode_handle();
+  inode_h->root_block     = sbi->super->inode_root;
 
-  *fsdata = (void *)0;
+  ret = btree_search(sb, inode_h, inode_h->root_block, ino, (void **)&inode, &node);
 
-  folio = write_begin_get_folio(iocb, mapping, index, len);
-  if (IS_ERR(folio))
-    return PTR_ERR(folio);
+  if (!ret)
+    return NULL;
 
-  if (pos + len > folio_pos(folio) + folio_size(folio))
-    len = folio_pos(folio) + folio_size(folio) - pos;
+  // TODO: applicable?
+  // if (!ino || ino > sbi->s_ninodes) {
+  //   printk("Bad inode number on dev %s: %ld is out of range\n", sb->s_id, (long)ino);
+  //   return NULL;
+  // }
 
-  ret = bsfs_block_write_begin(folio, pos, len, ext4_da_get_block_prep);
-  if (ret < 0) {
-    folio_unlock(folio);
-    folio_put(folio);
-    /*
-     * ext4_block_write_begin may have instantiated a few blocks
-     * outside i_size.  Trim these off again. Don't need
-     * i_size_read because we hold inode lock.
-     */
-    if (pos + len > inode->i_size)
-      ext4_truncate_failed_write(inode);
+  struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
-    return ret;
-  }
+  *out = (struct disk_mapped_inode){
+      .inode = inode,
+      .bh    = node->bh,
+  };
 
-  *foliop = folio;
-  return ret;
+  return out;
 }
 
-static const struct address_space_operations bsfs_aops = {
-    .write_begin = bsfs_write_begin
-    // .write_end = generic_write_end,
-    //  .writepages = bsfs_writepages,
-};
+struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
+  struct disk_mapped_inode *disk_inode;
+
+  disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
+
+  if (!disk_inode)
+    return NULL;
+
+  disk_inode->inode->mode   = inode->i_mode;
+  disk_inode->inode->uid    = fs_high2lowuid(i_uid_read(inode));
+  disk_inode->inode->gid    = fs_high2lowgid(i_gid_read(inode));
+  disk_inode->inode->nlinks = inode->i_nlink;
+  disk_inode->inode->size   = inode->i_size;
+  disk_inode->inode->mtime  = inode_get_mtime_sec(inode);
+  disk_inode->inode->atime  = inode_get_atime_sec(inode);
+  disk_inode->inode->ctime  = inode_get_ctime_sec(inode);
+
+  // TODO: make it work with special files
+  // if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
+  //   raw_inode->i_zone[0] = old_encode_dev(inode->i_rdev);
+
+  mark_buffer_dirty(disk_inode->bh);
+  return disk_inode;
+}
+
+int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
+  int ret;
+
+  struct disk_mapped_inode *disk_inode;
+  struct buffer_head       *bh;
+
+  disk_inode = bsfs_update_inode(inode);
+
+  if (!disk_inode)
+    return -EIO;
+
+  bh = disk_inode->bh;
+
+  if (wbc->sync_mode == WB_SYNC_ALL && buffer_dirty((bh))) {
+    sync_dirty_buffer(bh);
+
+    if (buffer_req(bh) && !buffer_uptodate(bh)) {
+      printk("IO error syncing inode [%s:%08lx]\n", inode->i_sb->s_id, inode->i_ino);
+      ret = -EIO;
+    }
+  }
+
+  brelse(bh);
+
+  return 0;
+}

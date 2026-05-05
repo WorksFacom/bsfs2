@@ -79,7 +79,7 @@ static inline int compare_inode(const void *a, const void *b) {
  * inodes.
  */
 static inline btree_handle_t *btree_create_inode_handle(void) {
-  return btree_create_handle(BTREE_TYPE_INODE, sizeof(bsfs_inode), compare_inode, get_inode_key);
+  return btree_create_handle(BTREE_TYPE_INODE, sizeof(struct disk_mapped_inode_t), compare_inode, get_inode_key);
 }
 
 static inline __u32 get_bspan_key(const void *entry) {
@@ -211,7 +211,7 @@ int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry);
  * copied.
  * @return int 1 if the key was found, 0 otherwise.
  */
-int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void *output);
+int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void **output, struct btree_node **out_node);
 
 /**
  * @brief Searches for an entry in the B-tree using the handle's compare

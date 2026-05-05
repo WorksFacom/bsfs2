@@ -68,7 +68,7 @@ typedef struct {
   __u16 padding; // unused
 } bspan_t;
 
-typedef struct bsfs_inode {
+struct disk_mapped_inode_t {
   __u32 ino;
   __u32 size;
   __u8  unused; // file_type
@@ -83,12 +83,17 @@ typedef struct bsfs_inode {
   __u32 direct_blocks[48]; // 16 * bspan_t
   __u32 btree_root;
   __u8  pad[34];
-} bsfs_inode;
-
-struct inode_info {
-  bspan_t      direct_blocks[16];
-  struct inode vfs_inode;
 };
+
+struct disk_mapped_inode {
+  struct disk_mapped_inode_t *inode;
+  struct buffer_head         *bh;
+};
+
+// struct inode_info {
+//   bspan_t      direct_blocks[16];
+//   struct inode vfs_inode;
+// };
 
 typedef struct {
   __u32   recovery_id;

@@ -104,4 +104,6 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
  */
 int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
 
+int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
+
 #endif // INODE_OPERATIONS_H
