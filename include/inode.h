@@ -106,4 +106,10 @@ int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
 
+void bsfs_free_inode(struct inode *inode);
+
+int __init init_inodecache(void);
+
+void destroy_inodecache(void);
+
 #endif // INODE_OPERATIONS_H

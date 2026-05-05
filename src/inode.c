@@ -5,6 +5,8 @@
 static __u32 s_next_inode_number = 1;
 static __u32 s_cached_inode_root = INVALID_BLOCK;
 
+static struct kmem_cache *bsfs_inode_cache;
+
 static int inode_tree_find_max(FILE *disk, btree_handle_t *handle, uint32_t node_block, bsfs_inode *out_inode) {
   if (!handle || node_block == 0 || !out_inode)
     return 0;
@@ -413,4 +415,31 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
   brelse(bh);
 
   return 0;
+}
+
+void bsfs_free_inode(struct inode *inode) {
+  kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
+}
+
+static void init_once(void *foo) {
+  struct bsfs_inode *ei = foo;
+  inode_init_once(&ei->vfs_inode);
+}
+
+int __init init_inodecache(void) {
+  bsfs_inode_cache = kmem_cache_create("bsfs_inode_cache", sizeof(struct bsfs_inode), 0, (SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT), init_once);
+
+  if (bsfs_inode_cache == NULL)
+    return -ENOMEM;
+
+  return 0;
+}
+
+void destroy_inodecache(void) {
+  /*
+   * Make sure all delayed rcu free inodes are flushed before we
+   * destroy cache.
+   */
+  rcu_barrier();
+  kmem_cache_destroy(bsfs_inode_cache);
 }

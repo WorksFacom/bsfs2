@@ -15,8 +15,6 @@
 #include <linux/vfs.h>
 #include <linux/writeback.h>
 
-static struct kmem_cache *bsfs_inode_cache;
-
 // static inline struct inode_info *bsfs_i(struct inode *inode) {
 //   return container_of(inode, struct inode_info, vfs_inode);
 // }
@@ -30,10 +28,6 @@ static struct inode *bsfs_alloc_inode(struct super_block *sb) {
   return &bsfs_i->vfs_inode;
 }
 
-// static void bsfs_free_inode(struct inode *inode) {
-//   kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
-// }
-//
 // static void bsfs_evict_inode(struct inode *inode) {
 //   truncate_inode_pages_final(&inode->i_data);
 //   if (!inode->i_nlink) {
@@ -130,7 +124,7 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
-    // .free_inode  = bsfs_free_inode,
+    .free_inode  = bsfs_free_inode,
     // .evict_inode = bsfs_evict_inode,
     // .put_super	= bsfs_put_super,
     // .statfs		= bsfs_statfs,
@@ -275,36 +269,23 @@ static struct file_system_type bsfs_fs_type = {
 
 MODULE_ALIAS_FS("bsfs");
 
-static void init_once(void *foo) {
-  struct inode_info *bsfs_inode = (struct inode_info *)foo;
-
-  inode_init_once(&bsfs_inode->vfs_inode);
-}
-
-static int __init init_inodecache(void) {
-  bsfs_inode_cache = kmem_cache_create("bsfs_inode_cache", sizeof(struct bsfs_inode), 0, (SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT), init_once);
-  if (bsfs_inode_cache == NULL)
-    return -ENOMEM;
-  return 0;
-}
-
-static void destroy_inodecache(void) {
-  /*
-   * Make sure all delayed rcu free inodes are flushed before we
-   * destroy cache.
-   */
-  rcu_barrier();
-  kmem_cache_destroy(bsfs_inode_cache);
-}
-
 static int __init init_bsfs(void) {
-  // TODO: init cache
+  int err = init_inodecache();
 
-  int err = register_filesystem(&bsfs_fs_type);
   if (err)
-    return err;
+    goto out1;
+
+  err = register_filesystem(&bsfs_fs_type);
+
+  if (err)
+    goto out;
 
   return 0;
+
+out:
+  destroy_inodecache();
+out1:
+  return err;
 }
 
 static void __exit exit_bsfs(void) {

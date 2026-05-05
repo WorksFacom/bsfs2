@@ -90,10 +90,16 @@ struct disk_mapped_inode {
   struct buffer_head         *bh;
 };
 
-// struct inode_info {
-//   bspan_t      direct_blocks[16];
-//   struct inode vfs_inode;
-// };
+struct bsfs_inode {
+  // bspan_t      direct_blocks[16];
+  // add fields as needed;
+
+  struct inode vfs_inode;
+};
+
+static inline struct bsfs_inode *bsfs_i(struct inode *inode) {
+  return container_of(inode, struct bsfs_inode, vfs_inode);
+}
 
 typedef struct {
   __u32   recovery_id;
