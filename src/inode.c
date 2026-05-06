@@ -1,5 +1,8 @@
+#include "../include/inode.h"
 #include "../bsfs.h"
 #include "../include/btree.h"
+#include "../include/dir.h"
+#include "../include/file.h"
 #include <linux/writeback.h>
 
 static __u32 s_next_inode_number = 1;
@@ -357,10 +360,8 @@ struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
 
   struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
-  *out = (struct disk_mapped_inode){
-      .inode = inode,
-      .bh    = node->bh,
-  };
+  out->inode = inode;
+  out->bh    = node->bh;
 
   return out;
 }
@@ -390,16 +391,97 @@ struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   return disk_inode;
 }
 
+void bsfs_set_inode(struct inode *inode, dev_t rdev) {
+  if (S_ISREG(inode->i_mode)) {
+    inode->i_op             = &bsfs_file_inode_operations;
+    inode->i_fop            = &bsfs_file_operations;
+    inode->i_mapping->a_ops = &bsfs_aops;
+  } else if (S_ISDIR(inode->i_mode)) {
+    inode->i_op             = &bsfs_dir_inode_operations;
+    inode->i_fop            = &bsfs_dir_operations;
+    inode->i_mapping->a_ops = &bsfs_aops;
+  } else if (S_ISLNK(inode->i_mode)) {
+    inode->i_op = &bsfs_symlink_inode_operations;
+    inode_nohighmem(inode);
+    inode->i_mapping->a_ops = &bsfs_aops;
+  } else if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode) || S_ISFIFO(inode->i_mode) || S_ISSOCK(inode->i_mode)) {
+    init_special_inode(inode, inode->i_mode, rdev);
+  } else {
+    printk(KERN_DEBUG "BSFS: Invalid file type 0%04o for inode %lu.\n", inode->i_mode, inode->i_ino);
+    make_bad_inode(inode);
+  }
+}
+
+static struct inode *__set_up_inode_new(struct inode *inode) {
+  struct disk_mapped_inode *disk_inode;
+  // struct inode_info *bsfs_inode = bsfs_i(inode);
+
+  disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
+
+  if (!disk_inode) {
+    iget_failed(inode);
+    return ERR_PTR(-EIO);
+  }
+
+  if (disk_inode->inode->nlinks == 0) {
+    printk("BSFS: deleted inode referenced: %lu\n", inode->i_ino);
+    kfree(disk_inode);
+    iget_failed(inode);
+    return ERR_PTR(-ESTALE);
+  }
+
+  inode->i_mode = disk_inode->inode->mode;
+  i_uid_write(inode, disk_inode->inode->uid);
+  i_gid_write(inode, disk_inode->inode->gid);
+  set_nlink(inode, disk_inode->inode->nlinks);
+
+  i_size_write(inode, disk_inode->inode->size);
+
+  inode_set_mtime(inode, disk_inode->inode->mtime, 0);
+  inode_set_atime(inode, disk_inode->inode->atime, 0);
+  inode_set_ctime(inode, disk_inode->inode->ctime, 0);
+
+  // TODO: whats this?
+  inode->i_blocks = 0;
+
+  // TODO: support special file inodes
+  // bsfs_set_inode(inode, old_decode_dev(rdev));
+
+  bsfs_set_inode(inode, 0);
+
+  brelse(disk_inode->bh);
+  kfree(disk_inode);
+
+  unlock_new_inode(inode);
+  return inode;
+}
+
+struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
+  struct inode *inode;
+
+  inode = iget_locked(sb, ino);
+
+  if (!inode)
+    return ERR_PTR(-ENOMEM);
+
+  if (!(inode->i_state & I_NEW))
+    return inode;
+
+  return __set_up_inode_new(inode);
+}
+
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
-  int ret;
+  int ret = 0;
 
   struct disk_mapped_inode *disk_inode;
   struct buffer_head       *bh;
 
   disk_inode = bsfs_update_inode(inode);
 
-  if (!disk_inode)
-    return -EIO;
+  if (!disk_inode) {
+    ret = -EIO;
+    goto out;
+  }
 
   bh = disk_inode->bh;
 
@@ -413,8 +495,10 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
   }
 
   brelse(bh);
+  kfree(disk_inode);
 
-  return 0;
+out:
+  return ret;
 }
 
 void bsfs_free_inode(struct inode *inode) {
