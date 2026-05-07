@@ -336,6 +336,107 @@ int bsfs_block_write_begin(struct folio *folio, loff_t pos, unsigned len, get_bl
   return err;
 }
 
+// TODO: mark buffers dirty?
+// TODO: locking?
+// TODO: update metadata?
+void bsfs_truncate(struct inode *inode) {
+  __u64              iblock;
+  struct btree_node *node;
+
+  struct super_block *sb         = inode->i_sb;
+  struct bsfs_inode  *bsfs_inode = bsfs_i(inode);
+
+  // if (new_size >= f->inode.file_size)
+  //   return 0; // Nothing to truncate
+
+  // starting block to free during truncate
+  iblock = (inode->i_size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
+
+  block_truncate_page(inode->i_mapping, inode->i_size, bsfs_get_block);
+
+  btree_handle_t *bspan_h = btree_create_bspan_handle();
+  bspan_h->root_block     = bsfs_inode->btree_root;
+
+  // 1) Shrink overlapping head span if needed
+  bspan_t span;
+  if (bspan_search_le(sb, bspan_h, iblock, &span)) {
+    if (iblock < span.file_blk + span.length) {
+      // free tail portion beyond new_size
+      bspan_t tail     = span;
+      __u32   keep_len = (iblock > span.file_blk) ? (iblock - span.file_blk) : 0;
+      tail.file_blk    = iblock;
+      tail.disk_blk    = span.disk_blk + keep_len;
+      tail.length      = span.length - keep_len;
+
+      if (tail.length > 0)
+        deallocate_bspan(sb, &tail);
+
+      // shrink original span to keep portion
+      span.length = keep_len;
+      if (keep_len > 0) {
+        btree_update(sb, bspan_h, bspan_h->root_block, &span);
+      } else {
+        // remove empty span entry
+        btree_remove(sb, bspan_h, span.file_blk);
+      }
+    }
+  }
+
+  // 2) Collect and remove all spans starting at or after iblock
+  // Traverse tree and collect keys >= threshold
+  typedef struct {
+    __u32 k;
+  } krec;
+
+  krec   keys[1024];
+  size_t kcount = 0;
+  // simple DFS stack of node blocks
+  __u32 stack[128];
+  int   top = 0;
+
+  if (bspan_h->root_block)
+    stack[top++] = bspan_h->root_block;
+
+  while (top > 0) {
+    int   ret;
+    __u32 nb = stack[--top];
+
+    ret = btree_read_node(sb, nb, &node);
+
+    if (ret != 0)
+      continue;
+
+    // push children first for post-order like
+    if (!node->node->is_leaf) {
+      for (__u32 i = 0; i <= node->node->num_entries; i++) {
+        if (top < (int)(sizeof(stack) / sizeof(stack[0])))
+          stack[top++] = bchildren(node, bspan_h)[i];
+      }
+    }
+
+    for (__u32 i = 0; i < node->node->num_entries; i++) {
+      __u32 ekey = bspan_h->get_key(bentries(node) + i * bspan_h->entry_size);
+      if (ekey >= iblock) {
+        if (kcount < sizeof(keys) / sizeof(keys[0])) {
+          keys[kcount++].k = ekey;
+        }
+      }
+    }
+
+    btree_free_node(node);
+  }
+
+  // Remove collected keys
+  for (size_t i = 0; i < kcount; i++) {
+    bspan_t bs;
+    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&bs, &node)) {
+      btree_free_node(node);
+      deallocate_bspan(sb, &bs);
+      btree_remove(sb, bspan_h, keys[i].k);
+    }
+  }
+}
+
 // old read_inode() on btree.c
 struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
   int ret;
@@ -418,6 +519,8 @@ static struct inode *__set_up_inode_new(struct inode *inode) {
 
   disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
 
+  struct bsfs_inode *bsfs_inode = bsfs_i(inode);
+
   if (!disk_inode) {
     iget_failed(inode);
     return ERR_PTR(-EIO);
@@ -443,6 +546,8 @@ static struct inode *__set_up_inode_new(struct inode *inode) {
 
   // TODO: whats this?
   inode->i_blocks = 0;
+
+  bsfs_inode->btree_root = disk_inode->inode->btree_root;
 
   // TODO: support special file inodes
   // bsfs_set_inode(inode, old_decode_dev(rdev));
@@ -503,6 +608,22 @@ out:
 
 void bsfs_free_inode(struct inode *inode) {
   kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
+}
+
+void bsfs_evict_inode(struct inode *inode) {
+  truncate_inode_pages_final(&inode->i_data);
+
+  if (!inode->i_nlink) {
+    inode->i_size = 0;
+    bsfs_truncate(inode);
+  }
+
+  invalidate_inode_buffers(inode);
+
+  clear_inode(inode);
+
+  if (!inode->i_nlink)
+    bsfs_free_inode(inode);
 }
 
 static void init_once(void *foo) {

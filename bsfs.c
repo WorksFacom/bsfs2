@@ -28,23 +28,11 @@ static struct inode *bsfs_alloc_inode(struct super_block *sb) {
   return &bsfs_i->vfs_inode;
 }
 
-// static void bsfs_evict_inode(struct inode *inode) {
-//   truncate_inode_pages_final(&inode->i_data);
-//   if (!inode->i_nlink) {
-//     inode->i_size = 0;
-//     bsfs_truncate(inode);
-//   }
-//   invalidate_inode_buffers(inode);
-//   clear_inode(inode);
-//   if (!inode->i_nlink)
-//     bsfs_free_inode(inode);
-// }
-
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
     .free_inode  = bsfs_free_inode,
-    // .evict_inode = bsfs_evict_inode,
+    .evict_inode = bsfs_evict_inode,
     // .put_super	= bsfs_put_super,
     // .statfs		= bsfs_statfs,
 };

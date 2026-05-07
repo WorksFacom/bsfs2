@@ -108,6 +108,8 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
 
 void bsfs_free_inode(struct inode *inode);
 
+void bsfs_evict_inode(struct inode *inode);
+
 int __init init_inodecache(void);
 
 void destroy_inodecache(void);

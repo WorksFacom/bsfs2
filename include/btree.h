@@ -109,6 +109,18 @@ btree_handle_t *btree_create_bspan_handle(void) {
   return btree_create_handle(BTREE_TYPE_BSPAN, sizeof(bspan_t), compare_bspan, get_bspan_key);
 }
 
+static inline __u8 *bentries(struct btree_node *node) {
+  // up to: (2 * handle->min_degree - 1) * handle->entry_size;
+  return node->node->data;
+}
+
+static inline __u32 *bchildren(struct btree_node *node, btree_handle_t *handle) {
+  // up to: 2 * handle->min_degree
+
+  size_t children_start = (2 * handle->min_degree - 1) * handle->entry_size;
+  return (__u32 *)(node->node->data + children_start);
+}
+
 __u32 get_dir_entry_key(const void *entry) {
   return hash_filename(((const dir_entry_t *)entry)->filename);
 }
@@ -229,6 +241,8 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
  * @return int 1 if found, 0 otherwise.
  */
 int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, void *output);
+
+int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out);
 
 /**
  * @brief Updates an existing entry in the B-tree with new data.

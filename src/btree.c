@@ -89,18 +89,6 @@ void btree_free_node(struct btree_node *node) {
   kfree(node);
 }
 
-static inline __u8 *bentries(struct btree_node *node) {
-  // up to: (2 * handle->min_degree - 1) * handle->entry_size;
-  return node->node->data;
-}
-
-static inline __u32 *bchildren(struct btree_node *node, btree_handle_t *handle) {
-  // up to: 2 * handle->min_degree
-
-  size_t children_start = (2 * handle->min_degree - 1) * handle->entry_size;
-  return (__u32 *)(node->node->data + children_start);
-}
-
 // TODO: is this working?
 int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry) {
   __u32  i, key, ret;
@@ -258,6 +246,45 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   __u32 child_block = children[(__u32)i];
   btree_free_node(node);
   return btree_search_entry(sb, handle, child_block, needle, output);
+}
+
+static int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
+  if (!handle || handle->root_block == 0)
+    return 0;
+  uint32_t node_block = handle->root_block;
+  bspan_t  best       = {0};
+  int      have       = 0;
+
+  while (node_block) {
+    btree_node_t *node = btree_read_node(disk, handle, node_block);
+    if (!node)
+      break;
+    uint8_t *entries = node->entries;
+    uint32_t i       = 0;
+    // find first entry with key >= target
+    while (i < node->num_entries) {
+      uint32_t ekey = handle->get_key(entries + i * handle->entry_size);
+      if (ekey > key)
+        break;
+      // this entry is <= key; candidate predecessor
+      memcpy(&best, entries + i * handle->entry_size, sizeof(best));
+      have = 1;
+      i++;
+    }
+    if (node->is_leaf) {
+      btree_free_node(node);
+      break;
+    }
+    // descend to child i
+    uint32_t child = node->children[i];
+    btree_free_node(node);
+    node_block = child;
+  }
+  if (have) {
+    *out = best;
+    return 1;
+  }
+  return 0;
 }
 
 void btree_clear_node(struct super_block *sb, struct btree_node *node) {
