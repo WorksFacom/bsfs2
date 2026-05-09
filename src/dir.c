@@ -8,6 +8,7 @@
  */
 
 #include "../include/dir.h"
+#include "../bsfs.h"
 
 int create_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd) {
   dir_t parent;
@@ -262,3 +263,112 @@ int create_root_directory(FILE *disk, bsfs_super_block *sb) {
   free(inode_tree);
   return 0;
 }
+
+/*
+ * Return the offset into page `page_nr' of the last valid
+ * byte in that page, plus one.
+ */
+static unsigned minix_last_byte(struct inode *inode, unsigned long page_nr) {
+  unsigned last_byte = PAGE_SIZE;
+
+  if (page_nr == (inode->i_size >> PAGE_SHIFT))
+    last_byte = inode->i_size & (PAGE_SIZE - 1);
+  return last_byte;
+}
+
+static void *dir_get_folio(struct inode *dir, unsigned long n, struct folio **foliop) {
+  struct folio *folio = read_mapping_folio(dir->i_mapping, n, NULL);
+
+  if (IS_ERR(folio))
+    return ERR_CAST(folio);
+  *foliop = folio;
+  return kmap_local_folio(folio, 0);
+}
+
+bsfs_dentry *minix_find_entry(struct dentry *dentry, struct folio **foliop) {
+  const char           *name    = dentry->d_name.name;
+  int                   namelen = dentry->d_name.len;
+  struct inode         *dir     = d_inode(dentry->d_parent);
+  struct super_block   *sb      = dir->i_sb;
+  struct minix_sb_info *sbi     = minix_sb(sb);
+  unsigned long         n;
+  unsigned long         npages = dir_pages(dir);
+  char                 *p;
+
+  char *namx;
+  __u32 inumber;
+
+  for (n = 0; n < npages; n++) {
+    char *kaddr, *limit;
+
+    kaddr = dir_get_folio(dir, n, foliop);
+    if (IS_ERR(kaddr))
+      continue;
+
+    limit = kaddr + minix_last_byte(dir, n) - sbi->s_dirsize;
+    for (p = kaddr; p <= limit; p = minix_next_entry(p, sbi)) {
+      if (sbi->s_version == MINIX_V3) {
+        minix3_dirent *de3 = (minix3_dirent *)p;
+        namx               = de3->name;
+        inumber            = de3->inode;
+      } else {
+        minix_dirent *de = (minix_dirent *)p;
+        namx             = de->name;
+        inumber          = de->inode;
+      }
+      if (!inumber)
+        continue;
+      if (namecompare(namelen, sbi->s_namelen, name, namx))
+        goto found;
+    }
+    folio_release_kmap(*foliop, kaddr);
+  }
+  return NULL;
+
+found:
+  return (minix_dirent *)p;
+}
+
+ino_t bsfs_inode_by_name(struct dentry *dentry) {
+  ino_t         res = 0;
+  struct folio *folio;
+
+  struct bsfs_dentry *de = minix_find_entry(dentry, &folio);
+
+  if (de) {
+    struct inode *inode = folio->mapping->host;
+
+    res = de->ino;
+
+    folio_release_kmap(folio, de);
+  }
+  return res;
+}
+
+static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags) {
+  ino_t         ino;
+  struct inode *inode = NULL;
+
+  // TODO: fail if dentry->d_name.len if greater than bsfs supported value
+
+  ino = bsfs_inode_by_name(dentry);
+
+  if (ino)
+    inode = bsfs_get_vfs_inode(dir->i_sb, ino);
+
+  return d_splice_alias(inode, dentry);
+}
+
+const struct inode_operations minix_dir_inode_operations = {
+    .lookup = bsfs_lookup
+    // .create		= bsfs_create,
+    // .link		= bsfs_link,
+    // .unlink		= bsfs_unlink,
+    // .symlink	= bsfs_symlink,
+    // .mkdir		= bsfs_mkdir,
+    // .rmdir		= bsfs_rmdir,
+    // .mknod		= bsfs_mknod,
+    // .rename		= bsfs_rename,
+    // .getattr	= bsfs_getattr,
+    // .tmpfile	= bsfs_tmpfile,
+};

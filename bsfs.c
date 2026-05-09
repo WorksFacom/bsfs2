@@ -15,19 +15,6 @@
 #include <linux/vfs.h>
 #include <linux/writeback.h>
 
-// static inline struct inode_info *bsfs_i(struct inode *inode) {
-//   return container_of(inode, struct inode_info, vfs_inode);
-// }
-
-static struct inode *bsfs_alloc_inode(struct super_block *sb) {
-  struct inode_info *bsfs_i;
-  bsfs_i = alloc_inode_sb(sb, bsfs_inode_cache, GFP_KERNEL);
-  if (!bsfs_i)
-    return NULL;
-
-  return &bsfs_i->vfs_inode;
-}
-
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
@@ -85,12 +72,14 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   s->s_time_min = 0;
   s->s_time_max = U32_MAX;
   root_inode    = bsfs_get_vfs_inode(s, BSFS_ROOT_INO);
+
   if (IS_ERR(root_inode)) {
     ret = PTR_ERR(root_inode);
     goto out_no_root;
   }
 
-  ret       = -ENOMEM;
+  ret = -ENOMEM;
+
   s->s_root = d_make_root(root_inode);
   if (!s->s_root)
     goto out_no_root;

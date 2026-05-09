@@ -18,17 +18,6 @@
 extern const struct address_space_operations bsfs_aops;
 
 /**
- * @brief Reads an inode from the inode B-tree.
- *
- * @param disk Pointer to the open filesystem image.
- * @param handle Pointer to the B-tree handle for inode management.
- * @param inode_number The unique identifier of the inode to read.
- * @param out_inode Pointer to the bsfs_inode structure to store the result.
- * @return 1 if the inode was found, 0 otherwise.
- */
-int read_inode(FILE *disk, btree_handle_t *handle, uint32_t inode_number, bsfs_inode *out_inode);
-
-/**
  * @brief Inserts a new inode into the inode B-tree.
  *
  * @param disk Pointer to the open filesystem image.
@@ -103,6 +92,10 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
  * @return 1 on success, 0 on failure.
  */
 int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
+
+struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino);
+
+static struct inode *bsfs_alloc_inode(struct super_block *sb);
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
 

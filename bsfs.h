@@ -71,7 +71,7 @@ typedef struct {
 struct disk_mapped_inode_t {
   __u32 ino;
   __u32 size;
-  __u8  unused; // file_type
+  __u8  unused;      // file_type
   __u32 block_count; // TODO: is this being updated?
   __u16 uid;
   __u16 gid;
@@ -119,14 +119,11 @@ typedef struct {
   __u64   retention_until;
 } rec_entry_t;
 
-// TODO: are type and size needed?
-typedef struct {
-  __u32 inode_number;
-  __u8  file_type;
-  __u8  file_size;
+struct bsfs_dentry {
+  __u32 ino;
   __u32 name_hash; // Hash value of the filename, used for indexing or fast lookup.
   char  filename[MAX_FILENAME];
-} dir_entry_t;
+};
 
 typedef enum { BTREE_TYPE_INODE, BTREE_TYPE_BSPAN, BTREE_TYPE_RECOVERY, BTREE_TYPE_DIR_ENTRY } btree_data_type_t;
 

@@ -65,14 +65,6 @@ static void inode_sync_next(FILE *disk, bsfs_super_block *sb, btree_handle_t *in
   s_cached_inode_root = root_block;
 }
 
-// TODO: update all functions using read_inode to use bsfs_iget
-int read_inode(FILE *disk, btree_handle_t *handle, __u32 inode_number, bsfs_inode *out_inode) {
-  if (!handle || !out_inode)
-    return 0;
-
-  return btree_search(disk, handle, handle->root_block, inode_number, out_inode);
-}
-
 int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode) {
   if (!handle || !inode)
     return -1;
@@ -143,59 +135,59 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) 
   return btree_search(disk, inode_tree, inode_tree->root_block, inode_number, &temp);
 }
 
-int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out) {
-  if (!disk || !sb || !out)
-    return 0;
-
-  btree_handle_t *tmp = btree_create_inode_handle();
-  if (!tmp)
-    return 0;
-
-  if (sb->inode_root == 0) {
-    // Create empty root leaf node on disk
-    btree_node_t node;
-    node.is_leaf     = 1;
-    node.num_entries = 0;
-    node.entries     = calloc((size_t)(2 * tmp->min_degree - 1), (size_t)tmp->entry_size);
-    node.children    = calloc((size_t)(2 * tmp->min_degree), sizeof(uint32_t));
-    if (!node.entries || !node.children) {
-      free(node.entries);
-      free(node.children);
-      free(tmp);
-      return 0;
-    }
-
-    uint32_t root_block = allocate_single_block(disk, sb);
-    if (root_block == INVALID_BLOCK || root_block == 0) {
-      free(node.entries);
-      free(node.children);
-      free(tmp);
-      return 0;
-    }
-
-    tmp->root_block = root_block;
-    if (btree_write_node(disk, tmp, root_block, &node) != 0) {
-      free(node.entries);
-      free(node.children);
-      free(tmp);
-      return 0;
-    }
-    free(node.entries);
-    free(node.children);
-
-    sb->inode_root = root_block;
-    if (write_superblock(disk, sb) != 0) {
-      free(tmp);
-      return 0;
-    }
-  } else {
-    tmp->root_block = sb->inode_root;
-  }
-
-  *out = *tmp;
-  free(tmp);
-  return 1;
-}
+// int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out) {
+//   if (!disk || !sb || !out)
+//     return 0;
+//
+//   btree_handle_t *tmp = btree_create_inode_handle();
+//   if (!tmp)
+//     return 0;
+//
+//   if (sb->inode_root == 0) {
+//     // Create empty root leaf node on disk
+//     btree_node_t node;
+//     node.is_leaf     = 1;
+//     node.num_entries = 0;
+//     node.entries     = calloc((size_t)(2 * tmp->min_degree - 1), (size_t)tmp->entry_size);
+//     node.children    = calloc((size_t)(2 * tmp->min_degree), sizeof(uint32_t));
+//     if (!node.entries || !node.children) {
+//       free(node.entries);
+//       free(node.children);
+//       free(tmp);
+//       return 0;
+//     }
+//
+//     uint32_t root_block = allocate_single_block(disk, sb);
+//     if (root_block == INVALID_BLOCK || root_block == 0) {
+//       free(node.entries);
+//       free(node.children);
+//       free(tmp);
+//       return 0;
+//     }
+//
+//     tmp->root_block = root_block;
+//     if (btree_write_node(disk, tmp, root_block, &node) != 0) {
+//       free(node.entries);
+//       free(node.children);
+//       free(tmp);
+//       return 0;
+//     }
+//     free(node.entries);
+//     free(node.children);
+//
+//     sb->inode_root = root_block;
+//     if (write_superblock(disk, sb) != 0) {
+//       free(tmp);
+//       return 0;
+//     }
+//   } else {
+//     tmp->root_block = sb->inode_root;
+//   }
+//
+//   *out = *tmp;
+//   free(tmp);
+//   return 1;
+// }
 
 static inline int bsfs_buffer_uptodate(struct buffer_head *bh) {
   /*
@@ -573,6 +565,17 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
     return inode;
 
   return __set_up_inode_new(inode);
+}
+
+static struct inode *bsfs_alloc_inode(struct super_block *sb) {
+  struct bsfs_inode *bsfs_inode;
+
+  bsfs_inode = alloc_inode_sb(sb, bsfs_inode_cache, GFP_KERNEL);
+
+  if (!bsfs_inode)
+    return NULL;
+
+  return &bsfs_inode->vfs_inode;
 }
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
