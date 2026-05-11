@@ -1,22 +1,24 @@
 """
-Allocator with two-level index (buckets + local bitmap scan).
+Allocator with two-level index (buckets + continuous forward scan).
 
 Strategy idea:
-- reduce search cost with per-bucket metadata (`free_count`), avoiding full
-  bitmap scans for every block.
-- after selecting a bucket, use simple local scan inside that bucket.
+- reduce search cost with per-bucket free_count metadata, skipping empty
+  buckets entirely without scanning their blocks.
+- within a single allocate_blocks call, scan forward continuously across
+  buckets without restarting the search for each block.
 
 Allocation:
-- Level 1: uses `bucket_free_count` to find a bucket with free space
-  (search starts from `last_bucket_idx` cursor to reduce rescans).
-- Level 2: performs sequential scan inside selected bucket to find first free
-  bit and marks block as occupied.
-- decrements free counter of the allocated bucket.
+- starts from `last_bucket_idx` cursor and skips buckets with free_count == 0.
+- scans forward through blocks within the current bucket; when a bucket is
+  exhausted, advances to the next non-empty bucket without rescanning.
+- marks blocks occupied and decrements bucket counters incrementally during
+  the scan (single pass for all `count` blocks).
+- updates `last_bucket_idx` cursor to the last used bucket position.
 
 Deallocation:
 - validates indices, clears bitmap bits, and increments counters of affected
   buckets.
-- resets bucket cursor to prioritize earlier buckets again.
+- resets cursor to 0 to re-check earlier buckets freed by deallocation.
 """
 
 from core import BaseAllocator, register
@@ -87,24 +89,59 @@ class BitmapTwoLevelIndex(BaseAllocator):
         return -1
     
     def allocate_blocks(self, count):
-        """Allocate count blocks."""
+        """Allocate count blocks using a single forward scan across buckets."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
             return []
 
         allocated = []
+        bucket_free_count = self.bucket_free_count
+        bitmap = self.bitmap
+        bucket_idx = self.last_bucket_idx
 
-        for _ in range(count):
-            block_idx = self._find_first_free_block()
-            if block_idx == -1:
+        # Advance to first bucket with free space
+        while bucket_idx < self.num_buckets and bucket_free_count[bucket_idx] == 0:
+            bucket_idx += 1
+
+        if bucket_idx == self.num_buckets:
+            # Wrap around from beginning
+            bucket_idx = 0
+            while bucket_idx < self.last_bucket_idx and bucket_free_count[bucket_idx] == 0:
+                bucket_idx += 1
+            if bucket_idx == self.last_bucket_idx:
                 return []
 
-            self.bitmap[block_idx] = 1
-            allocated.append(block_idx)
-            bucket_idx = self._get_bucket_idx(block_idx)
-            self.bucket_free_count[bucket_idx] -= 1
+        # Scan forward, staying within current bucket as long as possible
+        pos = self._get_bucket_start(bucket_idx)
+        bucket_end = self._get_bucket_end(bucket_idx)
 
+        while len(allocated) < count:
+            if pos >= bucket_end:
+                # Move to next bucket with free space
+                bucket_idx += 1
+                while bucket_idx < self.num_buckets and bucket_free_count[bucket_idx] == 0:
+                    bucket_idx += 1
+                if bucket_idx >= self.num_buckets:
+                    break
+                pos = self._get_bucket_start(bucket_idx)
+                bucket_end = self._get_bucket_end(bucket_idx)
+
+            if bitmap[pos] == 0:
+                allocated.append(pos)
+                bitmap[pos] = 1
+                bucket_free_count[bucket_idx] -= 1
+
+            pos += 1
+
+        if len(allocated) < count:
+            # Rollback
+            for idx in allocated:
+                bitmap[idx] = 0
+                bucket_free_count[self._get_bucket_idx(idx)] += 1
+            return []
+
+        self.last_bucket_idx = bucket_idx
         return allocated
     
     def deallocate_blocks(self, indices):
