@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 
-from core.metrics import build_stress_metrics
+from core.metrics import build_stress_metrics, measure_allocator_memory_kib
 
 from .base import BenchmarkScenario
 
@@ -34,6 +34,7 @@ class AllocationOnlyScenario(BenchmarkScenario):
     ):
         allocator = allocator_class(bitmap_size)
         alloc_times = []
+        peak_mem = 0.0
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -50,6 +51,7 @@ class AllocationOnlyScenario(BenchmarkScenario):
 
             if blocks:
                 alloc_times.append((t_end - t_start) / 1000.0)
+            peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
 
         if show_progress:
             print(
@@ -65,4 +67,5 @@ class AllocationOnlyScenario(BenchmarkScenario):
             bitmap=allocator.bitmap,
         )
         result["mode"] = "allocation_only"
+        result["peak_memory_kib"] = peak_mem
         return result

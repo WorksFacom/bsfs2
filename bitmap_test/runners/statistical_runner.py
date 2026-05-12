@@ -48,6 +48,7 @@ RUN_FIELDS_DEFAULT = [
     "occupied",
     "free_blocks",
     "fragmentation",
+    "peak_memory_kib",
 ]
 
 RUN_FIELDS_MULTISIZE = [
@@ -86,6 +87,7 @@ RUN_FIELDS_MULTISIZE = [
     "occupied",
     "free_blocks",
     "fragmentation",
+    "peak_memory_kib",
 ]
 
 RUN_FIELD_HEADERS_DEFAULT = {
@@ -112,6 +114,7 @@ RUN_FIELD_HEADERS_DEFAULT = {
     "occupied": "occupied[blocks]",
     "free_blocks": "free_blocks[blocks]",
     "fragmentation": "fragmentation[ratio]",
+    "peak_memory_kib": "peak_memory[KiB]",
 }
 
 RUN_FIELD_HEADERS_MULTISIZE = {
@@ -150,6 +153,7 @@ RUN_FIELD_HEADERS_MULTISIZE = {
     "occupied": "occupied[blocks]",
     "free_blocks": "free_blocks[blocks]",
     "fragmentation": "fragmentation[ratio]",
+    "peak_memory_kib": "peak_memory[KiB]",
 }
 
 
@@ -221,6 +225,7 @@ class StatisticalRunner:
             "occupied": metrics.get("occupied", 0),
             "free_blocks": metrics.get("free_blocks", 0),
             "fragmentation": metrics.get("fragmentation", 0.0),
+            "peak_memory_kib": metrics.get("peak_memory_kib", 0.0),
         }
         if self.config.mode == "multisize_pareto":
             return {key: row.get(key) for key in RUN_FIELDS_MULTISIZE}

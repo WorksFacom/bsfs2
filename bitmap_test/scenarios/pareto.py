@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 import time
 
-from core.metrics import build_stress_metrics
+from core.metrics import build_stress_metrics, measure_allocator_memory_kib
 
 from .base import BenchmarkScenario
 
@@ -41,6 +41,7 @@ class ParetoScenario(BenchmarkScenario):
         alloc_times = []
         dealloc_times = []
         allocated_blocks = []
+        peak_mem = 0.0
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -74,6 +75,8 @@ class ParetoScenario(BenchmarkScenario):
                     freed = set(blocks_to_free)
                     allocated_blocks = [b for b in allocated_blocks if b not in freed]
 
+            peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
+
         if show_progress:
             print(
                 f"\rProgress: {self.num_operations:,}/{self.num_operations:,} (100%)\033[K"
@@ -88,4 +91,5 @@ class ParetoScenario(BenchmarkScenario):
             bitmap=allocator.bitmap,
         )
         result["mode"] = "pareto"
+        result["peak_memory_kib"] = peak_mem
         return result

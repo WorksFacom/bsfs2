@@ -20,7 +20,7 @@ from __future__ import annotations
 import random
 import time
 
-from core.metrics import build_stress_metrics
+from core.metrics import build_stress_metrics, measure_allocator_memory_kib
 
 from .base import BenchmarkScenario
 
@@ -59,6 +59,7 @@ class MultisizeParetoScenario(BenchmarkScenario):
         dealloc_counts_by_size = {256: 0, 2560: 0, 262144: 0}
         alloc_times_by_size = {256: [], 2560: [], 262144: []}
         dealloc_times_by_size = {256: [], 2560: [], 262144: []}
+        peak_mem = 0.0
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -110,6 +111,8 @@ class MultisizeParetoScenario(BenchmarkScenario):
                         allocated[file_size] = [b for b in allocated[file_size] if b not in freed]
                         dealloc_counts_by_size[file_size] += 1
 
+            peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
+
         if show_progress:
             print(
                 f"\rProgress: {self.num_operations:,}/{self.num_operations:,} (100%)\033[K"
@@ -124,6 +127,7 @@ class MultisizeParetoScenario(BenchmarkScenario):
             bitmap=allocator.bitmap,
         )
         result["mode"] = "multisize_pareto"
+        result["peak_memory_kib"] = peak_mem
         for size_blocks, size_key in self.SIZE_KEYS.items():
             alloc_size_times = alloc_times_by_size[size_blocks]
             dealloc_size_times = dealloc_times_by_size[size_blocks]

@@ -14,6 +14,8 @@ Metrics aggregation helpers for benchmark results.
 
 from __future__ import annotations
 
+import sys
+
 
 def _calculate_fragmentation(bitmap):
     """Calculate fragmentation ratio: (TotalFrag - TotalFiles) / TotalFrag"""
@@ -64,3 +66,20 @@ def build_stress_metrics(name, alloc_times_us, dealloc_times_us, bitmap_size, fr
         "free_blocks": free_blocks,
         "fragmentation": fragmentation,
     }
+
+
+def measure_allocator_memory_kib(allocator):
+    """Measure auxiliary memory of allocator structures (excludes bitmap)."""
+    SKIP = {"bitmap", "size", "free_blocks_remaining"}
+    total = 0
+    for attr, val in vars(allocator).items():
+        if attr in SKIP:
+            continue
+        total += sys.getsizeof(val)
+        if isinstance(val, dict):
+            for k, v in val.items():
+                total += sys.getsizeof(k) + sys.getsizeof(v)
+        elif isinstance(val, list):
+            for item in val:
+                total += sys.getsizeof(item)
+    return total / 1024.0
