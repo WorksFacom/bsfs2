@@ -453,6 +453,10 @@ struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
 
   struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
+  // free btree_node without releasing buffer
+  // buffer will be brelsed later
+  kfree(node);
+
   out->inode = inode;
   out->bh    = node->bh;
 

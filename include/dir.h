@@ -11,7 +11,7 @@
 #define DIRECTORY_OPERATIONS_BSFS_H
 
 #include "../bsfs.h"
-#include "dentry.h"
+#include "dirent.h"
 
 extern const struct file_operations bsfs_dir_operations;
 
@@ -33,19 +33,6 @@ extern const struct inode_operations bsfs_dir_inode_operations;
  * src_name).
  * @return 0 on success, -1 on failure.
  */
-int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name);
-
-/**
- * @brief Initialize and persist the root directory ("/") on a fresh image.
- *
- * Creates the root inode with default ownership and permissions, allocates
- * a directory B-tree for entries, inserts the mandatory "." and ".." entries,
- * and ensures the inode tree contains the root inode.
- *
- * @param disk Open filesystem image.
- * @param sb   Loaded superblock (root inode and tree roots may be updated).
- * @return 0 on success; -1 on error.
- */
-int create_root_directory(FILE *disk, bsfs_super_block *sb);
+// int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name);
 
 #endif // DIRECTORY_OPERATIONS_BSFS_H

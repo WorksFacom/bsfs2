@@ -18,14 +18,14 @@
  * This structure is used to manage the iteration and manipulation of
  * directory entries during read operations like readdir().
  */
-typedef struct {
-  bsfs_inode      inode;         ///< The inode of the directory
-  uint32_t        current_index; ///< The logical position of the next entry to read
-  btree_handle_t *btree;         ///< Handle to the B-tree storing directory entries
-  /* Iteration state for in-order traversal */
-  uint32_t iter_key;     ///< Last returned key (filename hash)
-  int      iter_started; ///< 0 if iteration not started, 1 otherwise
-} dir_t;
+// typedef struct {
+//   bsfs_inode      inode;         ///< The inode of the directory
+//   uint32_t        current_index; ///< The logical position of the next entry to read
+//   btree_handle_t *btree;         ///< Handle to the B-tree storing directory entries
+//   /* Iteration state for in-order traversal */
+//   uint32_t iter_key;     ///< Last returned key (filename hash)
+//   int      iter_started; ///< 0 if iteration not started, 1 otherwise
+// } dir_t;
 
 /**
  * @brief Adds a new entry to a directory.
@@ -41,7 +41,7 @@ typedef struct {
  * @return 0 on success, -1 if an entry with the same name already exists or on
  *         write error.
  */
-int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry);
+// int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry);
 
 /**
  * @brief Removes an entry from a directory by name.
@@ -54,7 +54,7 @@ int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *ent
  * @param filename Name of the entry to remove.
  * @return 0 on success, -1 if the entry was not found or on write error.
  */
-int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename);
+// int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename);
 
 /**
  * @brief Updates an existing directory entry in the B-tree.
@@ -68,7 +68,7 @@ int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *f
  * @param entry Pointer to the updated directory entry.
  * @return 1 on success; -1 if the entry was not found.
  */
-int update_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry);
+// int update_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry);
 
 /**
  * @brief Looks up a directory entry by name in a given directory.
@@ -80,7 +80,7 @@ int update_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *
  * @param result Output parameter: filled with the entry if found.
  * @return 0 if found, -1 if not found.
  */
-int lookup_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *name, dir_entry_t *result);
+struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **out_node);
 
 /**
  * @brief Reads the next directory entry from a directory.
@@ -96,7 +96,7 @@ int lookup_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *n
  * @return 0 if an entry was read successfully, -1 if end of directory is
  * reached.
  */
-int read_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, btree_handle_t *handle, dir_entry_t *out);
+// int read_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, btree_handle_t *handle, dir_entry_t *out);
 
 /**
  * @brief Recursively search a directory B-tree for an exact filename match.
@@ -112,6 +112,6 @@ int read_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, btree_handle_t 
  * @param out Output parameter to receive the matching entry on success.
  * @return 1 if found; 0 otherwise.
  */
-int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block, const char *name, dir_entry_t *out);
+// int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block, const char *name, dir_entry_t *out);
 
 #endif // !DIRECTORY_OPERATIONS

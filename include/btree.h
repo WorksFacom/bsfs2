@@ -150,7 +150,7 @@ int compare_dir_entry(const void *a, const void *b) {
  *         directory entries.
  */
 btree_handle_t *btree_create_dir_entry_handle(void) {
-  return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(dir_entry_t), compare_dir_entry, get_dir_entry_key);
+  return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(struct bsfs_dentry), compare_dir_entry, get_dir_entry_key);
 }
 
 static inline __u32 get_rec_entry_key(const void *entry) {
