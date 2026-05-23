@@ -6,34 +6,46 @@
 #include <linux/writeback.h>
 
 static __u32 s_next_inode_number = 1;
-static __u32 s_cached_inode_root = INVALID_BLOCK;
+// static __u32 s_cached_inode_root = INVALID_BLOCK;
 
 static struct kmem_cache *bsfs_inode_cache;
 
-static int inode_tree_find_max(FILE *disk, btree_handle_t *handle, uint32_t node_block, bsfs_inode *out_inode) {
+static int inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct disk_mapped_inode_t *out_inode) {
+  int                ret;
+  struct btree_node *node;
+
   if (!handle || node_block == 0 || !out_inode)
     return 0;
 
-  btree_node_t *node = btree_read_node(disk, handle, node_block);
-  if (!node)
+  __u64 size = handle->entry_size;
+
+  ret = btree_read_node(sb, node_block, &node);
+  if (ret != 0)
     return 0;
 
   int ok = 0;
-  if (node->is_leaf) {
-    if (node->num_entries > 0) {
-      memcpy(out_inode, (uint8_t *)node->entries + (node->num_entries - 1) * handle->entry_size, handle->entry_size);
+
+  if (node->node->is_leaf) {
+    if (node->node->num_entries > 0) {
+      out_inode = (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * size);
+
       ok = 1;
     }
   } else {
-    uint32_t child_index = node->num_entries;
-    if (child_index >= (uint32_t)(2 * handle->min_degree)) {
-      child_index = (node->num_entries > 0) ? node->num_entries - 1 : 0;
+    __u32 child_idx = node->node->num_entries;
+
+    if (child_idx >= 2 * handle->min_degree) {
+      child_idx = (node->node->num_entries > 0) ? node->node->num_entries - 1 : 0;
     }
-    uint32_t child_block = node->children[child_index];
-    if (child_block != 0 && child_block != INVALID_BLOCK)
-      ok = inode_tree_find_max(disk, handle, child_block, out_inode);
-    if (!ok && node->num_entries > 0) {
-      memcpy(out_inode, (uint8_t *)node->entries + (node->num_entries - 1) * handle->entry_size, handle->entry_size);
+
+    __u32 child_blk = bchildren(node, handle)[child_idx];
+
+    if (child_blk != 0 && child_blk != INVALID_BLOCK)
+      ok = inode_tree_find_max(sb, handle, child_blk, out_inode);
+
+    if (!ok && node->node->num_entries > 0) {
+      out_inode = (struct disk_mapped_inode_t *)bentries(node) + (node->node->num_entries - 1) * size;
+
       ok = 1;
     }
   }
@@ -42,27 +54,34 @@ static int inode_tree_find_max(FILE *disk, btree_handle_t *handle, uint32_t node
   return ok;
 }
 
-static void inode_sync_next(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree) {
-  uint32_t root_block = inode_tree ? inode_tree->root_block : 0;
-  if (sb)
-    root_block = sb->inode_root;
+static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  if (root_block == s_cached_inode_root)
-    return;
+  __u32 root_block = inode_tree ? inode_tree->root_block : 0;
+
+  root_block = sbi->super->inode_root;
 
   if (root_block == 0 || !inode_tree) {
     s_next_inode_number = 1;
-    s_cached_inode_root = root_block;
     return;
   }
 
-  bsfs_inode max_inode;
-  if (inode_tree_find_max(disk, inode_tree, root_block, &max_inode)) {
-    s_next_inode_number = max_inode.inode_number + 1;
+  struct disk_mapped_inode_t *max_inode;
+  if (inode_tree_find_max(sb, inode_tree, root_block, max_inode)) {
+    s_next_inode_number = max_inode->ino + 1;
   } else {
     s_next_inode_number = 1;
   }
   s_cached_inode_root = root_block;
+}
+
+__u32 get_next_inode_number(struct super_block *sb, btree_handle_t *inode_tree) {
+  inode_sync_next(disk, sb, inode_tree);
+
+  if (s_next_inode_number == 0)
+    s_next_inode_number = 1;
+
+  return s_next_inode_number++;
 }
 
 int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode) {
@@ -116,18 +135,6 @@ int remove_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, uint3
   if (removed)
     inode_sync_next(disk, sb, handle);
   return removed;
-}
-
-uint32_t get_next_inode_number(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree) {
-  if (!sb)
-    return s_next_inode_number++;
-
-  inode_sync_next(disk, sb, inode_tree);
-
-  if (s_next_inode_number == 0)
-    s_next_inode_number = 1;
-
-  return s_next_inode_number++;
 }
 
 int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
@@ -511,7 +518,6 @@ void bsfs_set_inode(struct inode *inode, dev_t rdev) {
 
 static struct inode *__set_up_inode_new(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
-  // struct inode_info *bsfs_inode = bsfs_i(inode);
 
   disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
 
@@ -611,6 +617,55 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
 
 out:
   return ret;
+}
+
+struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode) {
+  struct super_block   *sb    = dir->i_sb;
+  struct minix_sb_info *sbi   = minix_sb(sb);
+  struct inode         *inode = new_inode(sb);
+  struct buffer_head   *bh;
+  int                   bits_per_zone = 8 * sb->s_blocksize;
+  unsigned long         j;
+  int                   i;
+
+  if (!inode)
+    return ERR_PTR(-ENOMEM);
+  j  = bits_per_zone;
+  bh = NULL;
+  spin_lock(&bitmap_lock);
+  for (i = 0; i < sbi->s_imap_blocks; i++) {
+    bh = sbi->s_imap[i];
+    j  = minix_find_first_zero_bit(bh->b_data, bits_per_zone);
+    if (j < bits_per_zone)
+      break;
+  }
+  if (!bh || j >= bits_per_zone) {
+    spin_unlock(&bitmap_lock);
+    iput(inode);
+    return ERR_PTR(-ENOSPC);
+  }
+  if (minix_test_and_set_bit(j, bh->b_data)) { /* shouldn't happen */
+    spin_unlock(&bitmap_lock);
+    printk("minix_new_inode: bit already set\n");
+    iput(inode);
+    return ERR_PTR(-ENOSPC);
+  }
+  spin_unlock(&bitmap_lock);
+  mark_buffer_dirty(bh);
+  j += i * bits_per_zone;
+  if (!j || j > sbi->s_ninodes) {
+    iput(inode);
+    return ERR_PTR(-ENOSPC);
+  }
+  inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+  inode->i_ino = j;
+  simple_inode_init_ts(inode);
+  inode->i_blocks = 0;
+  memset(&minix_i(inode)->u, 0, sizeof(minix_i(inode)->u));
+  insert_inode_hash(inode);
+  mark_inode_dirty(inode);
+
+  return inode;
 }
 
 void bsfs_free_inode(struct inode *inode) {

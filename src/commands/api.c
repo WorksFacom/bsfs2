@@ -9,8 +9,7 @@
  */
 
 #include "../../include/api_bsfs.h"
-#include "../../include/create_file.h"
-#include "../../include/dentry.h"
+#include "../../include/dirent.h"
 
 #ifndef PATH_MAX
 /** Fallback maximum path length when system headers do not define PATH_MAX. */

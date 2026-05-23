@@ -77,6 +77,7 @@ static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
   return (bits[byte] & mask) == 0;
 }
 
+// TODO: #define ext4_test_and_set_bit		__test_and_set_bit_le
 static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 

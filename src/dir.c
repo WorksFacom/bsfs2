@@ -264,9 +264,32 @@ static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsi
   return d_splice_alias(inode, dentry);
 }
 
-const struct inode_operations minix_dir_inode_operations = {
-    .lookup = bsfs_lookup
-    // .create		= bsfs_create,
+static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
+  struct inode *inode;
+
+  // TODO: old -> new?
+  if (!old_valid_dev(rdev))
+    return -EINVAL;
+
+  inode = bsfs_new_inode(dir, mode);
+
+  if (IS_ERR(inode))
+    return PTR_ERR(inode);
+
+  minix_set_inode(inode, rdev);
+
+  mark_inode_dirty(inode);
+
+  return add_nondir(dentry, inode);
+}
+
+static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {
+  return bsfs_mknod(&nop_mnt_idmap, dir, dentry, mode, 0);
+}
+
+const struct inode_operations bsfs_dir_inode_operations = {
+    .lookup = bsfs_lookup,
+    .create = bsfs_create
     // .link		= bsfs_link,
     // .unlink		= bsfs_unlink,
     // .symlink	= bsfs_symlink,

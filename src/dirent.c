@@ -52,8 +52,6 @@
 //   return 0;
 // }
 
-/* Rebuild helpers removed: comparator-based deletion is used instead. */
-
 // int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename) {
 //   btree_handle_t *handle = btree_create_dir_entry_handle();
 //   handle->root_block     = dir->inode.btree_root;
@@ -88,25 +86,6 @@
 //
 //   free(handle);
 //   return 0;
-// }
-
-// int update_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry) {
-//   (void)sb;
-//   btree_handle_t *handle = btree_create_dir_entry_handle();
-//   handle->root_block     = dir->inode.btree_root;
-//
-//   uint32_t hash = hash_filename(entry->filename);
-//
-//   dir_entry_t existing;
-//   if (!btree_search(disk, handle, handle->root_block, hash, &existing)) {
-//     fprintf(stderr, "Cannot update: entry '%s' not found in directory.\n", entry->filename);
-//     free(handle);
-//     return -1;
-//   }
-//
-//   int ok = btree_update(disk, handle, handle->root_block, entry);
-//   free(handle);
-//   return ok;
 // }
 
 // TODO: review - is this working?
