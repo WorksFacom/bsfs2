@@ -10,48 +10,65 @@ static __u32 s_next_inode_number = 1;
 
 static struct kmem_cache *bsfs_inode_cache;
 
-static int inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct disk_mapped_inode_t *out_inode) {
-  int                ret;
-  struct btree_node *node;
+// TODO: is this working?
+static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
+  struct btree_node *node = NULL;
 
-  if (!handle || node_block == 0 || !out_inode)
-    return 0;
+  if (!handle || node_block == 0 || node_block == INVALID_BLOCK)
+    return NULL;
 
-  __u64 size = handle->entry_size;
+  while (node_block != 0 && node_block != INVALID_BLOCK) {
+    if (btree_read_node(sb, node_block, &node) != 0 || !node)
+      return NULL;
 
-  ret = btree_read_node(sb, node_block, &node);
-  if (ret != 0)
-    return 0;
+    if (node->node->num_entries == 0) {
+      if (node->node->is_leaf) {
+        btree_free_node(node);
+        return NULL;
+      }
 
-  int ok = 0;
-
-  if (node->node->is_leaf) {
-    if (node->node->num_entries > 0) {
-      out_inode = (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * size);
-
-      ok = 1;
+      __u32 child_blk = bchildren(node, handle)[0];
+      btree_free_node(node);
+      node_block = child_blk;
+      continue;
     }
-  } else {
+
+    if (node->node->is_leaf)
+      break;
+
     __u32 child_idx = node->node->num_entries;
-
-    if (child_idx >= 2 * handle->min_degree) {
-      child_idx = (node->node->num_entries > 0) ? node->node->num_entries - 1 : 0;
-    }
+    if (child_idx >= 2 * handle->min_degree)
+      child_idx = node->node->num_entries - 1;
 
     __u32 child_blk = bchildren(node, handle)[child_idx];
+    if (child_blk == 0 || child_blk == INVALID_BLOCK)
+      break;
 
-    if (child_blk != 0 && child_blk != INVALID_BLOCK)
-      ok = inode_tree_find_max(sb, handle, child_blk, out_inode);
-
-    if (!ok && node->node->num_entries > 0) {
-      out_inode = (struct disk_mapped_inode_t *)bentries(node) + (node->node->num_entries - 1) * size;
-
-      ok = 1;
-    }
+    btree_free_node(node);
+    node_block = child_blk;
   }
 
-  btree_free_node(node);
-  return ok;
+  if (!node || node->node->num_entries == 0) {
+    if (node)
+      btree_free_node(node);
+    return NULL;
+  }
+
+  struct disk_mapped_inode_t *inode =
+      (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * handle->entry_size);
+  struct buffer_head *bh = node->bh;
+  struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
+
+  kfree(node);
+
+  if (!out) {
+    brelse(bh);
+    return NULL;
+  }
+
+  out->inode = inode;
+  out->bh    = bh;
+  return out;
 }
 
 static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) {
@@ -66,9 +83,11 @@ static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) 
     return;
   }
 
-  struct disk_mapped_inode_t *max_inode;
-  if (inode_tree_find_max(sb, inode_tree, root_block, max_inode)) {
-    s_next_inode_number = max_inode->ino + 1;
+  struct disk_mapped_inode *max_inode = inode_tree_find_max(sb, inode_tree, root_block);
+  if (max_inode) {
+    s_next_inode_number = max_inode->inode->ino + 1;
+    brelse(max_inode->bh);
+    kfree(max_inode);
   } else {
     s_next_inode_number = 1;
   }
@@ -462,10 +481,11 @@ struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
 
   // free btree_node without releasing buffer
   // buffer will be brelsed later
+  struct buffer_head *bh = node->bh;
   kfree(node);
 
   out->inode = inode;
-  out->bh    = node->bh;
+  out->bh    = bh;
 
   return out;
 }
