@@ -49,6 +49,7 @@ struct bsfs_super_info {
   struct buffer_head  *bh;
   __u8               **bitmap;
   struct buffer_head **bitmap_map;
+  __u32                next_inode_number;
 };
 
 static inline struct bsfs_super_info *bsfs_sb(struct super_block *sb) {

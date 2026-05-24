@@ -1,12 +1,9 @@
-#include "../include/inode.h"
-#include "../bsfs.h"
 #include "../include/btree.h"
 #include "../include/dir.h"
 #include "../include/file.h"
 #include <linux/writeback.h>
 
 static __u32 s_next_inode_number = 1;
-// static __u32 s_cached_inode_root = INVALID_BLOCK;
 
 static struct kmem_cache *bsfs_inode_cache;
 
@@ -54,10 +51,9 @@ static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btr
     return NULL;
   }
 
-  struct disk_mapped_inode_t *inode =
-      (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * handle->entry_size);
-  struct buffer_head *bh = node->bh;
-  struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
+  struct disk_mapped_inode_t *inode = (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * handle->entry_size);
+  struct buffer_head         *bh    = node->bh;
+  struct disk_mapped_inode   *out   = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
   kfree(node);
 
@@ -71,36 +67,34 @@ static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btr
   return out;
 }
 
+// TODO: sync once and use cached value on sbi until unmount?
 static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  __u32 root_block = inode_tree ? inode_tree->root_block : 0;
-
-  root_block = sbi->super->inode_root;
+  __u32 root_block = sbi->super->inode_root;
 
   if (root_block == 0 || !inode_tree) {
-    s_next_inode_number = 1;
+    sbi->next_inode_number = 1;
     return;
   }
 
   struct disk_mapped_inode *max_inode = inode_tree_find_max(sb, inode_tree, root_block);
+
   if (max_inode) {
-    s_next_inode_number = max_inode->inode->ino + 1;
+    sbi->next_inode_number = max_inode->inode->ino + 1;
     brelse(max_inode->bh);
     kfree(max_inode);
   } else {
-    s_next_inode_number = 1;
+    sbi->next_inode_number = 1;
   }
-  s_cached_inode_root = root_block;
 }
 
 __u32 get_next_inode_number(struct super_block *sb, btree_handle_t *inode_tree) {
-  inode_sync_next(disk, sb, inode_tree);
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  if (s_next_inode_number == 0)
-    s_next_inode_number = 1;
+  inode_sync_next(sb, inode_tree);
 
-  return s_next_inode_number++;
+  return sbi->next_inode_number++;
 }
 
 int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode) {
@@ -118,7 +112,6 @@ int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const
   if (rc == 0) {
     if (inode->inode_number >= s_next_inode_number)
       s_next_inode_number = inode->inode_number + 1;
-    s_cached_inode_root = handle->root_block;
   }
   return rc;
 }
