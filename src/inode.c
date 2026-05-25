@@ -3,8 +3,6 @@
 #include "../include/file.h"
 #include <linux/writeback.h>
 
-static __u32 s_next_inode_number = 1;
-
 static struct kmem_cache *bsfs_inode_cache;
 
 // TODO: is this working?
@@ -97,23 +95,19 @@ __u32 get_next_inode_number(struct super_block *sb, btree_handle_t *inode_tree) 
   return sbi->next_inode_number++;
 }
 
-int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode) {
-  if (!handle || !inode)
-    return -1;
+int insert_inode(struct super_block *sb, btree_handle_t *handle, const struct disk_mapped_inode_t *inode) {
+  int ret;
 
-  bsfs_inode copy;
-  memcpy(&copy, inode, sizeof(bsfs_inode));
-  int rc = btree_insert(disk, sb, handle, &copy);
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  ret = btree_insert(sb, handle, (void *)inode);
   /* Persist inode root whenever it changes (e.g., after a split). */
-  if (rc == 0 && handle->root_block != 0 && sb->inode_root != handle->root_block) {
-    sb->inode_root = handle->root_block;
-    (void)write_superblock(disk, sb);
+  if (ret == 0 && handle->root_block != 0 && sbi->super->inode_root != handle->root_block) {
+    sbi->super->inode_root = handle->root_block;
+    mark_buffer_dirty(sbi->bh);
   }
-  if (rc == 0) {
-    if (inode->inode_number >= s_next_inode_number)
-      s_next_inode_number = inode->inode_number + 1;
-  }
-  return rc;
+
+  return ret;
 }
 
 int update_inode(FILE *disk, btree_handle_t *handle, const bsfs_inode *inode) {
@@ -633,52 +627,59 @@ out:
 }
 
 struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode) {
-  struct super_block   *sb    = dir->i_sb;
-  struct minix_sb_info *sbi   = minix_sb(sb);
-  struct inode         *inode = new_inode(sb);
-  struct buffer_head   *bh;
-  int                   bits_per_zone = 8 * sb->s_blocksize;
-  unsigned long         j;
-  int                   i;
+  struct super_block     *sb  = dir->i_sb;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
+  struct inode              *inode;
+  struct bsfs_inode         *bsfs_inode;
+  struct disk_mapped_inode_t disk_inode = {0};
+  btree_handle_t            *inode_h;
+  int                        err;
+
+  inode = new_inode(sb);
   if (!inode)
     return ERR_PTR(-ENOMEM);
-  j  = bits_per_zone;
-  bh = NULL;
-  spin_lock(&bitmap_lock);
-  for (i = 0; i < sbi->s_imap_blocks; i++) {
-    bh = sbi->s_imap[i];
-    j  = minix_find_first_zero_bit(bh->b_data, bits_per_zone);
-    if (j < bits_per_zone)
-      break;
-  }
-  if (!bh || j >= bits_per_zone) {
-    spin_unlock(&bitmap_lock);
-    iput(inode);
-    return ERR_PTR(-ENOSPC);
-  }
-  if (minix_test_and_set_bit(j, bh->b_data)) { /* shouldn't happen */
-    spin_unlock(&bitmap_lock);
-    printk("minix_new_inode: bit already set\n");
-    iput(inode);
-    return ERR_PTR(-ENOSPC);
-  }
-  spin_unlock(&bitmap_lock);
-  mark_buffer_dirty(bh);
-  j += i * bits_per_zone;
-  if (!j || j > sbi->s_ninodes) {
-    iput(inode);
-    return ERR_PTR(-ENOSPC);
-  }
+
   inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
-  inode->i_ino = j;
   simple_inode_init_ts(inode);
   inode->i_blocks = 0;
-  memset(&minix_i(inode)->u, 0, sizeof(minix_i(inode)->u));
+
+  inode_h = btree_create_inode_handle();
+
+  if (!inode_h) {
+    err = -ENOMEM;
+    goto err_iput;
+  }
+
+  inode_h->root_block = sbi->super->inode_root;
+
+  inode->i_ino = get_next_inode_number(sb, inode_h);
+  if (!inode->i_ino) {
+    err = -ENOSPC;
+    goto err_free_handle;
+  }
+
+  disk_inode.ino = inode->i_ino;
+
+  if (insert_inode(sb, inode_h, &disk_inode) != 0) {
+    err = -ENOSPC;
+    goto err_free_handle;
+  }
+  kfree(inode_h);
+
+  bsfs_inode             = bsfs_i(inode);
+  bsfs_inode->btree_root = 0;
+
   insert_inode_hash(inode);
   mark_inode_dirty(inode);
 
   return inode;
+
+err_free_handle:
+  kfree(inode_h);
+err_iput:
+  iput(inode);
+  return ERR_PTR(err);
 }
 
 void bsfs_free_inode(struct inode *inode) {

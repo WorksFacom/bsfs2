@@ -276,7 +276,7 @@ static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry 
   if (IS_ERR(inode))
     return PTR_ERR(inode);
 
-  minix_set_inode(inode, rdev);
+  bsfs_set_inode(inode, rdev);
 
   mark_inode_dirty(inode);
 

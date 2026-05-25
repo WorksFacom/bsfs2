@@ -20,12 +20,11 @@ extern const struct address_space_operations bsfs_aops;
 /**
  * @brief Inserts a new inode into the inode B-tree.
  *
- * @param disk Pointer to the open filesystem image.
- * @param sb Pointer to the superblock (for block allocation).
+ * @param sb Pointer to the super block (for block allocation).
  * @param handle Pointer to the B-tree handle for inode management.
  * @param inode Pointer to the inode to be inserted.
  */
-int insert_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, const bsfs_inode *inode);
+int insert_inode(struct super_block *sb, btree_handle_t *handle, const struct disk_mapped_inode_t *inode);
 
 /**
  * @brief Updates an existing inode in the B-tree.
@@ -58,12 +57,10 @@ int remove_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, uint3
  * and returns the next available one. This ensures uniqueness of inode numbers
  * without reusing deleted ones.
  *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the loaded superblock (used to persist root changes).
  * @param inode_tree Pointer to the B-tree handle for inodes.
  * @return The next available (unused) inode number.
  */
-uint32_t get_next_inode_number(FILE *disk, bsfs_super_block *sb, btree_handle_t *inode_tree);
+__u32 get_next_inode_number(struct super_block *sb, btree_handle_t *inode_tree);
 
 /**
  * @brief Checks if an inode with the given number exists in the inode B-tree.
@@ -93,11 +90,15 @@ int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number);
  */
 int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
 
+void bsfs_set_inode(struct inode *inode, dev_t rdev);
+
 struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino);
 
 static struct inode *bsfs_alloc_inode(struct super_block *sb);
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
+
+struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode);
 
 void bsfs_free_inode(struct inode *inode);
 
