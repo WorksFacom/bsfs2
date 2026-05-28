@@ -114,4 +114,6 @@ struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **
  */
 // int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block, const char *name, dir_entry_t *out);
 
+int bsfs_add_link(struct dentry *dentry, struct inode *inode);
+
 #endif // !DIRECTORY_OPERATIONS

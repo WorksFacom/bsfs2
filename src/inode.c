@@ -493,6 +493,7 @@ struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   disk_inode->inode->mtime  = inode_get_mtime_sec(inode);
   disk_inode->inode->atime  = inode_get_atime_sec(inode);
   disk_inode->inode->ctime  = inode_get_ctime_sec(inode);
+  disk_inode->inode->btree_root = bsfs_i(inode)->btree_root;
 
   // TODO: make it work with special files
   // if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))

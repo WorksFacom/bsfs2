@@ -122,9 +122,16 @@ static inline __u32 *bchildren(struct btree_node *node, btree_handle_t *handle) 
 }
 
 __u32 get_dir_entry_key(const void *entry) {
-  return hash_filename(((const dir_entry_t *)entry)->filename);
+  return hash_filename(((const struct bsfs_dentry *)entry)->filename);
 }
 
+// static inline int namecompare(int len, int maxlen, const char *name, const char *buffer) {
+//   if (len < maxlen && buffer[len])
+//     return 0;
+//   return !memcmp(name, buffer, len);
+// }
+
+// TODO: use namecompare ??
 int compare_dir_entry(const void *a, const void *b) {
   __u32 ha = get_dir_entry_key(a);
   __u32 hb = get_dir_entry_key(b);
@@ -135,8 +142,8 @@ int compare_dir_entry(const void *a, const void *b) {
     return 1;
 
   // In case of hash collision, fallback to full string comparison
-  const dir_entry_t *ea = (const dir_entry_t *)a;
-  const dir_entry_t *eb = (const dir_entry_t *)b;
+  const struct bsfs_dentry *ea = (const struct bsfs_dentry *)a;
+  const struct bsfs_dentry *eb = (const struct bsfs_dentry *)b;
   return strcmp(ea->filename, eb->filename);
 }
 

@@ -264,6 +264,19 @@ static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsi
   return d_splice_alias(inode, dentry);
 }
 
+static int link_nondir(struct dentry *dentry, struct inode *inode) {
+  int err = bsfs_add_link(dentry, inode);
+
+  if (!err) {
+    d_instantiate(dentry, inode);
+    return 0;
+  }
+
+  inode_dec_link_count(inode);
+  iput(inode);
+  return err;
+}
+
 static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
   struct inode *inode;
 
@@ -280,7 +293,7 @@ static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry 
 
   mark_inode_dirty(inode);
 
-  return add_nondir(dentry, inode);
+  return link_nondir(dentry, inode);
 }
 
 static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {

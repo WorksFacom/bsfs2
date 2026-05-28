@@ -11,47 +11,6 @@
 #include "../include/dentry.h"
 #include "../include/inode.h"
 
-// int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry) {
-//   btree_handle_t *dir_handle = btree_create_dir_entry_handle();
-//   dir_handle->root_block     = dir->inode.btree_root;
-//
-//   // Prevent duplicates by exact name, not by hash only
-//   dir_entry_t needle;
-//   memset(&needle, 0, sizeof(needle));
-//   strncpy(needle.filename, entry->filename, MAX_FILENAME - 1);
-//   needle.filename[MAX_FILENAME - 1] = '\0';
-//
-//   dir_entry_t existing;
-//   if (btree_search_entry(disk, dir_handle, dir_handle->root_block, &needle, &existing)) {
-//     fprintf(stderr, "Directory entry '%s' already exists.\n", entry->filename);
-//     free(dir_handle);
-//     return -1;
-//   }
-//
-//   uint32_t old_root = dir_handle->root_block;
-//
-//   if (btree_insert(disk, sb, dir_handle, entry) != 0) {
-//     free(dir_handle);
-//     return -1;
-//   }
-//
-//   // Persist btree root changes (first insert or after a split)
-//   if (dir_handle->root_block != 0 && dir_handle->root_block != dir->inode.btree_root) {
-//     dir->inode.btree_root        = dir_handle->root_block;
-//     btree_handle_t *inode_handle = btree_create_inode_handle();
-//     inode_handle->root_block     = sb->inode_root;
-//     (void)update_inode(disk, inode_handle, &dir->inode);
-//     free(inode_handle);
-//   }
-//
-//   (void)old_root;
-//
-//   dir->iter_started = 0;
-//   dir->iter_key     = 0;
-//   free(dir_handle);
-//   return 0;
-// }
-
 // int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename) {
 //   btree_handle_t *handle = btree_create_dir_entry_handle();
 //   handle->root_block     = dir->inode.btree_root;
@@ -237,3 +196,61 @@ struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **
 //   }
 //   return 0;
 // }
+
+// TODO: is write_begin/write_end needed?
+int bsfs_add_link(struct dentry *dentry, struct inode *inode) {
+  int err = 0;
+
+  struct inode *dir     = d_inode(dentry->d_parent);
+  const char   *name    = dentry->d_name.name;
+  int           namelen = dentry->d_name.len;
+
+  struct super_block *sb = dir->i_sb;
+
+  btree_handle_t *handle;
+
+  struct bsfs_dentry entry  = {0};
+  struct bsfs_dentry needle = {0};
+  struct bsfs_dentry existing;
+
+  if (namelen >= MAX_FILENAME)
+    return -ENAMETOOLONG;
+
+  handle = btree_create_dir_entry_handle();
+  if (!handle)
+    return -ENOMEM;
+
+  handle->root_block = bsfs_i(dir)->btree_root;
+
+  // strncpy(needle.filename, name, MAX_FILENAME - 1);
+  // needle.filename[MAX_FILENAME - 1] = '\0';
+  memcpy(needle.filename, name, namelen);
+  needle.filename[namelen] = '\0';
+  needle.name_hash         = hash_filename(needle.filename);
+
+  // TODO: create btree_exist? or alike
+  if (btree_search_entry(sb, handle, handle->root_block, &needle, &existing)) {
+    err = -EEXIST;
+    goto out;
+  }
+
+  entry.ino       = inode->i_ino;
+  entry.name_hash = needle.name_hash;
+  memcpy(entry.filename, needle.filename, namelen);
+  needle.filename[namelen] = '\0';
+
+  if (btree_insert(sb, handle, &entry) != 0) {
+    err = -ENOSPC;
+    goto out;
+  }
+
+  if (handle->root_block != bsfs_i(dir)->btree_root)
+    bsfs_i(dir)->btree_root = handle->root_block;
+
+  inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+  mark_inode_dirty(dir);
+
+out:
+  kfree(handle);
+  return err;
+}
