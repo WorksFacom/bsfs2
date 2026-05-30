@@ -1,5 +1,20 @@
-obj-m += bsfs.o
-bsfs-objs := src/bsfs.o
+bsfs2-src-objs := \
+	alloc.o \
+	bitmap.o \
+	bspan_queue.o \
+	btree.o \
+	dir.o \
+	dirent.o \
+	file.o \
+	inode.o \
+	rec_entry.o \
+	rec_gc.o \
+	remove_file.o \
+	restore_file.o
+
+obj-m += bsfs2.o
+
+bsfs2-objs := bsfs.o $(addprefix src/,$(bsfs2-src-objs))
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
@@ -7,14 +22,16 @@ SRC_FILES = $(shell find src -type f -name '*.c')
 
 MKFS = mkfs.bsfs
 
-all: $(MKFS)
-	make -C $(KDIR) M=$(PWD) modules
+# all: $(MKFS)
+all:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 $(MKFS): tools/mkfs.c
 	$(CC) -Wall -o $@ $< -Isrc/include $(SRC_FILES)
 
 clean:
-	make -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	rm -f $(MKFS)
 
 compile_commands.json:
 	make -C $(KDIR) M=$(PWD) compile_commands.json
