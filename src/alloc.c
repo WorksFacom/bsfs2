@@ -53,11 +53,14 @@ int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blo
     return result;
   }
 
+  return -1;
+
+  // TODO: reenable
   // On-demand GC: try to free enough blocks and retry once
-  (void)rec_gc_purge_until(sb, blocks_needed, (__u64)ktime_get_real_seconds());
+  // (void)rec_gc_purge_until(sb, blocks_needed, (__u64)ktime_get_real_seconds());
 
   // Retry
-  return allocate_bspan_queue(sb, queue, blocks_needed, offset);
+  // return allocate_bspan_queue(sb, queue, blocks_needed, offset);
 }
 
 __u32 allocate_single_block(struct super_block *sb) {
@@ -74,10 +77,14 @@ __u32 allocate_single_block(struct super_block *sb) {
   }
 
   printk(KERN_WARNING "Error: No blocks available.\n");
-  // GC on-demand for at least 1 block, then retry once
-  (void)rec_gc_purge_until(sb, 1, (__u64)ktime_get_real_seconds());
 
-  return allocate_single_block(sb);
+  return INVALID_BLOCK;
+
+  // GC on-demand for at least 1 block, then retry once
+  // TODO: reenable
+  // (void)rec_gc_purge_until(sb, 1, (__u64)ktime_get_real_seconds());
+
+  // return allocate_single_block(sb);
 }
 
 int deallocate_single_block(struct super_block *sb, __u32 block_index) {

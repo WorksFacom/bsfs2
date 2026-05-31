@@ -54,8 +54,9 @@ __u32 hash_filename(const char *name);
  */
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key);
 
+// TODO: is struct disk_mapped_inode_t correct?
 static inline __u32 get_inode_key(const void *entry) {
-  return ((const bsfs_inode *)entry)->ino;
+  return ((struct disk_mapped_inode_t *)entry)->ino;
 }
 
 static inline int compare_inode(const void *a, const void *b) {
@@ -105,7 +106,7 @@ static inline int compare_bspan(const void *a, const void *b) {
  *
  * @return Pointer to a configured `btree_handle_t` for bspan entries.
  */
-btree_handle_t *btree_create_bspan_handle(void) {
+static inline btree_handle_t *btree_create_bspan_handle(void) {
   return btree_create_handle(BTREE_TYPE_BSPAN, sizeof(bspan_t), compare_bspan, get_bspan_key);
 }
 
@@ -121,7 +122,7 @@ static inline __u32 *bchildren(struct btree_node *node, btree_handle_t *handle) 
   return (__u32 *)(node->node->data + children_start);
 }
 
-__u32 get_dir_entry_key(const void *entry) {
+static inline __u32 get_dir_entry_key(const void *entry) {
   return hash_filename(((const struct bsfs_dentry *)entry)->filename);
 }
 
@@ -132,7 +133,7 @@ __u32 get_dir_entry_key(const void *entry) {
 // }
 
 // TODO: use namecompare ??
-int compare_dir_entry(const void *a, const void *b) {
+static inline int compare_dir_entry(const void *a, const void *b) {
   __u32 ha = get_dir_entry_key(a);
   __u32 hb = get_dir_entry_key(b);
 
@@ -156,7 +157,7 @@ int compare_dir_entry(const void *a, const void *b) {
  * @return A pointer to a newly allocated B-tree handle configured for
  *         directory entries.
  */
-btree_handle_t *btree_create_dir_entry_handle(void) {
+static inline btree_handle_t *btree_create_dir_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(struct bsfs_dentry), compare_dir_entry, get_dir_entry_key);
 }
 
@@ -186,6 +187,8 @@ static inline int compare_rec_entry(const void *a, const void *b) {
 static inline btree_handle_t *btree_create_rec_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t), compare_rec_entry, get_rec_entry_key);
 }
+
+void btree_clear_node(struct super_block *sb, struct btree_node *node);
 
 /**
  * @brief Inserts a new entry into the B-tree.

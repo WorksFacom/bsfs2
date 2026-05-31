@@ -192,4 +192,5 @@ static void __exit exit_bsfs(void) {
 module_init(init_bsfs);
 module_exit(exit_bsfs);
 MODULE_DESCRIPTION("BSFS Filesystem");
-MODULE_LICENSE("AGPL");
+// MODULE_LICENSE("AGPL");
+MODULE_LICENSE("GPL");

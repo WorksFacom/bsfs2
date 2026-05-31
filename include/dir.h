@@ -17,6 +17,8 @@ extern const struct file_operations bsfs_dir_operations;
 
 extern const struct inode_operations bsfs_dir_inode_operations;
 
+ino_t bsfs_inode_by_name(struct dentry *dentry);
+
 /**
  * @brief Moves or renames a directory entry from one directory to another.
  *

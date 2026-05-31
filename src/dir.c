@@ -213,27 +213,6 @@
 //   return 0;
 // }
 
-/*
- * Return the offset into page `page_nr' of the last valid
- * byte in that page, plus one.
- */
-static unsigned minix_last_byte(struct inode *inode, unsigned long page_nr) {
-  unsigned last_byte = PAGE_SIZE;
-
-  if (page_nr == (inode->i_size >> PAGE_SHIFT))
-    last_byte = inode->i_size & (PAGE_SIZE - 1);
-  return last_byte;
-}
-
-static void *dir_get_folio(struct inode *dir, unsigned long n, struct folio **foliop) {
-  struct folio *folio = read_mapping_folio(dir->i_mapping, n, NULL);
-
-  if (IS_ERR(folio))
-    return ERR_CAST(folio);
-  *foliop = folio;
-  return kmap_local_folio(folio, 0);
-}
-
 ino_t bsfs_inode_by_name(struct dentry *dentry) {
   ino_t ino = 0;
 
@@ -300,11 +279,30 @@ static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry
   return bsfs_mknod(&nop_mnt_idmap, dir, dentry, mode, 0);
 }
 
+// static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
+//   struct inode           *inode = d_inode(dentry);
+//   struct folio           *folio;
+//   struct minix_dir_entry *de;
+//   int                     err;
+//
+//   de = minix_find_entry(dentry, &folio);
+//   if (!de)
+//     return -ENOENT;
+//   err = minix_delete_entry(de, folio);
+//   folio_release_kmap(folio, de);
+//
+//   if (err)
+//     return err;
+//   inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
+//   inode_dec_link_count(inode);
+//   return 0;
+// }
+
 const struct inode_operations bsfs_dir_inode_operations = {
     .lookup = bsfs_lookup,
-    .create = bsfs_create
+    .create = bsfs_create,
+    // .unlink = bsfs_unlink,
     // .link		= bsfs_link,
-    // .unlink		= bsfs_unlink,
     // .symlink	= bsfs_symlink,
     // .mkdir		= bsfs_mkdir,
     // .rmdir		= bsfs_rmdir,
@@ -312,4 +310,8 @@ const struct inode_operations bsfs_dir_inode_operations = {
     // .rename		= bsfs_rename,
     // .getattr	= bsfs_getattr,
     // .tmpfile	= bsfs_tmpfile,
+};
+
+const struct file_operations bsfs_dir_operations = {
+
 };

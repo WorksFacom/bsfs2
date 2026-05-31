@@ -89,46 +89,46 @@ static size_t purge_one(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_ha
   return freed;
 }
 
-size_t rec_gc_purge_until(FILE *disk, bsfs_super_block *sb, uint32_t needed_blocks, uint64_t now) {
-  if (!disk || !sb || needed_blocks == 0)
-    return 0;
-
-  btree_handle_t *rec_handle = btree_create_rec_entry_handle();
-  if (!rec_handle)
-    return 0;
-  rec_handle->root_block = sb->recovery_root;
-  if (rec_handle->root_block == 0) {
-    free(rec_handle);
-    return 0;
-  }
-
-  rec_item_t *items = NULL;
-  size_t      count = 0, cap = 0;
-  collect_all(disk, rec_handle, rec_handle->root_block, &items, &count, &cap);
-
-  size_t freed = 0;
-
-  // 1) purge expired first
-  for (size_t i = 0; i < count && freed < needed_blocks; i++) {
-    if (items[i].entry.retention_until != 0 && items[i].entry.retention_until <= now) {
-      freed += purge_one(disk, sb, rec_handle, &items[i].entry);
-    }
-  }
-
-  // 2) if still needed, purge by oldest deleted_at
-  if (freed < needed_blocks) {
-    qsort(items, count, sizeof(rec_item_t), cmp_deleted_at);
-    for (size_t i = 0; i < count && freed < needed_blocks; i++) {
-      // Skip ones already expired and likely removed — best-effort check:
-      // Try to search; if not found skip.
-      rec_entry_t tmp;
-      if (!rec_tree_search(disk, rec_handle, items[i].entry.recovery_id, &tmp))
-        continue;
-      freed += purge_one(disk, sb, rec_handle, &items[i].entry);
-    }
-  }
-
-  free(items);
-  free(rec_handle);
-  return freed;
-}
+// size_t rec_gc_purge_until(FILE *disk, bsfs_super_block *sb, uint32_t needed_blocks, uint64_t now) {
+//   if (!disk || !sb || needed_blocks == 0)
+//     return 0;
+//
+//   btree_handle_t *rec_handle = btree_create_rec_entry_handle();
+//   if (!rec_handle)
+//     return 0;
+//   rec_handle->root_block = sb->recovery_root;
+//   if (rec_handle->root_block == 0) {
+//     free(rec_handle);
+//     return 0;
+//   }
+//
+//   rec_item_t *items = NULL;
+//   size_t      count = 0, cap = 0;
+//   collect_all(disk, rec_handle, rec_handle->root_block, &items, &count, &cap);
+//
+//   size_t freed = 0;
+//
+//   // 1) purge expired first
+//   for (size_t i = 0; i < count && freed < needed_blocks; i++) {
+//     if (items[i].entry.retention_until != 0 && items[i].entry.retention_until <= now) {
+//       freed += purge_one(disk, sb, rec_handle, &items[i].entry);
+//     }
+//   }
+//
+//   // 2) if still needed, purge by oldest deleted_at
+//   if (freed < needed_blocks) {
+//     qsort(items, count, sizeof(rec_item_t), cmp_deleted_at);
+//     for (size_t i = 0; i < count && freed < needed_blocks; i++) {
+//       // Skip ones already expired and likely removed — best-effort check:
+//       // Try to search; if not found skip.
+//       rec_entry_t tmp;
+//       if (!rec_tree_search(disk, rec_handle, items[i].entry.recovery_id, &tmp))
+//         continue;
+//       freed += purge_one(disk, sb, rec_handle, &items[i].entry);
+//     }
+//   }
+//
+//   free(items);
+//   free(rec_handle);
+//   return freed;
+// }

@@ -1,9 +1,14 @@
+#include "../include/inode.h"
 #include "../include/btree.h"
 #include "../include/dir.h"
 #include "../include/file.h"
 #include <linux/writeback.h>
 
 static struct kmem_cache *bsfs_inode_cache;
+
+const struct address_space_operations bsfs_aops = {
+
+};
 
 // TODO: is this working?
 static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
@@ -110,43 +115,43 @@ int insert_inode(struct super_block *sb, btree_handle_t *handle, const struct di
   return ret;
 }
 
-int update_inode(FILE *disk, btree_handle_t *handle, const bsfs_inode *inode) {
-  if (!handle || !inode)
-    return -1;
-  int ok = btree_update(disk, handle, handle->root_block, (void *)inode);
-  return ok;
-}
+// int update_inode(FILE *disk, btree_handle_t *handle, const bsfs_inode *inode) {
+//   if (!handle || !inode)
+//     return -1;
+//   int ok = btree_update(disk, handle, handle->root_block, (void *)inode);
+//   return ok;
+// }
 
-int remove_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, uint32_t inode_number) {
-  if (!handle || handle->type != BTREE_TYPE_INODE)
-    return -1;
-  int removed = btree_remove(disk, sb, handle, inode_number);
-  if (!removed && handle) {
-    bsfs_inode tmp;
-    int        present = btree_search(disk, handle, handle->root_block, inode_number, &tmp);
-    if (present) {
-      if (btree_remove_entry(disk, sb, handle, &tmp)) {
-        removed = 1;
-      }
-    }
-    if (!removed) {
-      fprintf(stderr, "remove_inode: failed to purge ino=%u (root=%u sb_root=%u present=%d)\n", inode_number, handle->root_block,
-              sb ? sb->inode_root : 0, present);
-    }
-  }
-  if (removed && sb->inode_root != handle->root_block) {
-    sb->inode_root = handle->root_block;
-    (void)write_superblock(disk, sb);
-  }
-  if (removed)
-    inode_sync_next(disk, sb, handle);
-  return removed;
-}
+// int remove_inode(FILE *disk, bsfs_super_block *sb, btree_handle_t *handle, uint32_t inode_number) {
+//   if (!handle || handle->type != BTREE_TYPE_INODE)
+//     return -1;
+//   int removed = btree_remove(disk, sb, handle, inode_number);
+//   if (!removed && handle) {
+//     bsfs_inode tmp;
+//     int        present = btree_search(disk, handle, handle->root_block, inode_number, &tmp);
+//     if (present) {
+//       if (btree_remove_entry(disk, sb, handle, &tmp)) {
+//         removed = 1;
+//       }
+//     }
+//     if (!removed) {
+//       fprintf(stderr, "remove_inode: failed to purge ino=%u (root=%u sb_root=%u present=%d)\n", inode_number, handle->root_block,
+//               sb ? sb->inode_root : 0, present);
+//     }
+//   }
+//   if (removed && sb->inode_root != handle->root_block) {
+//     sb->inode_root = handle->root_block;
+//     (void)write_superblock(disk, sb);
+//   }
+//   if (removed)
+//     inode_sync_next(disk, sb, handle);
+//   return removed;
+// }
 
-int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
-  bsfs_inode temp;
-  return btree_search(disk, inode_tree, inode_tree->root_block, inode_number, &temp);
-}
+// int inode_exists(FILE *disk, btree_handle_t *inode_tree, uint32_t inode_number) {
+//   bsfs_inode temp;
+//   return btree_search(disk, inode_tree, inode_tree->root_block, inode_number, &temp);
+// }
 
 // int inode_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out) {
 //   if (!disk || !sb || !out)
@@ -221,7 +226,7 @@ static inline void __bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh
   submit_bh(REQ_OP_READ | op_flags, bh);
 }
 
-void bsfs_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
+static void bsfs_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
   BUG_ON(!buffer_locked(bh));
 
   if (bsfs_buffer_uptodate(bh)) {
@@ -232,8 +237,8 @@ void bsfs_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t
   __bsfs_read_bh(bh, op_flags, end_io);
 }
 
-int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
-  BUG_ON(!buffer_locked(bh));
+static int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) { 
+  BUG_ON(!buffer_locked(bh)); 
 
   if (bsfs_buffer_uptodate(bh)) {
     unlock_buffer(bh);
@@ -250,7 +255,7 @@ int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io
   return -EIO;
 }
 
-int bsfs_read_bh_lock(struct buffer_head *bh, blk_opf_t op_flags, bool wait) {
+static int __maybe_unused bsfs_read_bh_lock(struct buffer_head *bh, blk_opf_t op_flags, bool wait) {
   lock_buffer(bh);
   if (!wait) {
     bsfs_read_bh_nowait(bh, op_flags, NULL);
@@ -259,87 +264,88 @@ int bsfs_read_bh_lock(struct buffer_head *bh, blk_opf_t op_flags, bool wait) {
   return bsfs_read_bh(bh, op_flags, NULL);
 }
 
-int bsfs_block_write_begin(struct folio *folio, loff_t pos, unsigned len, get_block_t *get_block) {
-  unsigned int        from  = offset_in_folio(folio, pos);
-  unsigned            to    = from + len;
-  struct inode       *inode = folio->mapping->host;
-  unsigned            block_start, block_end;
-  sector_t            block;
-  int                 err       = 0;
-  unsigned            blocksize = inode->i_sb->s_blocksize;
-  unsigned            bbits;
-  struct buffer_head *bh, *head, *wait[2];
-  int                 nr_wait = 0;
-  int                 i;
-
-  BUG_ON(!folio_test_locked(folio));
-  BUG_ON(to > folio_size(folio));
-  BUG_ON(from > to);
-
-  head = folio_buffers(folio);
-  if (!head)
-    head = create_empty_buffers(folio, blocksize, 0);
-  bbits = ilog2(blocksize);
-  block = (sector_t)folio->index << (PAGE_SHIFT - bbits);
-
-  for (bh = head, block_start = 0; bh != head || !block_start; block++, block_start = block_end, bh = bh->b_this_page) {
-    block_end = block_start + blocksize;
-    if (block_end <= from || block_start >= to) {
-      if (folio_test_uptodate(folio)) {
-        set_buffer_uptodate(bh);
-      }
-      continue;
-    }
-    if (WARN_ON_ONCE(buffer_new(bh)))
-      clear_buffer_new(bh);
-    if (!buffer_mapped(bh)) {
-      WARN_ON(bh->b_size != blocksize);
-
-      err = get_block(inode, block, bh, 1);
-
-      if (err)
-        break;
-
-      if (buffer_new(bh)) {
-        if (folio_test_uptodate(folio)) {
-          /*
-           * Unlike __block_write_begin() we leave
-           * dirtying of new uptodate buffers to
-           * ->write_end() time or
-           * folio_zero_new_buffers().
-           */
-          set_buffer_uptodate(bh);
-          continue;
-        }
-        if (block_end > to || block_start < from)
-          folio_zero_segments(folio, to, block_end, block_start, from);
-        continue;
-      }
-    }
-    if (folio_test_uptodate(folio)) {
-      set_buffer_uptodate(bh);
-      continue;
-    }
-    if (!buffer_uptodate(bh) && !buffer_delay(bh) && !buffer_unwritten(bh) && (block_start < from || block_end > to)) {
-      bsfs_read_bh_lock(bh, 0, false);
-      wait[nr_wait++] = bh;
-    }
-  }
-  /*
-   * If we issued read requests, let them complete.
-   */
-  for (i = 0; i < nr_wait; i++) {
-    wait_on_buffer(wait[i]);
-    if (!buffer_uptodate(wait[i]))
-      err = -EIO;
-  }
-
-  if (unlikely(err)) {
-    folio_zero_new_buffers(folio, from, to);
-  }
-
-  return err;
-}
+// TODO: test
+// int bsfs_block_write_begin(struct folio *folio, loff_t pos, unsigned len, get_block_t *get_block) {
+//   unsigned int        from  = offset_in_folio(folio, pos);
+//   unsigned            to    = from + len;
+//   struct inode       *inode = folio->mapping->host;
+//   unsigned            block_start, block_end;
+//   sector_t            block;
+//   int                 err       = 0;
+//   unsigned            blocksize = inode->i_sb->s_blocksize;
+//   unsigned            bbits;
+//   struct buffer_head *bh, *head, *wait[2];
+//   int                 nr_wait = 0;
+//   int                 i;
+//
+//   BUG_ON(!folio_test_locked(folio));
+//   BUG_ON(to > folio_size(folio));
+//   BUG_ON(from > to);
+//
+//   head = folio_buffers(folio);
+//   if (!head)
+//     head = create_empty_buffers(folio, blocksize, 0);
+//   bbits = ilog2(blocksize);
+//   block = (sector_t)folio->index << (PAGE_SHIFT - bbits);
+//
+//   for (bh = head, block_start = 0; bh != head || !block_start; block++, block_start = block_end, bh = bh->b_this_page) {
+//     block_end = block_start + blocksize;
+//     if (block_end <= from || block_start >= to) {
+//       if (folio_test_uptodate(folio)) {
+//         set_buffer_uptodate(bh);
+//       }
+//       continue;
+//     }
+//     if (WARN_ON_ONCE(buffer_new(bh)))
+//       clear_buffer_new(bh);
+//     if (!buffer_mapped(bh)) {
+//       WARN_ON(bh->b_size != blocksize);
+//
+//       err = get_block(inode, block, bh, 1);
+//
+//       if (err)
+//         break;
+//
+//       if (buffer_new(bh)) {
+//         if (folio_test_uptodate(folio)) {
+//           /*
+//            * Unlike __block_write_begin() we leave
+//            * dirtying of new uptodate buffers to
+//            * ->write_end() time or
+//            * folio_zero_new_buffers().
+//            */
+//           set_buffer_uptodate(bh);
+//           continue;
+//         }
+//         if (block_end > to || block_start < from)
+//           folio_zero_segments(folio, to, block_end, block_start, from);
+//         continue;
+//       }
+//     }
+//     if (folio_test_uptodate(folio)) {
+//       set_buffer_uptodate(bh);
+//       continue;
+//     }
+//     if (!buffer_uptodate(bh) && !buffer_delay(bh) && !buffer_unwritten(bh) && (block_start < from || block_end > to)) {
+//       bsfs_read_bh_lock(bh, 0, false);
+//       wait[nr_wait++] = bh;
+//     }
+//   }
+//   /*
+//    * If we issued read requests, let them complete.
+//    */
+//   for (i = 0; i < nr_wait; i++) {
+//     wait_on_buffer(wait[i]);
+//     if (!buffer_uptodate(wait[i]))
+//       err = -EIO;
+//   }
+//
+//   if (unlikely(err)) {
+//     folio_zero_new_buffers(folio, from, to);
+//   }
+//
+//   return err;
+// }
 
 // TODO: mark buffers dirty?
 // TODO: locking?
@@ -393,7 +399,9 @@ void bsfs_truncate(struct inode *inode) {
     __u32 k;
   } krec;
 
-  krec   keys[1024];
+  // TODO: large stack/frame size
+  // krec   keys[1024];
+  krec   keys[256];
   size_t kcount = 0;
   // simple DFS stack of node blocks
   __u32 stack[128];
@@ -443,7 +451,7 @@ void bsfs_truncate(struct inode *inode) {
 }
 
 // old read_inode() on btree.c
-struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
+static struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
   int ret;
 
   struct bsfs_super_info     *sbi = sb->s_fs_info;
@@ -477,7 +485,7 @@ struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
   return out;
 }
 
-struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
+static struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
 
   disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
@@ -485,14 +493,14 @@ struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   if (!disk_inode)
     return NULL;
 
-  disk_inode->inode->mode   = inode->i_mode;
-  disk_inode->inode->uid    = fs_high2lowuid(i_uid_read(inode));
-  disk_inode->inode->gid    = fs_high2lowgid(i_gid_read(inode));
-  disk_inode->inode->nlinks = inode->i_nlink;
-  disk_inode->inode->size   = inode->i_size;
-  disk_inode->inode->mtime  = inode_get_mtime_sec(inode);
-  disk_inode->inode->atime  = inode_get_atime_sec(inode);
-  disk_inode->inode->ctime  = inode_get_ctime_sec(inode);
+  disk_inode->inode->mode       = inode->i_mode;
+  disk_inode->inode->uid        = fs_high2lowuid(i_uid_read(inode));
+  disk_inode->inode->gid        = fs_high2lowgid(i_gid_read(inode));
+  disk_inode->inode->nlinks     = inode->i_nlink;
+  disk_inode->inode->size       = inode->i_size;
+  disk_inode->inode->mtime      = inode_get_mtime_sec(inode);
+  disk_inode->inode->atime      = inode_get_atime_sec(inode);
+  disk_inode->inode->ctime      = inode_get_ctime_sec(inode);
   disk_inode->inode->btree_root = bsfs_i(inode)->btree_root;
 
   // TODO: make it work with special files
@@ -585,7 +593,7 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
   return __set_up_inode_new(inode);
 }
 
-static struct inode *bsfs_alloc_inode(struct super_block *sb) {
+struct inode *bsfs_alloc_inode(struct super_block *sb) {
   struct bsfs_inode *bsfs_inode;
 
   bsfs_inode = alloc_inode_sb(sb, bsfs_inode_cache, GFP_KERNEL);

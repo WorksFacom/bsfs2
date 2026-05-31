@@ -112,7 +112,8 @@ struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **
  * @param out Output parameter to receive the matching entry on success.
  * @return 1 if found; 0 otherwise.
  */
-// int scan_dir_tree_find(FILE *disk, btree_handle_t *handle, uint32_t node_block, const char *name, dir_entry_t *out);
+int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const char *name, struct bsfs_dentry **output,
+                         struct btree_node **out_node);
 
 int bsfs_add_link(struct dentry *dentry, struct inode *inode);
 

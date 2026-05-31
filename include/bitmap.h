@@ -84,7 +84,18 @@ int write_bitmap(struct super_block *sb, __u8 *bitmap, __u32 bitmap_start_block)
  * @param index The index of the block to check.
  * @return 1 if the block is free, 0 if the block is occupied.
  */
-static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index);
+// TODO: are these 3 functions below working??
+static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  __u32 byte_index = index >> 3;
+  __u32 block      = byte_index / BITMAP_BLOCK_BYTES;
+  __u32 byte       = byte_index % BITMAP_BLOCK_BYTES;
+  __u8  mask       = (__u8)(1U << (index & 7));
+  __u8 *bits       = sbi->bitmap[block];
+
+  return (bits[byte] & mask) == 0;
+}
 
 /**
  * @brief Marks a block as allocated in the bitmap.
@@ -95,7 +106,20 @@ static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as allocated.
  */
-static inline void bsfs_set_bit(struct super_block *sb, __u32 index);
+static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
+  // TODO: #define ext4_test_and_set_bit		__test_and_set_bit_le
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  __u32 byte_index = index >> 3;
+  __u32 block      = byte_index / BITMAP_BLOCK_BYTES;
+  __u32 byte       = byte_index % BITMAP_BLOCK_BYTES;
+  __u8  mask       = (__u8)(1U << (index & 7));
+  __u8 *bits       = sbi->bitmap[block];
+
+  bits[byte] |= mask;
+
+  mark_buffer_dirty(sbi->bitmap_map[block]);
+}
 
 /**
  * @brief Marks a block as free in the bitmap.
@@ -106,6 +130,17 @@ static inline void bsfs_set_bit(struct super_block *sb, __u32 index);
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as free.
  */
-static inline void bsfs_clear_bit(struct super_block *sb, __u32 index);
+static inline void bsfs_clear_bit(struct super_block *sb, __u32 index) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
+  __u32 byte_index = index >> 3;
+  __u32 block      = byte_index / BITMAP_BLOCK_BYTES;
+  __u32 byte       = byte_index % BITMAP_BLOCK_BYTES;
+  __u8  mask       = (__u8)(1U << (index & 7));
+  __u8 *bits       = sbi->bitmap[block];
+
+  bits[byte] &= (__u8)~mask;
+
+  mark_buffer_dirty(sbi->bitmap_map[block]);
+}
 #endif // BITMAP_OPERATIONS

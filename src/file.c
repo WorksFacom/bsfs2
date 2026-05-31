@@ -8,3 +8,15 @@
  * structures which manage stateful access.
  */
 #include "../include/file.h"
+
+const struct file_operations bsfs_file_operations = {
+
+};
+
+const struct inode_operations bsfs_file_inode_operations = {
+
+};
+
+const struct inode_operations bsfs_symlink_inode_operations = {
+
+};

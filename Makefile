@@ -7,10 +7,10 @@ bsfs2-src-objs := \
 	dirent.o \
 	file.o \
 	inode.o \
-	rec_entry.o \
-	rec_gc.o \
-	remove_file.o \
-	restore_file.o
+	# rec_entry.o \
+	# rec_gc.o
+	# remove_file.o \
+	# restore_file.o
 
 obj-m += bsfs2.o
 

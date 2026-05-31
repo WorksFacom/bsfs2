@@ -31,6 +31,6 @@
  * @param now           Current timestamp used for retention checks.
  * @return Number of blocks actually freed (can be less than requested).
  */
-size_t rec_gc_purge_until(struct super_block *sb, uint32_t needed_blocks, uint64_t now);
+// size_t rec_gc_purge_until(struct super_block *sb, uint32_t needed_blocks, uint64_t now);
 
 #endif /* REC_GC_BSFS_H */

@@ -8,7 +8,7 @@
  */
 #include "../include/alloc.h"
 #include "../include/btree.h"
-#include "../include/dentry.h"
+#include "../include/dirent.h"
 #include "../include/inode.h"
 
 // int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename) {
