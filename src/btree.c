@@ -252,45 +252,50 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
 
-// TODO: update to kernel semantics
-// int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
-//   if (!handle || handle->root_block == 0)
-//     return 0;
-//   uint32_t node_block = handle->root_block;
-//   bspan_t  best       = {0};
-//   int      have       = 0;
-//
-//   while (node_block) {
-//     btree_node_t *node = btree_read_node(disk, handle, node_block);
-//     if (!node)
-//       break;
-//     uint8_t *entries = node->entries;
-//     uint32_t i       = 0;
-//     // find first entry with key >= target
-//     while (i < node->num_entries) {
-//       uint32_t ekey = handle->get_key(entries + i * handle->entry_size);
-//       if (ekey > key)
-//         break;
-//       // this entry is <= key; candidate predecessor
-//       memcpy(&best, entries + i * handle->entry_size, sizeof(best));
-//       have = 1;
-//       i++;
-//     }
-//     if (node->is_leaf) {
-//       btree_free_node(node);
-//       break;
-//     }
-//     // descend to child i
-//     uint32_t child = node->children[i];
-//     btree_free_node(node);
-//     node_block = child;
-//   }
-//   if (have) {
-//     *out = best;
-//     return 1;
-//   }
-//   return 0;
-// }
+int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
+  int                have = 0;
+  struct btree_node *node;
+  bspan_t            best = {0};
+
+  if (!handle || handle->root_block == 0)
+    return 0;
+
+  __u32 node_block = handle->root_block;
+  while (node_block) {
+    if (btree_read_node(sb, node_block, &node) != 0)
+      break;
+
+    __u8 *entries = bentries(node);
+
+    __u32 i = 0;
+    while (i < node->node->num_entries) {
+      __u32 ekey = handle->get_key(entries + i * handle->entry_size);
+
+      if (ekey > key)
+        break;
+
+      memcpy(&best, entries + i * handle->entry_size, sizeof(best));
+      have = 1;
+      i++;
+    }
+
+    if (node->node->is_leaf) {
+      btree_free_node(node);
+      break;
+    }
+
+    __u32 child = bchildren(node, handle)[i];
+    btree_free_node(node);
+    node_block = child;
+  }
+
+  if (have) {
+    *out = best;
+    return 1;
+  }
+
+  return 0;
+}
 
 void btree_clear_node(struct super_block *sb, struct btree_node *node) {
   memset(node->bh->b_data, 0, sb->s_blocksize);

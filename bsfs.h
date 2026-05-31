@@ -50,6 +50,9 @@ struct bsfs_super_info {
   __u8               **bitmap;
   struct buffer_head **bitmap_map;
   __u32                next_inode_number;
+  struct mutex         rec_lock;
+  __u32                next_recovery_id;
+  __u32                cached_recovery_root;
 };
 
 static inline struct bsfs_super_info *bsfs_sb(struct super_block *sb) {

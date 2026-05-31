@@ -96,13 +96,15 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino);
 
 struct inode *bsfs_alloc_inode(struct super_block *sb);
 
+struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino);
+
 void bsfs_truncate(struct inode *inode);
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc);
 
 struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode);
 
-void bsfs_free_inode(struct inode *inode);
+void bsfs_free_cache_inode(struct inode *inode);
 
 void bsfs_evict_inode(struct inode *inode);
 

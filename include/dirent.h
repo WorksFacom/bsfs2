@@ -41,7 +41,7 @@
  * @return 0 on success, -1 if an entry with the same name already exists or on
  *         write error.
  */
-// int add_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, dir_entry_t *entry);
+int bsfs_add_link(struct dentry *dentry, struct inode *inode);
 
 /**
  * @brief Removes an entry from a directory by name.
@@ -54,7 +54,7 @@
  * @param filename Name of the entry to remove.
  * @return 0 on success, -1 if the entry was not found or on write error.
  */
-// int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename);
+int bsfs_remove_link(struct dentry *dentry);
 
 /**
  * @brief Updates an existing directory entry in the B-tree.
@@ -114,7 +114,5 @@ struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **
  */
 int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const char *name, struct bsfs_dentry **output,
                          struct btree_node **out_node);
-
-int bsfs_add_link(struct dentry *dentry, struct inode *inode);
 
 #endif // !DIRECTORY_OPERATIONS

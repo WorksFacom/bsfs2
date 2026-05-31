@@ -15,12 +15,7 @@
 #ifndef REC_ENTRY_OPERATIONS_BSFS_H
 #define REC_ENTRY_OPERATIONS_BSFS_H
 
-#include <stdint.h>
-#include <stdio.h>
-
-#include "btree.h"
-#include "bsfs.h"
-#include "super.h"
+#include "../bsfs.h"
 
 /**
  * @brief Initialize (or load) the Recovery B-tree handle.
@@ -35,7 +30,7 @@
  * @param out  Output: initialized B-tree handle for the recovery tree.
  * @return 1 on success, 0 on failure.
  */
-int rec_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
+void bsfs_rec_tree_init(struct super_block *sb);
 
 /**
  * @brief Insert a recovery entry into the Recovery B-tree.
@@ -58,7 +53,8 @@ int rec_tree_init(FILE *disk, bsfs_super_block *sb, btree_handle_t *out);
  *                  will be set to a fresh ID before insertion.
  * @return 1 on success; 0 on failure (I/O error or duplicate key).
  */
-int rec_tree_add(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, rec_entry_t *entry);
+int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entry_t *entry);
+
 /**
  * @brief Fetch the next available recovery_id in the Recovery tree.
  *
@@ -70,7 +66,7 @@ int rec_tree_add(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, rec
  * @param rec_tree  Recovery B-tree handle used for traversals.
  * @return Next unused recovery_id.
  */
-uint32_t get_next_rec_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree);
+// static __u32 get_next_rec_id(struct super_block *sb, btree_handle_t *rec_tree);
 
 /**
  * @brief Remove a recovery entry from the Recovery B-tree by ID.
@@ -97,7 +93,7 @@ uint32_t get_next_rec_id(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_t
  * @param recovery_id Unique identifier of the recovery entry to remove.
  * @return 1 if the entry was found and removed; 0 otherwise.
  */
-int rec_tree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, uint32_t recovery_id);
+int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32 recovery_id);
 
 /**
  * @brief Look up a recovery entry in the Recovery B-tree by ID.
@@ -119,7 +115,8 @@ int rec_tree_remove(FILE *disk, bsfs_super_block *sb, btree_handle_t *rec_tree, 
  * non-NULL).
  * @return 1 if found; 0 if not found or on invalid arguments.
  */
-int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id, rec_entry_t *out_entry);
+// TODO: implement
+// int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id, rec_entry_t *out_entry);
 
 /**
  * @brief Find recovery entries by original filename.
@@ -141,7 +138,8 @@ int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id, 
  * @return 1 on success (including zero matches), 0 on invalid args or I/O
  *         failure while traversing.
  */
-int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree, const char *name, rec_entry_t *out, size_t max, size_t *out_count);
+// TODO: implement? is this still needed?
+// int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree, const char *name, rec_entry_t *out, size_t max, size_t *out_count);
 
 /**
  * @brief Permanently purge a deleted file from the filesystem.
@@ -161,6 +159,7 @@ int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree, const char *name
  * @param rec       The recovery entry describing the file to purge.
  * @return 0 on success; -1 on error.
  */
-int purge_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *data_tree, btree_handle_t *rec_tree, const rec_entry_t *rec);
+// TODO: implement? is this still needed?
+// int purge_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *data_tree, btree_handle_t *rec_tree, const rec_entry_t *rec);
 
 #endif /* REC_ENTRY_OPERATIONS_BSFS_H */

@@ -237,8 +237,8 @@ static void bsfs_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags, bh_e
   __bsfs_read_bh(bh, op_flags, end_io);
 }
 
-static int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) { 
-  BUG_ON(!buffer_locked(bh)); 
+static int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
+  BUG_ON(!buffer_locked(bh));
 
   if (bsfs_buffer_uptodate(bh)) {
     unlock_buffer(bh);
@@ -451,7 +451,7 @@ void bsfs_truncate(struct inode *inode) {
 }
 
 // old read_inode() on btree.c
-static struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t ino) {
+struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino) {
   int ret;
 
   struct bsfs_super_info     *sbi = sb->s_fs_info;
@@ -472,12 +472,12 @@ static struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t
   //   return NULL;
   // }
 
-  struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
-
   // free btree_node without releasing buffer
   // buffer will be brelsed later
   struct buffer_head *bh = node->bh;
   kfree(node);
+
+  struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
   out->inode = inode;
   out->bh    = bh;
@@ -488,7 +488,7 @@ static struct disk_mapped_inode *__read_disk_inode(struct super_block *sb, ino_t
 static struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
 
-  disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
+  disk_inode = bsfs_read_disk_inode(inode->i_sb, inode->i_ino);
 
   if (!disk_inode)
     return NULL;
@@ -535,7 +535,7 @@ void bsfs_set_inode(struct inode *inode, dev_t rdev) {
 static struct inode *__set_up_inode_new(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
 
-  disk_inode = __read_disk_inode(inode->i_sb, inode->i_ino);
+  disk_inode = bsfs_read_disk_inode(inode->i_sb, inode->i_ino);
 
   struct bsfs_inode *bsfs_inode = bsfs_i(inode);
 
@@ -691,24 +691,37 @@ err_iput:
   return ERR_PTR(err);
 }
 
-void bsfs_free_inode(struct inode *inode) {
+void bsfs_free_cache_inode(struct inode *inode) {
   kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
 }
 
+// TODO: add rationale
+// TODO: is this correct?
 void bsfs_evict_inode(struct inode *inode) {
   truncate_inode_pages_final(&inode->i_data);
 
   if (!inode->i_nlink) {
-    inode->i_size = 0;
-    bsfs_truncate(inode);
+    // other FS would do inode->i_size = 0 then truncate(inode)
+    // we don't do that here since we'll add a rec entry and need the data to
+    // still be on-disk
+    struct super_block     *sb  = inode->i_sb;
+    struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+    btree_handle_t *inode_h = btree_create_inode_handle();
+
+    if (inode_h) {
+      invalidate_inode_buffers(inode);
+      clear_inode(inode);
+
+      inode_h->root_block = sbi->super->inode_root;
+      btree_remove(sb, inode_h, inode->i_ino);
+      if (sbi->super->inode_root != inode_h->root_block) {
+        sbi->super->inode_root = inode_h->root_block;
+        mark_buffer_dirty(sbi->bh);
+      }
+      kfree(inode_h);
+    }
   }
-
-  invalidate_inode_buffers(inode);
-
-  clear_inode(inode);
-
-  if (!inode->i_nlink)
-    bsfs_free_inode(inode);
 }
 
 static void init_once(void *foo) {

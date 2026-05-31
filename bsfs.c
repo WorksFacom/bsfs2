@@ -4,6 +4,7 @@
 #include "include/dir.h"
 #include "include/file.h"
 #include "include/inode.h"
+#include "include/rec_entry.h"
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/highuid.h>
@@ -18,7 +19,7 @@
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
-    .free_inode  = bsfs_free_inode,
+    .free_inode  = bsfs_free_cache_inode,
     .evict_inode = bsfs_evict_inode,
     // .put_super	= bsfs_put_super,
     // .statfs		= bsfs_statfs,
@@ -63,6 +64,8 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   // Allocate bitmap to keep the superblock small
   load_bitmap(s);
+
+  bsfs_rec_tree_init(s);
 
   // TODO
   // __set_bit(0, sbi->s_imap[0]->b_data);

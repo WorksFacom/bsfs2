@@ -10,7 +10,9 @@
 #include "../include/dir.h"
 #include "../bsfs.h"
 #include "../include/btree.h"
+#include "../include/dirent.h"
 #include "../include/inode.h"
+#include "../include/rec_entry.h"
 
 // TODO: .mkdir
 // int create_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd) {
@@ -279,29 +281,86 @@ static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry
   return bsfs_mknod(&nop_mnt_idmap, dir, dentry, mode, 0);
 }
 
-// static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
-//   struct inode           *inode = d_inode(dentry);
-//   struct folio           *folio;
-//   struct minix_dir_entry *de;
-//   int                     err;
-//
-//   de = minix_find_entry(dentry, &folio);
-//   if (!de)
-//     return -ENOENT;
-//   err = minix_delete_entry(de, folio);
-//   folio_release_kmap(folio, de);
-//
-//   if (err)
-//     return err;
-//   inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
-//   inode_dec_link_count(inode);
-//   return 0;
-// }
+// TODO: this is probably wrong
+// recovery entry should be added when file is deleted (i_nlink == 0)
+// move to bsfs_evict_inode ?
+static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
+  int err = 0;
+
+  struct super_block     *sb  = dir->i_sb;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  struct inode             *inode = d_inode(dentry);
+  struct disk_mapped_inode *disk_inode;
+  btree_handle_t           *rec_tree;
+  rec_entry_t               rec = {0};
+
+  if (S_ISDIR(inode->i_mode))
+    return -EISDIR;
+
+  disk_inode = bsfs_read_disk_inode(sb, inode->i_ino);
+
+  if (!disk_inode)
+    return -EIO;
+
+  // id will be added when inserting into tree
+  rec.recovery_id         = 0;
+  rec.deleted_at          = ktime_get_real_seconds();
+  rec.original_parent_ino = dir->i_ino;
+  strncpy(rec.original_name, dentry->d_name.name, sizeof(rec.original_name) - 1);
+  rec.original_name[sizeof(rec.original_name) - 1] = '\0';
+
+  rec.inode_number = inode->i_ino;
+  rec.file_type    = S_ISDIR(inode->i_mode) ? 0 : 1;
+  rec.uid          = disk_inode->inode->uid;
+  rec.gid          = disk_inode->inode->gid;
+  rec.permissions  = disk_inode->inode->mode;
+  rec.file_size    = disk_inode->inode->size;
+  rec.block_count  = disk_inode->inode->block_count;
+  memcpy(rec.direct_blocks, disk_inode->inode->direct_blocks, sizeof(rec.direct_blocks));
+  rec.btree_root      = disk_inode->inode->btree_root;
+  rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
+
+  brelse(disk_inode->bh);
+  kfree(disk_inode);
+
+  rec_tree = btree_create_rec_entry_handle();
+
+  if (!rec_tree)
+    return -ENOMEM;
+
+  rec_tree->root_block = sbi->super->recovery_root;
+
+  mutex_lock(&sbi->rec_lock);
+
+  err = bsfs_rec_tree_add(sb, rec_tree, &rec);
+  if (err)
+    goto out_unlock;
+
+  err = bsfs_remove_link(dentry);
+  if (err) {
+    bsfs_rec_tree_remove(sb, rec_tree, rec.recovery_id);
+    goto out_unlock;
+  }
+
+  inode_dec_link_count(inode);
+
+out_unlock:
+  if (sbi->super->recovery_root != rec_tree->root_block) {
+    sbi->super->recovery_root = rec_tree->root_block;
+    mark_buffer_dirty(sbi->bh);
+    sbi->cached_recovery_root = rec_tree->root_block;
+  }
+  mutex_unlock(&sbi->rec_lock);
+  kfree(rec_tree);
+
+  return err;
+}
 
 const struct inode_operations bsfs_dir_inode_operations = {
     .lookup = bsfs_lookup,
     .create = bsfs_create,
-    // .unlink = bsfs_unlink,
+    .unlink = bsfs_unlink,
     // .link		= bsfs_link,
     // .symlink	= bsfs_symlink,
     // .mkdir		= bsfs_mkdir,

@@ -6,46 +6,8 @@
  * operations for creating, removing, updating, looking up, and iterating
  * directory entries backed by a B-tree stored in the filesystem image.
  */
-#include "../include/alloc.h"
-#include "../include/btree.h"
 #include "../include/dirent.h"
-#include "../include/inode.h"
-
-// int remove_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, const char *filename) {
-//   btree_handle_t *handle = btree_create_dir_entry_handle();
-//   handle->root_block     = dir->inode.btree_root;
-//
-//   // Locate the exact entry by name first
-//   dir_entry_t found;
-//   int         present = scan_dir_tree_find(disk, handle, handle->root_block, filename, &found);
-//   if (!present) {
-//     free(handle);
-//     return -1;
-//   }
-//
-//   // Remove the exact entry using comparator-based B-tree deletion
-//   dir_entry_t needle;
-//   memset(&needle, 0, sizeof(needle));
-//   strncpy(needle.filename, filename, MAX_FILENAME - 1);
-//   needle.filename[MAX_FILENAME - 1] = '\0';
-//   uint32_t before_root              = handle->root_block;
-//   int      ok                       = btree_remove_entry(disk, sb, handle, &needle);
-//   if (!ok) {
-//     free(handle);
-//     return -1;
-//   }
-//   // Persist possible root change in the directory inode
-//   if (handle->root_block != before_root) {
-//     dir->inode.btree_root   = handle->root_block;
-//     btree_handle_t *inode_h = btree_create_inode_handle();
-//     inode_h->root_block     = sb->inode_root;
-//     (void)update_inode(disk, inode_h, &dir->inode);
-//     free(inode_h);
-//   }
-//
-//   free(handle);
-//   return 0;
-// }
+#include "../include/btree.h"
 
 // TODO: review - is this working?
 int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const char *name, struct bsfs_dentry **output,
@@ -251,6 +213,48 @@ int bsfs_add_link(struct dentry *dentry, struct inode *inode) {
   mark_inode_dirty(dir);
 
 out:
+  kfree(handle);
+  return err;
+}
+
+int bsfs_remove_link(struct dentry *dentry) {
+  struct inode       *dir    = d_inode(dentry->d_parent);
+  struct super_block *sb     = dir->i_sb;
+  btree_handle_t     *handle = NULL;
+  struct btree_node  *node   = NULL;
+  struct bsfs_dentry *dirent = NULL;
+  int                 err    = 0;
+
+  dirent = lookup_dir_entry(dentry, &node);
+
+  if (!dirent) {
+    err = -ENOENT;
+    goto out;
+  }
+
+  handle = btree_create_dir_entry_handle();
+
+  if (!handle) {
+    err = -ENOMEM;
+    goto out;
+  }
+
+  handle->root_block = bsfs_i(dir)->btree_root;
+
+  if (!btree_remove_entry(sb, handle, dirent)) {
+    err = -EIO;
+    goto out;
+  }
+
+  if (handle->root_block != bsfs_i(dir)->btree_root)
+    bsfs_i(dir)->btree_root = handle->root_block;
+
+  inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+  mark_inode_dirty(dir);
+
+out:
+  if (node)
+    btree_free_node(node);
   kfree(handle);
   return err;
 }
