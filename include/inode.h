@@ -112,4 +112,6 @@ int __init init_inodecache(void);
 
 void destroy_inodecache(void);
 
+int bsfs_get_block(struct inode *inode, sector_t block, struct buffer_head *bh, int create);
+
 #endif // INODE_OPERATIONS_H

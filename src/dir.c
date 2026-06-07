@@ -310,14 +310,13 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
   strncpy(rec.original_name, dentry->d_name.name, sizeof(rec.original_name) - 1);
   rec.original_name[sizeof(rec.original_name) - 1] = '\0';
 
-  rec.inode_number = inode->i_ino;
-  rec.file_type    = S_ISDIR(inode->i_mode) ? 0 : 1;
-  rec.uid          = disk_inode->inode->uid;
-  rec.gid          = disk_inode->inode->gid;
-  rec.permissions  = disk_inode->inode->mode;
-  rec.file_size    = disk_inode->inode->size;
-  rec.block_count  = disk_inode->inode->block_count;
-  memcpy(rec.direct_blocks, disk_inode->inode->direct_blocks, sizeof(rec.direct_blocks));
+  rec.inode_number    = inode->i_ino;
+  rec.file_type       = S_ISDIR(inode->i_mode) ? 0 : 1;
+  rec.uid             = disk_inode->inode->uid;
+  rec.gid             = disk_inode->inode->gid;
+  rec.permissions     = disk_inode->inode->mode;
+  rec.file_size       = disk_inode->inode->size;
+  rec.block_count     = disk_inode->inode->block_count;
   rec.btree_root      = disk_inode->inode->btree_root;
   rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
 

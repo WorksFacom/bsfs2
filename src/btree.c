@@ -252,6 +252,7 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
 
+// walks the btree to find the bspan with the greatest file_blk <= key
 int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
   int                have = 0;
   struct btree_node *node;

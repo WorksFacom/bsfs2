@@ -84,7 +84,6 @@ struct disk_mapped_inode_t {
   __u32 atime;
   __u32 mtime;
   __u32 ctime;
-  __u32 direct_blocks[48]; // 16 * bspan_t
   __u32 btree_root;
   __u8  pad[34];
 };
@@ -95,7 +94,6 @@ struct disk_mapped_inode {
 };
 
 struct bsfs_inode {
-  // bspan_t      direct_blocks[16];
   __u32 btree_root;
   // add fields as needed;
 
@@ -118,7 +116,6 @@ typedef struct {
   __u16   permissions;
   __u32   file_size;
   __u32   block_count;
-  bspan_t direct_blocks[16];
   __u32   btree_root;
   __u64   retention_until;
 } rec_entry_t;
@@ -154,7 +151,5 @@ struct btree_node {
   struct btree_node_t *node; // TODO: remove. Use helper instead: btree_bh_get_node(buffer_head *bh) { return (btree_node_t *)bh->b_data; }
   struct buffer_head  *bh;
 };
-
-int bsfs_get_block(struct inode *inode, sector_t block, struct buffer_head *bh, int create);
 
 #endif // FILESYSTEM_BSFS

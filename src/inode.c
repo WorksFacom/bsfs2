@@ -2,13 +2,10 @@
 #include "../include/btree.h"
 #include "../include/dir.h"
 #include "../include/file.h"
+#include <linux/mpage.h>
 #include <linux/writeback.h>
 
 static struct kmem_cache *bsfs_inode_cache;
-
-const struct address_space_operations bsfs_aops = {
-
-};
 
 // TODO: is this working?
 static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
@@ -746,3 +743,159 @@ void destroy_inodecache(void) {
   rcu_barrier();
   kmem_cache_destroy(bsfs_inode_cache);
 }
+
+int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
+  int found = 0;
+  int ret   = 0;
+
+  struct super_block *sb = inode->i_sb;
+
+  struct bsfs_inode *bsfs_inode = bsfs_i(inode);
+
+  btree_handle_t *bspan_h;
+  bspan_t         span;
+
+  bspan_h = btree_create_bspan_handle();
+
+  if (!bspan_h)
+    return -ENOMEM;
+
+  bspan_h->root_block = bsfs_inode->btree_root;
+
+  found = bspan_search_le(sb, bspan_h, iblock, &span);
+  if (found && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
+    map_bh(bh, sb, span.disk_blk + (iblock - span.file_blk));
+    goto out;
+  }
+
+  if (!create)
+    goto out;
+
+  // falling through to the allocation path, since nothing was inserted into the bspan tree during write_begin (deliberately)
+  // alloc physical block, insert new bspan extent, map_bh then overwrites the dummy b_blocknr=0 with the real disk blocknr
+
+  __u32 phys_block = allocate_single_block(sb);
+
+  if (phys_block == INVALID_BLOCK) {
+    ret = -ENOSPC;
+    goto out;
+  }
+
+  //  try to extend predecessor span if physically contiguous
+  if (found && iblock == span.file_blk + span.length && span.disk_blk + span.length == phys_block) {
+    span.length++;
+    if (!btree_update(sb, bspan_h, bspan_h->root_block, &span)) {
+      deallocate_single_block(sb, phys_block);
+      ret = -EIO;
+      goto out;
+    }
+  } else {
+    bspan_t new_span = {
+        .file_blk = iblock,
+        .disk_blk = phys_block,
+        .length   = 1,
+    };
+
+    if (btree_insert(sb, bspan_h, &new_span) != 0) {
+      deallocate_single_block(sb, phys_block);
+      ret = -ENOSPC;
+      goto out;
+    }
+  }
+
+  if (bsfs_inode->btree_root != bspan_h->root_block) {
+    bsfs_inode->btree_root = bspan_h->root_block;
+    mark_inode_dirty(inode);
+  }
+
+  map_bh(bh, sb, phys_block);
+  set_buffer_new(bh);
+
+out:
+  kfree(bspan_h);
+  return ret;
+}
+
+static int bsfs_read_folio(struct file *file, struct folio *folio) {
+  return block_read_full_folio(folio, bsfs_get_block);
+}
+
+// marks holes as buffer_delay without physical allocation
+// real allocation happens during writepages
+static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
+  int found;
+
+  struct super_block *sb = inode->i_sb;
+
+  struct bsfs_inode *bsfs_inode = bsfs_i(inode);
+  bspan_t            span;
+
+  btree_handle_t *bspan_h = btree_create_bspan_handle();
+  if (!bspan_h) {
+    return -ENOMEM;
+  }
+
+  bspan_h->root_block = bsfs_inode->btree_root;
+
+  found = bspan_search_le(sb, bspan_h, iblock, &span);
+
+  // explicit bounds check
+  // bspan_search_le should be correct but we're being defensive
+  if (found && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
+    map_bh(bh, sb, span.disk_blk + (iblock - span.file_blk));
+    goto out;
+  }
+
+  // should never happen!
+  if (!create)
+    goto out;
+
+  // hole: mark as delayed allocation, no physical block assigned yet
+  map_bh(bh, sb, 0);
+  set_buffer_new(bh);
+  set_buffer_delay(bh);
+
+out:
+  kfree(bspan_h);
+  return 0;
+}
+
+static void bsfs_write_failed(struct address_space *mapping, loff_t to) {
+  struct inode *inode = mapping->host;
+
+  if (to > inode->i_size) {
+    truncate_pagecache(inode, inode->i_size);
+    bsfs_truncate(inode);
+  }
+}
+
+static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop,
+                            void **fsdata) {
+  int ret;
+
+  ret = block_write_begin(mapping, pos, len, foliop, bsfs_get_block_delalloc);
+
+  if (unlikely(ret))
+    bsfs_write_failed(mapping, pos + len);
+
+  return ret;
+}
+
+static int bsfs_writepages(struct address_space *mapping, struct writeback_control *wbc) {
+  return mpage_writepages(mapping, wbc, bsfs_get_block);
+}
+
+static sector_t bsfs_bmap(struct address_space *mapping, sector_t block) {
+  return generic_block_bmap(mapping, block, bsfs_get_block);
+}
+
+const struct address_space_operations bsfs_aops = {
+    .write_begin      = bsfs_write_begin,
+    .write_end        = generic_write_end,
+    .writepages       = bsfs_writepages,
+    .read_folio       = bsfs_read_folio,
+    .dirty_folio      = block_dirty_folio,
+    .invalidate_folio = block_invalidate_folio,
+    .migrate_folio    = buffer_migrate_folio,
+    .bmap             = bsfs_bmap,
+};

@@ -58,7 +58,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   s->s_magic = bsfs_super->magic_number;
 
   // check exact data location - magic_number is first member
-  if (*(__u32 *)(bh->b_data) == MAGIC_NUMBER) {
+  if (*(__u32 *)(bh->b_data) != MAGIC_NUMBER) {
     goto out_no_fs;
   }
 
