@@ -6,6 +6,7 @@ from core.registry import list_strategies
 
 from .avl import BitmapAVL
 from .avl_range import BitmapAVLRange
+from .avl_range_extent import BitmapAVLRangeExtent
 from .rbtree import BitmapRB
 from .heap import BitmapHeap
 from .btree import BitmapBTree
@@ -28,6 +29,7 @@ def get_strategy_specs():
         "needle",
         "avl",
         "avl_range",
+        "avl_range_extent",
         "rb",
         "heap",
         "btree",
@@ -47,6 +49,7 @@ __all__ = [
     'get_strategy_specs',
     'BitmapAVL',
     'BitmapAVLRange',
+    'BitmapAVLRangeExtent',
     'BitmapRB',
     'BitmapHeap',
     'BitmapBTree',
