@@ -22,12 +22,11 @@ SRC_FILES = $(shell find src -type f -name '*.c')
 
 MKFS = mkfs.bsfs
 
-# all: $(MKFS)
-all:
+all: $(MKFS)
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 $(MKFS): tools/mkfs.c
-	$(CC) -Wall -o $@ $< -Isrc/include $(SRC_FILES)
+	$(CC) -Wall -o $@ $<
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean

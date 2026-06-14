@@ -1,138 +1,128 @@
-/**
- * @file mkfs_bsfs.c
- * @brief Formatter utility for the BSFS filesystem image.
- *
- * Formats a regular file (e.g., created with `dd`) into a BSFS filesystem
- * image. The on-disk layout initialized by this tool is:
- *
- * - Block 0: Superblock
- * - Blocks [1 .. 1 + block_bitmap_total - 1]: Linked list of bitmap blocks
- * - Blocks [data_block_start .. total_blocks - 1]: Data and B-tree regions
- *
- * The formatter writes and persists the superblock, initializes the block
- * bitmap linked list, reserves metadata blocks in the bitmap, initializes the
- * inode B-tree (persisting its root in the superblock if created), creates a
- * fresh directory B-tree for the filesystem root, inserts "." and ".." entries,
- * and finally persists the root inode into the inode B-tree.
- *
- * Usage: `mkfs.bsfs &lt;partition_file&gt;`
- */
-
+#include "../include/bsfs_shared.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-#include <unistd.h>
-
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
-#include <linux/fs.h>
-
-// linux/fs.h defines BLOCK_SIZE as 1024; ensure our filesystem's BLOCK_SIZE
-// prevails
-#ifdef BLOCK_SIZE
-#undef BLOCK_SIZE
+#ifndef BLKGETSIZE64
+#define BLKGETSIZE64 _IOR(0x12, 114, uint64_t)
 #endif
 
-#include "../include/bitmap.h"
-#include "../include/bsfs.h"
-#include "../include/btree.h"
-#include "../include/inode.h"
-#include "../include/mkfs.h"
-#include "../include/super.h"
+#define BSFS_BLOCK_SIZE 4096
+#define MAGIC_NUMBER 0x53465342
+#define MAX_FILENAME 255
+#define INVALID_BLOCK 0xFFFFFFFF
+#define BITMAP_BLOCK_BYTES (BSFS_BLOCK_SIZE - 4)
+#define BITS_PER_BLOCK (BITMAP_BLOCK_BYTES * 8)
+#define BSFS_ROOT_INO 1
 
-/**
- * @brief Print a formatted error message to stderr.
- *
- * Utility used for concise error reporting within this module.
- *
- * @param msg Null-terminated error message to display.
- */
+// S_IFDIR from stat.h
+// use numeric to avoid macro-name conflict
+#define BSFS_MODE_DIR 0040000
+
+typedef struct {
+  uint32_t magic_number;
+  uint32_t block_size;
+  uint64_t fs_size;
+  uint32_t total_blocks;
+  uint32_t block_bitmap_start;
+  uint32_t block_bitmap_total;
+  uint32_t inode_root;
+  uint32_t recovery_root;
+  uint32_t data_block_start;
+  uint32_t root_inode;
+} bsfs_super_block;
+
+typedef struct {
+  uint8_t  bits[BITMAP_BLOCK_BYTES];
+  uint32_t next_block;
+} bitmap_block_t;
+
+typedef struct {
+  uint32_t ino;
+  uint32_t size;
+  uint8_t  unused;
+  uint32_t block_count;
+  uint16_t uid;
+  uint16_t gid;
+  uint16_t mode;
+  uint16_t nlinks;
+  uint32_t atime;
+  uint32_t mtime;
+  uint32_t ctime;
+  uint32_t btree_root;
+  uint8_t  pad[34];
+} disk_mapped_inode_t;
+
+typedef struct {
+  uint32_t ino;
+  uint32_t name_hash;
+  char     filename[MAX_FILENAME];
+} bsfs_dentry;
+
+typedef struct {
+  uint32_t num_entries;
+  uint8_t  is_leaf;
+  uint8_t  data[BSFS_BLOCK_SIZE - 5];
+} btree_node_t;
+
 static void die(const char *msg) {
   fprintf(stderr, "mkfs.bsfs: %s\n", msg);
 }
 
-/**
- * @brief Compute the ceiling of a/b for 32-bit unsigned integers.
- *
- * @param a Numerator.
- * @param b Denominator (must be > 0).
- * @return The smallest integer value greater than or equal to a/b.
- */
 static uint64_t ceil_div_u64(uint64_t a, uint64_t b) {
   return (a + b - 1) / b;
 }
 
-/**
- * @brief Compute the number of bitmap blocks required for the filesystem.
- *
- * Each bitmap block stores BITMAP_BLOCK_BYTES*8 bits plus a 32-bit next pointer
- * (managed by init_bitmap_list). This computes how many bitmap blocks are
- * needed to track all blocks in the filesystem image.
- *
- * @param total_blocks Total number of blocks in the filesystem image.
- * @return Number of bitmap blocks (at least 1).
- */
+static uint32_t hash_filename(const char *name) {
+  uint32_t hash = 5381;
+  int      c;
+  while ((c = *name++))
+    hash = ((hash << 5) + hash) + (unsigned char)c;
+  return hash;
+}
+
+static int write_block(FILE *disk, uint32_t block_num, const void *data) {
+  if (fseek(disk, (off_t)block_num * BSFS_BLOCK_SIZE, SEEK_SET) != 0)
+    return -1;
+  if (fwrite(data, BSFS_BLOCK_SIZE, 1, disk) != 1)
+    return -1;
+  return 0;
+}
+
+static void bsfs_set_bit(uint8_t *bitmap, uint32_t index) {
+  bitmap[index >> 3] |= (uint8_t)(1U << (index & 7));
+}
+
 static uint32_t compute_bitmap_blocks(uint64_t total_blocks) {
-  const uint32_t bits_per_block = (uint32_t)(BITMAP_BLOCK_BYTES * 8u);
-  uint32_t       blocks         = (uint32_t)ceil_div_u64(total_blocks, bits_per_block);
+  uint32_t bits_per_block = BITS_PER_BLOCK;
+  uint32_t blocks         = (uint32_t)ceil_div_u64(total_blocks, bits_per_block);
   if (blocks == 0)
     blocks = 1;
   return blocks;
 }
 
-/**
- * @brief Mark metadata blocks (superblock and bitmap region) as allocated.
- *
- * Loads the bitmap, marks blocks [0 .. data_block_start-1] as in-use and
- * persists the updated bitmap back to disk.
- *
- * @param disk Open filesystem image.
- * @param sb   Pointer to an initialized superblock with bitmap positions.
- * @return 0 on success; -1 on failure to load or write the bitmap.
- */
-static int reserve_initial_blocks(FILE *disk, const bsfs_super_block *sb) {
-  // Mark as in-use: block 0 (superblock) and the whole bitmap region
-  uint8_t *bitmap = load_bitmap(disk, sb->block_bitmap_start);
-  if (!bitmap) {
-    fprintf(stderr, "mkfs.bsfs: failed to load block bitmap.\n");
-    return -1;
+static int init_bitmap_list(FILE *disk, uint32_t start_block, uint32_t num_blocks) {
+  for (uint32_t i = 0; i < num_blocks; i++) {
+    bitmap_block_t block;
+    memset(&block, 0, sizeof(block));
+    if (i < num_blocks - 1)
+      block.next_block = start_block + i + 1;
+    else
+      block.next_block = INVALID_BLOCK;
+    if (write_block(disk, start_block + i, &block) != 0) {
+      fprintf(stderr, "mkfs.bsfs: failed to write bitmap block %u\n", start_block + i);
+      return -1;
+    }
   }
-
-  uint32_t limit = sb->data_block_start; // metadata blocks
-  if (limit > sb->total_blocks)
-    limit = sb->total_blocks;
-
-  for (uint32_t i = 0; i < limit; i++) {
-    bsfs_set_bit(bitmap, i);
-  }
-
-  if (write_bitmap(disk, bitmap, sb->block_bitmap_start) != 0) {
-    fprintf(stderr, "mkfs.bsfs: failed to write block bitmap.\n");
-    free(bitmap);
-    return -1;
-  }
-  free(bitmap);
   return 0;
 }
 
-/**
- * @brief Format an already opened partition file as a BSFS filesystem.
- *
- * This function expects the file size to be a multiple of the block size
- * (4096 bytes). It computes the on-disk layout, writes the superblock,
- * initializes and persists the bitmap, ensures the inode B-tree exists,
- * creates the root directory entries ("." and ".."), and writes the root
- * inode into the inode B-tree. On success, the file is a valid BSFS image.
- *
- * @param disk Opened FILE* corresponding to the partition image (opened in
- *             read/write mode).
- * @return 0 on success; -1 on failure.
- */
 static int get_fs_size_bytes(FILE *disk, uint64_t *out_size) {
   if (!disk || !out_size)
     return -1;
@@ -157,19 +147,6 @@ static int get_fs_size_bytes(FILE *disk, uint64_t *out_size) {
   return -1;
 }
 
-/**
- * @brief Format an already opened partition file as a BSFS filesystem.
- *
- * This function expects the file size to be a multiple of the block size
- * (4096 bytes). It computes the on-disk layout, writes the superblock,
- * initializes and persists the bitmap, ensures the inode B-tree exists,
- * creates the root directory entries ("." and ".."), and writes the root
- * inode into the inode B-tree. On success, the file is a valid BSFS image.
- *
- * @param disk Opened FILE* corresponding to the partition image (opened in
- *             read/write mode).
- * @return 0 on success; -1 on failure.
- */
 int mkfs_bsfs_format_open(FILE *disk) {
   if (!disk)
     return -1;
@@ -183,124 +160,165 @@ int mkfs_bsfs_format_open(FILE *disk) {
     die("empty partition file (use dd to create a sized file)");
     return -1;
   }
-  if ((fsz % BLOCK_SIZE) != 0) {
-    uint64_t aligned = fsz - (fsz % BLOCK_SIZE);
-    if (aligned < (uint64_t)BLOCK_SIZE * 4) {
+  if ((fsz % BSFS_BLOCK_SIZE) != 0) {
+    uint64_t aligned = fsz - (fsz % BSFS_BLOCK_SIZE);
+    if (aligned < (uint64_t)BSFS_BLOCK_SIZE * 4) {
       die("file size is not a multiple of block size (4096)");
       return -1;
     }
-    fprintf(stderr, "mkfs.bsfs: warning: size not multiple of %u; truncating to %" PRIu64 " bytes\n", BLOCK_SIZE, aligned);
+    fprintf(stderr, "mkfs.bsfs: warning: size not multiple of %u; truncating to %" PRIu64 " bytes\n", BSFS_BLOCK_SIZE, aligned);
     fsz = aligned;
   }
 
   uint64_t fs_size      = fsz;
-  uint64_t total_blocks = fs_size / BLOCK_SIZE;
+  uint64_t total_blocks = fs_size / BSFS_BLOCK_SIZE;
   if (total_blocks < 4) {
     die("minimum size not met (need at least 4 blocks)");
     return -1;
   }
-
   if (total_blocks > 0xFFFFFFFFULL) {
-    die("filesystem too large for 32-bit block addressing (limit ~16 TiB at "
-        "4K)");
+    die("filesystem too large for 32-bit block addressing (limit ~16 TiB at 4K)");
     return -1;
   }
+
   uint32_t bitmap_blocks = compute_bitmap_blocks(total_blocks);
-  uint32_t data_start    = 1 + bitmap_blocks;
+  uint32_t data_start    = 2 + bitmap_blocks;
+
   if (data_start >= total_blocks) {
     die("insufficient space for data region after metadata");
     return -1;
   }
 
+  /* Allocate btree root blocks from the data region */
+  uint32_t dir_root_block   = data_start;
+  uint32_t inode_root_block = data_start + 1;
+
+  if (inode_root_block >= total_blocks) {
+    die("insufficient space for B-tree roots");
+    return -1;
+  }
+
+  {
+    uint8_t zero[BSFS_BLOCK_SIZE] = {0};
+    if (write_block(disk, 0, zero) != 0) {
+      die("failed to write reserved block 0");
+      return -1;
+    }
+  }
+
+  //  Write superblock at block 1
   bsfs_super_block sb;
   memset(&sb, 0, sizeof(sb));
   sb.magic_number       = MAGIC_NUMBER;
-  sb.block_size         = BLOCK_SIZE;
+  sb.block_size         = BSFS_BLOCK_SIZE;
   sb.fs_size            = fs_size;
   sb.total_blocks       = (uint32_t)total_blocks;
-  sb.block_bitmap_start = 1;
+  sb.block_bitmap_start = 2;
   sb.block_bitmap_total = bitmap_blocks;
-  sb.inode_root         = 0;
+  sb.inode_root         = inode_root_block;
   sb.recovery_root      = 0;
   sb.data_block_start   = data_start;
-  sb.root_inode         = 1;
+  sb.root_inode         = BSFS_ROOT_INO;
 
-  if (write_superblock(disk, &sb) != 0) {
+  if (write_block(disk, 1, &sb) != 0) {
     die("failed to write superblock");
     return -1;
   }
 
+  //  Initialize bitmap linked list
   if (init_bitmap_list(disk, sb.block_bitmap_start, sb.block_bitmap_total) != 0) {
     die("failed to initialize bitmap list");
     return -1;
   }
 
-  if (reserve_initial_blocks(disk, &sb) != 0) {
-    die("failed to reserve metadata blocks in bitmap");
-    return -1;
+  // Reserve all metadata blocks in bitmap
+  {
+    size_t   bitmap_bytes = (size_t)bitmap_blocks * BITMAP_BLOCK_BYTES;
+    uint8_t *bitmap       = calloc(1, bitmap_bytes);
+    if (!bitmap) {
+      die("out of memory");
+      return -1;
+    }
+
+    uint32_t limit = inode_root_block + 1;
+    if (limit > sb.total_blocks)
+      limit = sb.total_blocks;
+    for (uint32_t i = 0; i < limit; i++)
+      bsfs_set_bit(bitmap, i);
+
+    for (uint32_t i = 0; i < bitmap_blocks; i++) {
+      bitmap_block_t block;
+      memset(&block, 0, sizeof(block));
+      memcpy(block.bits, bitmap + (size_t)i * BITMAP_BLOCK_BYTES, BITMAP_BLOCK_BYTES);
+      block.next_block = (i < bitmap_blocks - 1) ? sb.block_bitmap_start + i + 1 : INVALID_BLOCK;
+      if (write_block(disk, sb.block_bitmap_start + i, &block) != 0) {
+        fprintf(stderr, "mkfs.bsfs: failed to write bitmap block %u\n", sb.block_bitmap_start + i);
+        free(bitmap);
+        return -1;
+      }
+    }
+    free(bitmap);
   }
 
-  btree_handle_t inode_handle;
-  if (!inode_tree_init(disk, &sb, &inode_handle)) {
-    die("failed to initialize inode B-tree");
-    return -1;
+  // Create directory entry B-tree root (leaf, 2 entries: "." and "..")
+  {
+    btree_node_t node;
+    memset(&node, 0, sizeof(node));
+    node.is_leaf     = 1;
+    node.num_entries = 2;
+
+    bsfs_dentry dot;
+    memset(&dot, 0, sizeof(dot));
+    dot.ino       = BSFS_ROOT_INO;
+    dot.name_hash = hash_filename(".");
+    strncpy(dot.filename, ".", MAX_FILENAME);
+
+    bsfs_dentry dotdot;
+    memset(&dotdot, 0, sizeof(dotdot));
+    dotdot.ino       = BSFS_ROOT_INO;
+    dotdot.name_hash = hash_filename("..");
+    strncpy(dotdot.filename, "..", MAX_FILENAME);
+
+    memcpy(node.data, &dot, sizeof(dot));
+    memcpy(node.data + sizeof(dot), &dotdot, sizeof(dotdot));
+
+    if (write_block(disk, dir_root_block, &node) != 0) {
+      die("failed to write directory B-tree root");
+      return -1;
+    }
   }
 
-  btree_handle_t *dir_handle = btree_create_dir_entry_handle();
-  if (!dir_handle) {
-    die("failed to create directory B-tree handle");
-    return -1;
-  }
+  // Create inode B-tree root (leaf, 1 entry: root inode)
+  {
+    btree_node_t node;
+    memset(&node, 0, sizeof(node));
+    node.is_leaf     = 1;
+    node.num_entries = 1;
 
-  dir_entry_t dot;
-  memset(&dot, 0, sizeof(dot));
-  dot.inode_number = sb.root_inode;
-  dot.file_type    = FILE_TYPE_DIR;
-  dot.file_size    = 0;
-  strncpy(dot.filename, ".", MAX_FILENAME);
-  if (btree_insert(disk, &sb, dir_handle, &dot) != 0) {
-    free(dir_handle);
-    die("failed to insert '.' entry into root directory");
-    return -1;
-  }
+    uint32_t now = (uint32_t)time(NULL);
 
-  dir_entry_t dotdot;
-  memset(&dotdot, 0, sizeof(dotdot));
-  dotdot.inode_number = sb.root_inode;
-  dotdot.file_type    = FILE_TYPE_DIR;
-  dotdot.file_size    = 0;
-  strncpy(dotdot.filename, "..", MAX_FILENAME);
-  if (btree_insert(disk, &sb, dir_handle, &dotdot) != 0) {
-    free(dir_handle);
-    die("failed to insert '..' entry into root directory");
-    return -1;
-  }
+    disk_mapped_inode_t root_inode;
+    memset(&root_inode, 0, sizeof(root_inode));
+    root_inode.ino         = BSFS_ROOT_INO;
+    root_inode.size        = 0;
+    root_inode.unused      = 0;
+    root_inode.block_count = 0;
+    root_inode.uid         = 0;
+    root_inode.gid         = 0;
+    root_inode.mode        = (uint16_t)(BSFS_MODE_DIR | 0755);
+    root_inode.nlinks      = 2;
+    root_inode.atime       = now;
+    root_inode.mtime       = now;
+    root_inode.ctime       = now;
+    root_inode.btree_root  = dir_root_block;
 
-  bsfs_inode root;
-  memset(&root, 0, sizeof(root));
-  root.inode_number = sb.root_inode;
-  root.file_size    = 0;
-  root.file_type    = FILE_TYPE_DIR;
-  root.block_count  = 0;
-  root.uid          = 0;
-  root.gid          = 0;
-  root.permissions  = 0755;
-  root.links_count  = 1;
-  root.created_at = root.modified_at = root.accessed_at = (uint32_t)time(NULL);
-  root.btree_root                                       = dir_handle->root_block;
-  for (int i = 0; i < 16; i++) {
-    root.direct_blocks[i].file_blk = 0;
-    root.direct_blocks[i].disk_blk = 0;
-    root.direct_blocks[i].length   = 0;
-  }
-  if (insert_inode(disk, &sb, &inode_handle, &root) != 0) {
-    free(dir_handle);
-    die("failed to insert root inode into inode B-tree");
-    return -1;
-  }
+    memcpy(node.data, &root_inode, sizeof(root_inode));
 
-  (void)write_superblock(disk, &sb);
-  free(dir_handle);
+    if (write_block(disk, inode_root_block, &node) != 0) {
+      die("failed to write inode B-tree root");
+      return -1;
+    }
+  }
 
   printf("BSFS formatted successfully\n");
   printf("Partition size (bytes): %" PRIu64 "\n", sb.fs_size);
@@ -309,21 +327,12 @@ int mkfs_bsfs_format_open(FILE *disk) {
   printf("Block bitmap (start,total): %u,%u\n", sb.block_bitmap_start, sb.block_bitmap_total);
   printf("Data block start: %u\n", sb.data_block_start);
   printf("Inode root block: %u\n", sb.inode_root);
+  printf("Dir entry root block: %u\n", dir_root_block);
   printf("Root inode: %u\n", sb.root_inode);
 
   return 0;
 }
 
-/**
- * @brief Format a partition file located at @p path as a BSFS filesystem.
- *
- * Opens the target file in read/write mode and delegates to
- * mkfs_bsfs_format_open(). The file must already exist and its size must be a
- * multiple of 4096 bytes.
- *
- * @param path Path to the pre-sized partition file.
- * @return 0 on success; -1 on error (open failure or formatting failure).
- */
 int mkfs_bsfs_format_path(const char *path) {
   if (!path)
     return -1;
@@ -337,15 +346,6 @@ int mkfs_bsfs_format_path(const char *path) {
   return rc;
 }
 
-/**
- * @brief Program entry point for mkfs.bsfs.
- *
- * Usage: mkfs.bsfs &lt;partition_file&gt;
- *
- * @param argc Argument count.
- * @param argv Argument vector.
- * @return EXIT_SUCCESS on success; EXIT_FAILURE on error.
- */
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "Usage: %s <partition_file>\n", argv[0]);
