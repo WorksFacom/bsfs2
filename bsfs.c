@@ -22,6 +22,7 @@ static void bsfs_put_super(struct super_block *sb) {
   brelse(sbi->bh);
   kfree(sbi->super);
   kfree(sbi);
+
   sb->s_fs_info = NULL;
 }
 
@@ -44,19 +45,23 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   struct bsfs_super_info *sbi;
 
   sbi = kzalloc(sizeof(struct bsfs_super_info), GFP_KERNEL);
+
   if (!sbi)
     return -ENOMEM;
+
   s->s_fs_info = sbi;
 
   sbi->super = kzalloc(sizeof(struct bsfs_super_block), GFP_KERNEL);
+
   if (!sbi->super) {
     s->s_fs_info = NULL;
     kfree(sbi);
     return -ENOMEM;
   }
 
-  // TODO
-  // BUILD_BUG_ON(64 != sizeof(struct bsfs_inode));
+  // if the struct size ever changes, the kernel won't compile
+  // catches accidental ABI breaks or padding changes at build time.
+  BUILD_BUG_ON(600 != sizeof(struct bsfs_inode));
 
   if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE))
     goto out_bad_hblock;
