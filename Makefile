@@ -16,6 +16,8 @@ obj-m += bsfs2.o
 
 bsfs2-objs := bsfs.o $(addprefix src/,$(bsfs2-src-objs))
 
+ccflags-y += -include $(PWD)/include/pr_fmt.h
+
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 SRC_FILES = $(shell find src -type f -name '*.c')

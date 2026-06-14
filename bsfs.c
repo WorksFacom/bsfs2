@@ -63,11 +63,15 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   // catches accidental ABI breaks or padding changes at build time.
   BUILD_BUG_ON(600 != sizeof(struct bsfs_inode));
 
-  if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE))
+  if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE)) {
+    pr_err("unable to set block size");
     goto out_bad_hblock;
+  }
 
-  if (!(bh = sb_bread(s, 1)))
+  if (!(bh = sb_bread(s, 1))) {
+    pr_err("unable to read super block");
     goto out_bad_sb;
+  }
 
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
   memcpy(sbi->super, bh->b_data, sizeof(struct bsfs_super_block));
@@ -76,6 +80,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   // check exact data location - magic_number is first member
   if (*(__u32 *)(bh->b_data) != MAGIC_NUMBER) {
+    pr_err("magic number doesn't match");
     goto out_no_fs;
   }
 
