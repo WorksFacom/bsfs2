@@ -16,13 +16,21 @@
 #include <linux/vfs.h>
 #include <linux/writeback.h>
 
+static void bsfs_put_super(struct super_block *sb) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  brelse(sbi->bh);
+  kfree(sbi->super);
+  kfree(sbi);
+  sb->s_fs_info = NULL;
+}
+
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
     .free_inode  = bsfs_free_cache_inode,
     .evict_inode = bsfs_evict_inode,
-    // .put_super	= bsfs_put_super,
-    // .statfs		= bsfs_statfs,
+    .put_super   = bsfs_put_super,
 };
 
 static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
@@ -41,8 +49,11 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   s->s_fs_info = sbi;
 
   sbi->super = kzalloc(sizeof(struct bsfs_super_block), GFP_KERNEL);
-  if (!sbi->super)
+  if (!sbi->super) {
+    s->s_fs_info = NULL;
+    kfree(sbi);
     return -ENOMEM;
+  }
 
   // TODO
   // BUILD_BUG_ON(64 != sizeof(struct bsfs_inode));
@@ -54,6 +65,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
     goto out_bad_sb;
 
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
+  memcpy(sbi->super, bh->b_data, sizeof(struct bsfs_super_block));
   sbi->bh    = bh;
   s->s_magic = bsfs_super->magic_number;
 
@@ -137,6 +149,7 @@ out_bad_sb:
 
 out:
   s->s_fs_info = NULL;
+  kfree(sbi->super);
   kfree(sbi);
   return ret;
 }
@@ -162,8 +175,7 @@ static struct file_system_type bsfs_fs_type = {
     .name            = "bsfs",
     .fs_flags        = FS_REQUIRES_DEV,
     .init_fs_context = bsfs_init_fs_context,
-    // TODO: implement kill_sb
-    // .kill_sb	      	= kill_block_super,
+    .kill_sb         = kill_block_super,
 };
 
 MODULE_ALIAS_FS("bsfs");
