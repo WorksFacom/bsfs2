@@ -9,67 +9,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../include/bsfs_shared.h"
+
 #ifndef BLKGETSIZE64
 #define BLKGETSIZE64 _IOR(0x12, 114, uint64_t)
 #endif
 
-#define BSFS_BLOCK_SIZE 4096
-#define MAGIC_NUMBER 0x53465342
-#define MAX_FILENAME 255
-#define INVALID_BLOCK 0xFFFFFFFF
-#define BITMAP_BLOCK_BYTES (BSFS_BLOCK_SIZE - 4)
-#define BITS_PER_BLOCK (BITMAP_BLOCK_BYTES * 8)
-#define BSFS_ROOT_INO 1
-
-// S_IFDIR from stat.h
-// use numeric to avoid macro-name conflict
 #define BSFS_MODE_DIR 0040000
-
-typedef struct {
-  uint32_t magic_number;
-  uint32_t block_size;
-  uint64_t fs_size;
-  uint32_t total_blocks;
-  uint32_t block_bitmap_start;
-  uint32_t block_bitmap_total;
-  uint32_t inode_root;
-  uint32_t recovery_root;
-  uint32_t data_block_start;
-  uint32_t root_inode;
-} bsfs_super_block;
-
-typedef struct {
-  uint8_t  bits[BITMAP_BLOCK_BYTES];
-  uint32_t next_block;
-} bitmap_block_t;
-
-typedef struct {
-  uint32_t ino;
-  uint32_t size;
-  uint8_t  unused;
-  uint32_t block_count;
-  uint16_t uid;
-  uint16_t gid;
-  uint16_t mode;
-  uint16_t nlinks;
-  uint32_t atime;
-  uint32_t mtime;
-  uint32_t ctime;
-  uint32_t btree_root;
-  uint8_t  pad[34];
-} disk_mapped_inode_t;
-
-typedef struct {
-  uint32_t ino;
-  uint32_t name_hash;
-  char     filename[MAX_FILENAME];
-} bsfs_dentry;
-
-typedef struct {
-  uint32_t num_entries;
-  uint8_t  is_leaf;
-  uint8_t  data[BSFS_BLOCK_SIZE - 5];
-} btree_node_t;
 
 static void die(const char *msg) {
   fprintf(stderr, "mkfs.bsfs: %s\n", msg);
@@ -77,14 +23,6 @@ static void die(const char *msg) {
 
 static uint64_t ceil_div_u64(uint64_t a, uint64_t b) {
   return (a + b - 1) / b;
-}
-
-static uint32_t hash_filename(const char *name) {
-  uint32_t hash = 5381;
-  int      c;
-  while ((c = *name++))
-    hash = ((hash << 5) + hash) + (unsigned char)c;
-  return hash;
 }
 
 static int write_block(FILE *disk, uint32_t block_num, const void *data) {

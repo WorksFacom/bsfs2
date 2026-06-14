@@ -21,16 +21,19 @@ static inline int default_compare(const void *a, const void *b) {
 }
 
 static int compute_min_degree(__u64 entry_size) {
+  int t = 2;
+
   __u64 entry_area   = entry_size * (2 * 4 - 1);
   __u64 pointer_area = sizeof(__u32) * (2 * 4);
-  int   t            = 2;
+
   while (1) {
     entry_area          = entry_size * (2 * t - 1);
     pointer_area        = sizeof(__u32) * (2 * t);
     __u64 node_overhead = sizeof(__u8) + sizeof(__u32);
-    if (entry_area + pointer_area + node_overhead > BLOCK_SIZE) {
+
+    if (entry_area + pointer_area + node_overhead > BSFS_BLOCK_SIZE)
       return t - 1;
-    }
+
     t++;
   }
 }
@@ -51,15 +54,6 @@ static inline void btree_shift_left(void *entries, __u64 entry_size, int from, i
   for (int i = from; i < count - 1; i++) {
     memcpy((__u8 *)entries + i * entry_size, (__u8 *)entries + (i + 1) * entry_size, entry_size);
   }
-}
-
-__u32 hash_filename(const char *name) {
-  __u32 hash = 5381;
-  int   c;
-  while ((c = *name++)) {
-    hash = ((hash << 5) + hash) + c;
-  }
-  return hash;
 }
 
 // TODO: properly handle alignment (e.g: get_unaligned_le32)

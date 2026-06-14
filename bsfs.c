@@ -58,7 +58,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   // TODO
   // BUILD_BUG_ON(64 != sizeof(struct bsfs_inode));
 
-  if (!sb_set_blocksize(s, BLOCK_SIZE))
+  if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE))
     goto out_bad_hblock;
 
   if (!(bh = sb_bread(s, 1)))

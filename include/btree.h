@@ -20,17 +20,6 @@
 #include <linux/types.h>
 
 /**
- * @brief Computes the djb2 hash of a given filename.
- *
- * This function implements the classic djb2 hashing algorithm created by
- * Daniel J. Bernstein. It is fast and widely used for hashing strings.
- *
- * @param name The null-terminated string (filename) to be hashed.
- * @return A 32-bit unsigned integer hash value.
- */
-__u32 hash_filename(const char *name);
-
-/**
  * @brief Creates a generic B-tree handle for managing structured data.
  *
  * This function initializes a `btree_handle_t` structure, which serves as the
