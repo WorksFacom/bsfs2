@@ -10,7 +10,13 @@
 #include "../include/file.h"
 
 const struct file_operations bsfs_file_operations = {
-
+    .read_iter    = generic_file_read_iter,
+    .write_iter   = generic_file_write_iter,
+    .llseek       = generic_file_llseek,
+    .mmap         = generic_file_mmap,
+    .splice_read  = filemap_splice_read,
+    .splice_write = iter_file_splice_write,
+    .fsync        = noop_fsync,
 };
 
 const struct inode_operations bsfs_file_inode_operations = {
