@@ -97,16 +97,21 @@ class ValidatorRunner:
                 num_operations=num_operations,
                 seed=seed,
             )
-            results.append((key, name, state))
+            group = getattr(allocator_class, "CONSISTENCY_GROUP", "scatter")
+            results.append((key, name, group, state))
             print(f"  ✓ {name}")
 
-        baseline_key, baseline_name, baseline_state = results[0]
-        baseline_bitmap = baseline_state["bitmap"]
+        # Bitmaps are only expected to match within a consistency group (scatter
+        # allocators return the N smallest indices; extent allocators differ by
+        # policy). Each group's first member is its reference.
+        group_reference = {}  # group -> (name, bitmap)
+        for key, name, group, state in results:
+            group_reference.setdefault(group, (name, state["bitmap"]))
 
         divergence_messages = []
         consistency_messages = []
 
-        for key, name, state in results:
+        for key, name, group, state in results:
             if state["free_count"] != state["bitmap_free_count"]:
                 consistency_messages.append(
                     f"- {name}: count_free_blocks={state['free_count']} != bitmap_free={state['bitmap_free_count']}"
@@ -116,18 +121,19 @@ class ValidatorRunner:
                     f"- {name}: tracked_occupied={state['tracked_occupied_count']} != bitmap_occupied={state['occupied_count']}"
                 )
 
-            if key == baseline_key:
+            ref_name, ref_bitmap = group_reference[group]
+            if name == ref_name:
                 continue
 
-            if state["bitmap"] != baseline_bitmap:
+            if state["bitmap"] != ref_bitmap:
                 mismatch_count = sum(
-                    1 for a, b in zip(baseline_bitmap, state["bitmap"]) if a != b
+                    1 for a, b in zip(ref_bitmap, state["bitmap"]) if a != b
                 )
                 first_mismatch_idx = next(
-                    i for i, (a, b) in enumerate(zip(baseline_bitmap, state["bitmap"])) if a != b
+                    i for i, (a, b) in enumerate(zip(ref_bitmap, state["bitmap"])) if a != b
                 )
                 divergence_messages.append(
-                    f"- {name} divergiu de {baseline_name}: {mismatch_count} posições diferentes (primeira em idx={first_mismatch_idx})"
+                    f"- {name} divergiu de {ref_name} [grupo {group}]: {mismatch_count} posições diferentes (primeira em idx={first_mismatch_idx})"
                 )
 
         print("\n" + "-" * 80)

@@ -74,6 +74,12 @@ class BitmapBits:
 class BaseAllocator(ABC):
     """Common contract for bitmap allocators."""
 
+    # Allocators in the same group are expected to produce byte-identical
+    # bitmaps on a fixed workload (used by the consistency validator). Scatter
+    # allocators all return the N smallest free indices, so they share one
+    # layout; extent allocators differ by allocation policy and declare their own.
+    CONSISTENCY_GROUP = "scatter"
+
     def __init__(self, size: int):
         self.bitmap = BitmapBits(size)
         self.size = size

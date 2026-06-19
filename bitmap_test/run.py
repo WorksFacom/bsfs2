@@ -367,8 +367,9 @@ Usage:
   python run.py                  # Launch interactive TUI
   python run.py [STRATEGY] [OPTIONS]
 
-Strategies:
+Strategies (scatter - return the N smallest free indices):
   avl         - AVL Tree
+  avl_range   - AVL Range Tree
   rb          - Red-Black Tree
   heap        - Min-Heap
   btree       - B-Tree
@@ -379,6 +380,13 @@ Strategies:
   treap       - Treap
   baseline    - Baseline Sequential Scan
   needle      - Sequential Needle
+
+Strategies (extent - return a contiguous run when possible):
+  avl_range_extent    - AVL Range Extent-First
+  treap_range_extent  - Treap Range Extent-First
+  rb_range_extent     - Red-Black Range Extent-First
+  bplustree_extent    - B+Tree Extent-First
+
   all         - Run all strategies (default)
 
 Options:

@@ -58,6 +58,11 @@ def _update_node(node):
 class BitmapAVLRangeExtent(BaseAllocator):
     """Bitmap allocator using AVL tree of free ranges with extent-first allocation."""
 
+    # Best-fit but with a *largest-range* fallback (unlike the lowest-address
+    # fallback shared by the treap/rb/bplustree extent allocators), so it forms
+    # its own bitmap-equivalence group.
+    CONSISTENCY_GROUP = "extent_bestfit_largest"
+
     def __init__(self, size):
         super().__init__(size)
         self.root = AVLRangeExtentNode(0, size - 1) if size > 0 else None
