@@ -14,101 +14,6 @@
 #include "../include/inode.h"
 #include "../include/rec_entry.h"
 
-// TODO: .mkdir
-// int create_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd) {
-//   dir_t parent;
-//   char  name[MAX_FILENAME];
-//
-//   // 1. Resolve the parent directory and final component
-//   if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
-//     fprintf(stderr, "Failed to resolve path: %s\n", path);
-//     return -1;
-//   }
-//
-//   // 2. Check if an entry with the same name already exists
-//   dir_entry_t existing;
-//   if (lookup_dir_entry(disk, sb, &parent, name, &existing) == 0) {
-//     fprintf(stderr, "Entry already exists: %s\n", name);
-//     return -1;
-//   }
-//
-//   // 3. Prepare inode handle and allocate inode number
-//   btree_handle_t *inode_tree = btree_create_inode_handle();
-//   inode_tree->root_block     = sb->inode_root;
-//   uint32_t new_inode_number  = get_next_inode_number(disk, sb, inode_tree);
-//   if (new_inode_number == INVALID_BLOCK) {
-//     fprintf(stderr, "Failed to allocate new inode number.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   bsfs_inode new_inode;
-//   memset(&new_inode, 0, sizeof(bsfs_inode));
-//   new_inode.inode_number = new_inode_number;
-//   new_inode.file_type    = FILE_TYPE_DIR;
-//   new_inode.permissions  = 0755;
-//   new_inode.links_count  = 1;
-//   new_inode.created_at = new_inode.modified_at = new_inode.accessed_at = (uint32_t)time(NULL);
-//
-//   // 4. Insert the inode into the inode tree
-//   if (insert_inode(disk, sb, inode_tree, &new_inode) != 0) {
-//     fprintf(stderr, "Failed to insert new inode.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 5. Create "." entry pointing to self
-//   dir_entry_t dot;
-//   memset(&dot, 0, sizeof(dir_entry_t));
-//   dot.inode_number = new_inode_number;
-//   dot.file_type    = FILE_TYPE_DIR;
-//   dot.file_size    = 0;
-//   strncpy(dot.filename, ".", MAX_FILENAME);
-//
-//   dir_t new_dir;
-//   memset(&new_dir, 0, sizeof(new_dir));
-//   new_dir.inode         = new_inode;
-//   new_dir.current_index = 0;
-//
-//   if (add_dir_entry(disk, sb, &new_dir, &dot) != 0) {
-//     fprintf(stderr, "Failed to add '.' entry.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 6. Create ".." entry pointing to parent
-//   dir_entry_t dotdot;
-//   memset(&dotdot, 0, sizeof(dir_entry_t));
-//   dotdot.inode_number = parent.inode.inode_number;
-//   dotdot.file_type    = FILE_TYPE_DIR;
-//   dotdot.file_size    = 0;
-//   strncpy(dotdot.filename, "..", MAX_FILENAME);
-//
-//   if (add_dir_entry(disk, sb, &new_dir, &dotdot) != 0) {
-//     fprintf(stderr, "Failed to add '..' entry.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 7. Add this new directory as an entry to the parent
-//   dir_entry_t entry;
-//   memset(&entry, 0, sizeof(dir_entry_t));
-//   entry.inode_number = new_inode_number;
-//   entry.file_type    = FILE_TYPE_DIR;
-//   entry.file_size    = 0;
-//   strncpy(entry.filename, name, MAX_FILENAME);
-//   entry.filename[MAX_FILENAME - 1] = '\0';
-//
-//   if (add_dir_entry(disk, sb, &parent, &entry) != 0) {
-//     fprintf(stderr, "Failed to add directory entry to parent.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   free(inode_tree);
-//   return 0;
-// }
-
 // TODO: .rmdir
 // int remove_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd) {
 //   dir_t parent;
@@ -281,6 +186,41 @@ static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry
   return bsfs_mknod(&nop_mnt_idmap, dir, dentry, mode, 0);
 }
 
+static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
+  int err;
+
+  struct inode *inode;
+
+  inode = bsfs_new_inode(dir, S_IFDIR | mode);
+
+  if (IS_ERR(inode))
+    return ERR_CAST(inode);
+
+  inode_inc_link_count(dir); // .. in the new dir references the parent
+  bsfs_set_inode(inode, 0);
+  inode_inc_link_count(inode); // . self-link: i_nlink 1 -> 2
+
+  mark_inode_dirty(inode);
+
+  // . and .. are synthesized by bsfs_readdir/the dcache, so no on-disk dot
+  // entries are created here - only the new name is added to the parent
+  err = bsfs_add_link(dentry, inode);
+
+  if (err)
+    goto out_fail;
+
+  d_instantiate(dentry, inode);
+out:
+  return ERR_PTR(err);
+
+out_fail:
+  inode_dec_link_count(inode);
+  inode_dec_link_count(inode);
+  iput(inode);
+  inode_dec_link_count(dir);
+  goto out;
+}
+
 // TODO: this is probably wrong
 // recovery entry should be added when file is deleted (i_nlink == 0)
 // move to bsfs_evict_inode ?
@@ -360,9 +300,9 @@ const struct inode_operations bsfs_dir_inode_operations = {
     .lookup = bsfs_lookup,
     .create = bsfs_create,
     .unlink = bsfs_unlink,
+    .mkdir  = bsfs_mkdir,
     // .link		= bsfs_link,
     // .symlink	= bsfs_symlink,
-    // .mkdir		= bsfs_mkdir,
     // .rmdir		= bsfs_rmdir,
     // .mknod		= bsfs_mknod,
     // .rename		= bsfs_rename,
