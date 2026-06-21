@@ -370,6 +370,92 @@ const struct inode_operations bsfs_dir_inode_operations = {
     // .tmpfile	= bsfs_tmpfile,
 };
 
-const struct file_operations bsfs_dir_operations = {
+static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct dir_context *ctx, loff_t *index) {
+  __u32 i;
 
+  struct btree_node *node;
+
+  __u32 *children = NULL;
+
+  if (node_block == 0 || node_block == INVALID_BLOCK)
+    return 0;
+
+  if (btree_read_node(sb, node_block, &node) != 0)
+    return 0;
+
+  if (!node->node->is_leaf)
+    children = bchildren(node, handle);
+
+  for (i = 0; i < node->node->num_entries; i++) {
+    struct bsfs_dentry *de;
+    loff_t              entry_pos;
+    int                 namelen;
+
+    if (!node->node->is_leaf && bsfs_emit_subtree(sb, handle, children[i], ctx, index)) {
+      btree_free_node(node);
+      return 1;
+    }
+
+    de = (struct bsfs_dentry *)(bentries(node) + (size_t)i * handle->entry_size);
+
+    // . and .. are emitted via dir_emit_dots
+    if (de->filename[0] == '.' && (de->filename[1] == '\0' || (de->filename[1] == '.' && de->filename[2] == '\0')))
+      continue;
+
+    // 0,1 reserved for . and ..
+    entry_pos = *index + 2;
+    (*index)++;
+
+    if (entry_pos < ctx->pos) // already delivered on a previous call
+      continue;
+
+    ctx->pos = entry_pos;
+    namelen  = strnlen(de->filename, MAX_FILENAME);
+
+    if (!dir_emit(ctx, de->filename, namelen, de->ino, DT_UNKNOWN)) {
+      btree_free_node(node);
+      // buffer full: resume at this entry next call
+      return 1;
+    }
+
+    ctx->pos = entry_pos + 1;
+  }
+
+  if (!node->node->is_leaf && bsfs_emit_subtree(sb, handle, children[node->node->num_entries], ctx, index)) {
+    btree_free_node(node);
+    return 1;
+  }
+
+  btree_free_node(node);
+  return 0;
+}
+
+static int bsfs_readdir(struct file *file, struct dir_context *ctx) {
+  loff_t index = 0;
+
+  struct inode       *dir = file_inode(file);
+  struct super_block *sb  = dir->i_sb;
+  btree_handle_t     *handle;
+
+  if (!dir_emit_dots(file, ctx))
+    return 0;
+
+  handle = btree_create_dir_entry_handle();
+
+  if (!handle)
+    return -ENOMEM;
+
+  handle->root_block = bsfs_i(dir)->btree_root; // 0 => empty dir, no-op
+                                                //
+  bsfs_emit_subtree(sb, handle, handle->root_block, ctx, &index);
+
+  kfree(handle);
+  return 0;
+}
+
+const struct file_operations bsfs_dir_operations = {
+    .llseek         = generic_file_llseek,
+    .read           = generic_read_dir,
+    .iterate_shared = bsfs_readdir,
+    .fsync          = noop_fsync, // TODO: implement
 };
