@@ -53,11 +53,16 @@ def _node_max_gap(node):
 
 
 def _update(node):
-    node.max_gap = max(
-        node.end - node.start + 1,
-        _node_max_gap(node.left),
-        _node_max_gap(node.right),
-    )
+    # Inlined max over (own size, child gaps): avoids two helper calls and the
+    # max() builtin, which dominate dealloc-heavy workloads (millions of calls).
+    m = node.end - node.start + 1
+    left = node.left
+    if left is not None and left.max_gap > m:
+        m = left.max_gap
+    right = node.right
+    if right is not None and right.max_gap > m:
+        m = right.max_gap
+    node.max_gap = m
 
 
 @register("rb_range_extent", display_name="Red-Black Range Extent-First")
@@ -151,9 +156,25 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             node = node.left
         return node
 
-    def _update_to_root(self, node):
+    def _update_to_root(self, node, force_through=None):
+        """Recompute max_gap from `node` up to the root.
+
+        Stops early once a node's max_gap is unchanged: an ancestor's max_gap is
+        the max over its subtree, so if a node's value didn't change neither can
+        any ancestor's. Freed ranges are mostly size-1 (smaller than existing
+        gaps), so propagation usually stops after one step instead of O(log n).
+
+        `force_through` is the node whose *own* range changed during a two-child
+        delete; we must recompute it before the early-stop can fire, since the
+        change there is not reflected by the spliced child's propagation alone.
+        """
         while node:
+            old = node.max_gap
             _update(node)
+            if node is force_through:
+                force_through = None
+            if force_through is None and node.max_gap == old:
+                return
             node = node.parent
 
     # ------------------------------------------------------------------
@@ -185,7 +206,9 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         else:
             parent.right = new_node
 
-        self._update_to_root(new_node)
+        # The new leaf's own max_gap is already correct; only ancestors can
+        # change, so propagate starting from the parent.
+        self._update_to_root(parent)
         self._fix_insert(new_node)
 
     def _delete_node(self, start):
@@ -193,10 +216,14 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         if not node:
             return
 
+        value_changed = None
         if node.left and node.right:
             successor = self._find_min(node.right)
             node.start = successor.start
             node.end = successor.end
+            # `node` keeps its position but gained the successor's range, so it
+            # must be recomputed even if intermediate nodes are unchanged.
+            value_changed = node
             node = successor
 
         child = node.left if node.left else node.right
@@ -212,8 +239,10 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             else:
                 node.parent.right = child
 
-        # Propagate the set change up before rebalancing.
-        self._update_to_root(child if child is not None else node.parent)
+        # Propagate the set change up before rebalancing. Start at the spliced
+        # node's parent (the child subtree is internally unchanged), forcing the
+        # walk through the value-changed node in the two-child case.
+        self._update_to_root(node.parent, value_changed)
 
         if node.color == Color.BLACK:
             if child:

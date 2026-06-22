@@ -48,10 +48,19 @@ def _node_height(node):
 def _update_node(node):
     if not node:
         return
-    node.height = 1 + max(_node_height(node.left), _node_height(node.right))
-    left_gap = _node_max_gap(node.left)
-    right_gap = _node_max_gap(node.right)
-    node.max_gap = max(left_gap, right_gap, node.size)
+    # Inlined height + max_gap recompute: avoids the helper calls and two max()
+    # builtins on the hot insert/delete path.
+    left = node.left
+    right = node.right
+    lh = left.height if left is not None else 0
+    rh = right.height if right is not None else 0
+    node.height = lh + 1 if lh > rh else rh + 1
+    m = node.end - node.start + 1
+    if left is not None and left.max_gap > m:
+        m = left.max_gap
+    if right is not None and right.max_gap > m:
+        m = right.max_gap
+    node.max_gap = m
 
 
 @register("avl_range_extent", display_name="AVL Range Extent-First")
@@ -79,10 +88,10 @@ class BitmapAVLRangeExtent(BaseAllocator):
         node = self._find_best_fit(self.root, count)
         if node:
             range_start, range_end = node.start, node.end
-            self.root = self._delete(self.root, range_start)
+            self.root, _ = self._delete(self.root, range_start)
             allocated = list(range(range_start, range_start + count))
             if range_start + count <= range_end:
-                self.root = self._insert(self.root, range_start + count, range_end)
+                self.root, _ = self._insert(self.root, range_start + count, range_end)
             for idx in allocated:
                 self.bitmap[idx] = 1
             return allocated
@@ -98,12 +107,12 @@ class BitmapAVLRangeExtent(BaseAllocator):
                 return []
 
             range_start, range_end = node.start, node.end
-            self.root = self._delete(self.root, range_start)
+            self.root, _ = self._delete(self.root, range_start)
             take = min(remaining, range_end - range_start + 1)
             new_blocks = list(range(range_start, range_start + take))
             allocated.extend(new_blocks)
             if range_start + take <= range_end:
-                self.root = self._insert(self.root, range_start + take, range_end)
+                self.root, _ = self._insert(self.root, range_start + take, range_end)
             remaining -= take
 
         for idx in allocated:
@@ -146,7 +155,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
             if pred and pred.end + 1 >= start:
                 start = min(start, pred.start)
                 end = max(end, pred.end)
-                self.root = self._delete(self.root, pred.start)
+                self.root, _ = self._delete(self.root, pred.start)
                 continue
             break
 
@@ -154,75 +163,94 @@ class BitmapAVLRangeExtent(BaseAllocator):
             succ = self._find_successor(self.root, end)
             if succ and succ.start <= end + 1:
                 end = max(end, succ.end)
-                self.root = self._delete(self.root, succ.start)
+                self.root, _ = self._delete(self.root, succ.start)
                 continue
             break
 
-        self.root = self._insert(self.root, start, end)
+        self.root, _ = self._insert(self.root, start, end)
 
     # ------------------------------------------------------------------
     # AVL insertion / deletion
     # ------------------------------------------------------------------
 
     def _insert(self, node, start, end):
+        # Returns (subtree_root, changed): `changed` is False once neither the
+        # height nor the max_gap of this subtree changed, so ancestors can stop
+        # recomputing/rebalancing. An AVL insert rotation restores the subtree's
+        # pre-insert height, so height changes never propagate past a rotation.
         if not node:
-            return AVLRangeExtentNode(start, end)
+            return AVLRangeExtentNode(start, end), True
 
         if start < node.start:
-            node.left = self._insert(node.left, start, end)
+            node.left, changed = self._insert(node.left, start, end)
         else:
-            node.right = self._insert(node.right, start, end)
+            node.right, changed = self._insert(node.right, start, end)
 
+        if not changed:
+            return node, False
+
+        old_height = node.height
+        old_gap = node.max_gap
         _update_node(node)
         balance = self._get_balance(node)
 
         if balance > 1 and start < node.left.start:
-            return self._rotate_right(node)
-        if balance < -1 and start > node.right.start:
-            return self._rotate_left(node)
-        if balance > 1 and start > node.left.start:
+            node = self._rotate_right(node)
+        elif balance < -1 and start > node.right.start:
+            node = self._rotate_left(node)
+        elif balance > 1 and start > node.left.start:
             node.left = self._rotate_left(node.left)
-            return self._rotate_right(node)
-        if balance < -1 and start < node.right.start:
+            node = self._rotate_right(node)
+        elif balance < -1 and start < node.right.start:
             node.right = self._rotate_right(node.right)
-            return self._rotate_left(node)
+            node = self._rotate_left(node)
 
-        return node
+        return node, (node.height != old_height or node.max_gap != old_gap)
 
     def _delete(self, node, start):
+        # Returns (subtree_root, changed); see `_insert`. A delete can shrink the
+        # subtree height and cascade rotations upward, so we keep unwinding while
+        # height or max_gap changes and stop as soon as both are stable.
         if not node:
-            return None
+            return None, False
 
         if start < node.start:
-            node.left = self._delete(node.left, start)
+            node.left, changed = self._delete(node.left, start)
+            if not changed:
+                return node, False
         elif start > node.start:
-            node.right = self._delete(node.right, start)
+            node.right, changed = self._delete(node.right, start)
+            if not changed:
+                return node, False
         else:
             if not node.left:
-                return node.right
+                return node.right, True
             if not node.right:
-                return node.left
+                return node.left, True
 
             min_node = self._find_min(node.right)
             node.start = min_node.start
             node.end = min_node.end
-            node.right = self._delete(node.right, min_node.start)
+            # node's own range changed, so it must always be recomputed below.
+            node.right, _ = self._delete(node.right, min_node.start)
 
+        old_height = node.height
+        old_gap = node.max_gap
         _update_node(node)
         balance = self._get_balance(node)
 
         if balance > 1 and self._get_balance(node.left) >= 0:
-            return self._rotate_right(node)
-        if balance > 1 and self._get_balance(node.left) < 0:
+            node = self._rotate_right(node)
+        elif balance > 1 and self._get_balance(node.left) < 0:
             node.left = self._rotate_left(node.left)
-            return self._rotate_right(node)
-        if balance < -1 and self._get_balance(node.right) <= 0:
-            return self._rotate_left(node)
-        if balance < -1 and self._get_balance(node.right) > 0:
+            node = self._rotate_right(node)
+        elif balance < -1 and self._get_balance(node.right) <= 0:
+            node = self._rotate_left(node)
+        elif balance < -1 and self._get_balance(node.right) > 0:
             node.right = self._rotate_right(node.right)
-            return self._rotate_left(node)
+            node = self._rotate_left(node)
 
-        return node
+        return node, (node.height != old_height or node.max_gap != old_gap)
 
     # ------------------------------------------------------------------
     # Search helpers

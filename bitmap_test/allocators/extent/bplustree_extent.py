@@ -61,15 +61,41 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
 
     @staticmethod
     def _recompute_node(node):
+        # Manual loops instead of max(generator): this is the hottest call on
+        # dealloc-heavy workloads, and the generator + max() builtin overhead
+        # dominated the profile.
         if node.is_leaf:
-            node.max_size = max(
-                (e - s + 1 for s, e in zip(node.keys, node.ends)),
-                default=0,
-            )
+            keys = node.keys
+            ends = node.ends
+            m = 0
+            for j in range(len(keys)):
+                sz = ends[j] - keys[j] + 1
+                if sz > m:
+                    m = sz
+            node.max_size = m
         else:
-            node.max_size = max((c.max_size for c in node.children), default=0)
+            m = 0
+            for c in node.children:
+                if c.max_size > m:
+                    m = c.max_size
+            node.max_size = m
 
     def _recompute_path(self, node):
+        """Propagate up, stopping once a node's max_size is unchanged.
+
+        Correct only when `node` has *not* been pre-recomputed (otherwise the
+        change is masked); callers on the structural-rebalance path that
+        pre-recompute their start node use `_recompute_path_full` instead.
+        """
+        while node:
+            old = node.max_size
+            self._recompute_node(node)
+            if node.max_size == old:
+                return
+            node = node.parent
+
+    def _recompute_path_full(self, node):
+        """Unconditional propagation to the root (used after rebalancing)."""
         while node:
             self._recompute_node(node)
             node = node.parent
@@ -166,9 +192,19 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         i = bisect.bisect_left(leaf.keys, start)
         leaf.keys.insert(i, start)
         leaf.ends.insert(i, end)
-        self._recompute_node(leaf)
-        self._split_if_needed(leaf)
-        self._recompute_path(leaf)
+
+        # max_size can only grow on insert, so propagate the new size up,
+        # stopping at the first ancestor that already covers it (size-1 frees
+        # stop at the leaf). A split preserves the subtree's range set, so it
+        # only needs the local recomputes done in `_split_if_needed`.
+        sz = end - start + 1
+        node = leaf
+        while node is not None and sz > node.max_size:
+            node.max_size = sz
+            node = node.parent
+
+        if len(leaf.keys) > self.max_keys:
+            self._split_if_needed(leaf)
 
     def _split_if_needed(self, node):
         if len(node.keys) <= self.max_keys:
@@ -227,8 +263,19 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         i = bisect.bisect_left(leaf.keys, start)
         if i >= len(leaf.keys) or leaf.keys[i] != start:
             return
+        removed_sz = leaf.ends[i] - leaf.keys[i] + 1
         leaf.keys.pop(i)
         leaf.ends.pop(i)
+
+        if len(leaf.keys) >= self.min_keys or leaf is self.root:
+            # No structural change. max_size can only have shrunk, and only if
+            # we removed a maximal entry; otherwise nothing changes anywhere.
+            if removed_sz >= leaf.max_size:
+                self._recompute_node(leaf)
+                self._recompute_path(leaf.parent)
+            return
+
+        # Underflow: borrow/merge, then propagate unconditionally to the root.
         self._recompute_node(leaf)
         self._rebalance_after_delete(leaf)
 
@@ -242,7 +289,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
             return
 
         if len(node.keys) >= self.min_keys:
-            self._recompute_path(node)
+            self._recompute_path_full(node)
             return
 
         parent = node.parent
@@ -252,11 +299,11 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
 
         if left and len(left.keys) > self.min_keys:
             self._borrow_from_left(parent, idx)
-            self._recompute_path(parent)
+            self._recompute_path_full(parent)
             return
         if right and len(right.keys) > self.min_keys:
             self._borrow_from_right(parent, idx)
-            self._recompute_path(parent)
+            self._recompute_path_full(parent)
             return
 
         if left:

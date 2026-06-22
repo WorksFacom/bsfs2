@@ -41,11 +41,16 @@ def _node_max_gap(node):
 
 
 def _update(node):
-    node.max_gap = max(
-        node.end - node.start + 1,
-        _node_max_gap(node.left),
-        _node_max_gap(node.right),
-    )
+    # Inlined max over (own size, child gaps): called on every node along each
+    # insert/delete path, so the helper-call + max() overhead is worth avoiding.
+    m = node.end - node.start + 1
+    left = node.left
+    if left is not None and left.max_gap > m:
+        m = left.max_gap
+    right = node.right
+    if right is not None and right.max_gap > m:
+        m = right.max_gap
+    node.max_gap = m
 
 
 @register("treap_range_extent", display_name="Treap Range Extent-First")
@@ -70,14 +75,14 @@ class BitmapTreapRangeExtent(RangeExtentAllocator):
         while node.left:
             node = node.left
         result = (node.start, node.end)
-        self.treap_root = self._delete(self.treap_root, node.start)
+        self.treap_root, _ = self._delete(self.treap_root, node.start)
         return result
 
     def _insert_range(self, start, end):
-        self.treap_root = self._insert(self.treap_root, TreapRangeNode(start, end))
+        self.treap_root, _ = self._insert(self.treap_root, TreapRangeNode(start, end))
 
     def _delete_range(self, start):
-        self.treap_root = self._delete(self.treap_root, start)
+        self.treap_root, _ = self._delete(self.treap_root, start)
 
     def _predecessor_range(self, key):
         pred = None
@@ -140,41 +145,62 @@ class BitmapTreapRangeExtent(RangeExtentAllocator):
         return new_root
 
     def _insert(self, node, new_node):
+        # Returns (subtree_root, changed): `changed` is False once the inserted
+        # range no longer affects this subtree's max_gap and no rotation bubbled
+        # through, letting ancestors skip the max_gap recompute. Treap rotations
+        # only bubble up contiguously from the leaf, so once they stop and the
+        # gap stabilizes, nothing above changes.
         if node is None:
-            return new_node
+            return new_node, True
 
         if new_node.start < node.start:
-            node.left = self._insert(node.left, new_node)
-            if node.left.priority > node.priority:
+            node.left, changed = self._insert(node.left, new_node)
+            if changed and node.left.priority > node.priority:
                 node = self._rotate_right(node)
+                return node, True
         else:
-            node.right = self._insert(node.right, new_node)
-            if node.right.priority > node.priority:
+            node.right, changed = self._insert(node.right, new_node)
+            if changed and node.right.priority > node.priority:
                 node = self._rotate_left(node)
+                return node, True
 
+        if not changed:
+            return node, False
+
+        old = node.max_gap
         _update(node)
-        return node
+        return node, node.max_gap != old
 
     def _delete(self, node, start):
+        # Returns (subtree_root, changed); see `_insert`. Delete rotations only
+        # push the target node downward, so ancestors above it never rotate and
+        # can stop once the max_gap stops changing.
         if node is None:
-            return None
+            return None, False
 
         if start < node.start:
-            node.left = self._delete(node.left, start)
+            node.left, changed = self._delete(node.left, start)
+            if not changed:
+                return node, False
         elif start > node.start:
-            node.right = self._delete(node.right, start)
+            node.right, changed = self._delete(node.right, start)
+            if not changed:
+                return node, False
         else:
             if node.left is None:
-                return node.right
+                return node.right, True
             if node.right is None:
-                return node.left
+                return node.left, True
 
             if node.left.priority > node.right.priority:
                 node = self._rotate_right(node)
-                node.right = self._delete(node.right, start)
+                node.right, _ = self._delete(node.right, start)
             else:
                 node = self._rotate_left(node)
-                node.left = self._delete(node.left, start)
+                node.left, _ = self._delete(node.left, start)
+            _update(node)
+            return node, True
 
+        old = node.max_gap
         _update(node)
-        return node
+        return node, node.max_gap != old
