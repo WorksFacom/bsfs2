@@ -36,6 +36,11 @@ struct disk_mapped_inode {
 struct bsfs_inode {
   __u32 btree_root;
 
+  // stashed by bsfs_unlink so bsfs_evict_inode can build the recovery snapshot once the inode is truly gone (i_nlink == 0)
+  // a non-zero parent ino doubles as a "snapshot pending" flag (valid inos are >= 1)
+  __u32 i_deleted_parent_ino;
+  char  i_deleted_name[MAX_FILENAME];
+
   struct inode vfs_inode;
 };
 

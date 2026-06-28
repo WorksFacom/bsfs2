@@ -61,7 +61,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   // if the struct size ever changes, the kernel won't compile
   // catches accidental ABI breaks or padding changes at build time.
-  BUILD_BUG_ON(600 != sizeof(struct bsfs_inode));
+  BUILD_BUG_ON(856 != sizeof(struct bsfs_inode));
 
   if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE)) {
     pr_err("unable to set block size");

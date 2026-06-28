@@ -78,7 +78,7 @@ typedef struct rec_entry_t {
   __u16 gid;
   __u16 permissions;
   __u32 file_size;
-  __u32 block_count;
+  __u32 block_count; // TODO: is this still useful in kernel?
   __u32 btree_root;
   __u64 retention_until;
 } rec_entry_t;

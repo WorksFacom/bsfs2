@@ -2,6 +2,7 @@
 #include "../include/btree.h"
 #include "../include/dir.h"
 #include "../include/file.h"
+#include "../include/rec_entry.h"
 #include <linux/mpage.h>
 #include <linux/writeback.h>
 
@@ -593,10 +594,15 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
 struct inode *bsfs_alloc_inode(struct super_block *sb) {
   struct bsfs_inode *bsfs_inode;
 
+  // initialized once per slab object lifetime, not on every reuse
   bsfs_inode = alloc_inode_sb(sb, bsfs_inode_cache, GFP_KERNEL);
 
   if (!bsfs_inode)
     return NULL;
+
+  // no pending recovery snapshot until bsfs_unlink stashes one
+  // the slab is recycled, so clear the sentinel explicitly
+  bsfs_inode->i_deleted_parent_ino = 0;
 
   return &bsfs_inode->vfs_inode;
 }
@@ -693,18 +699,60 @@ void bsfs_free_cache_inode(struct inode *inode) {
 }
 
 // TODO: add rationale
-// TODO: is this correct?
 void bsfs_evict_inode(struct inode *inode) {
   truncate_inode_pages_final(&inode->i_data);
 
   if (!inode->i_nlink) {
     // other FS would do inode->i_size = 0 then truncate(inode)
-    // we don't do that here since we'll add a rec entry and need the data to
-    // still be on-disk
+    // we don't do that here since we'll add a rec entry and need the data to still be on-disk
     struct super_block     *sb  = inode->i_sb;
     struct bsfs_super_info *sbi = bsfs_sb(sb);
+    struct bsfs_inode      *bi  = bsfs_i(inode);
 
-    btree_handle_t *inode_h = btree_create_inode_handle();
+    btree_handle_t *inode_h;
+
+    // build the recovery snapshot from the inode's final state, before we tear it down
+    // a non-zero stashed parent ino means this inode reached nlink 0 via bsfs_unlink (vs. a bad inode or other path), so it should be
+    // recoverable
+    if (bi->i_deleted_parent_ino) {
+      btree_handle_t *rec_tree = btree_create_rec_entry_handle();
+
+      if (rec_tree) {
+        rec_entry_t rec = {0};
+
+        // recovery_id is assigned by bsfs_rec_tree_add
+        rec.deleted_at          = ktime_get_real_seconds();
+        rec.original_parent_ino = bi->i_deleted_parent_ino;
+
+        strscpy(rec.original_name, bi->i_deleted_name, sizeof(rec.original_name));
+
+        rec.inode_number    = inode->i_ino;
+        rec.file_type       = S_ISDIR(inode->i_mode) ? 0 : 1;
+        rec.uid             = fs_high2lowuid(i_uid_read(inode));
+        rec.gid             = fs_high2lowgid(i_gid_read(inode));
+        rec.permissions     = inode->i_mode;
+        rec.file_size       = inode->i_size;
+        rec.block_count     = 0; // not maintained on disk, reclaim walks btree_root
+        rec.btree_root      = bi->btree_root;
+        rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
+
+        rec_tree->root_block = sbi->super->recovery_root;
+
+        mutex_lock(&sbi->rec_lock);
+
+        // bsfs_rec_tree_add persists recovery_root to the super block itself
+        if (bsfs_rec_tree_add(sb, rec_tree, &rec))
+          pr_warn("failed to record recovery snapshot for inode %lu\n", inode->i_ino);
+
+        mutex_unlock(&sbi->rec_lock);
+
+        kfree(rec_tree);
+      } else {
+        pr_warn("no memory for recovery snapshot of inode %lu\n", inode->i_ino);
+      }
+    }
+
+    inode_h = btree_create_inode_handle();
 
     if (inode_h) {
       invalidate_inode_buffers(inode);

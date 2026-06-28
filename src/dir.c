@@ -221,79 +221,28 @@ out_fail:
   goto out;
 }
 
-// TODO: this is probably wrong
-// recovery entry should be added when file is deleted (i_nlink == 0)
-// move to bsfs_evict_inode ?
+// Recovery snapshot is not built here: a name can be removed while the file is still open (and being written to) or while other hard links
+// remain. We only want a snapshot once the inode is truly gone, so we stash the parent ino + name and let bsfs_evict_inode build it from
+// the inode's final state when i_nlink == 0
 static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
-  int err = 0;
+  int err;
 
-  struct super_block     *sb  = dir->i_sb;
-  struct bsfs_super_info *sbi = bsfs_sb(sb);
-
-  struct inode             *inode = d_inode(dentry);
-  struct disk_mapped_inode *disk_inode;
-  btree_handle_t           *rec_tree;
-  rec_entry_t               rec = {0};
+  struct inode *inode = d_inode(dentry);
 
   if (S_ISDIR(inode->i_mode))
     return -EISDIR;
 
-  disk_inode = bsfs_read_disk_inode(sb, inode->i_ino);
-
-  if (!disk_inode)
-    return -EIO;
-
-  // id will be added when inserting into tree
-  rec.recovery_id         = 0;
-  rec.deleted_at          = ktime_get_real_seconds();
-  rec.original_parent_ino = dir->i_ino;
-  strncpy(rec.original_name, dentry->d_name.name, sizeof(rec.original_name) - 1);
-  rec.original_name[sizeof(rec.original_name) - 1] = '\0';
-
-  rec.inode_number    = inode->i_ino;
-  rec.file_type       = S_ISDIR(inode->i_mode) ? 0 : 1;
-  rec.uid             = disk_inode->inode->uid;
-  rec.gid             = disk_inode->inode->gid;
-  rec.permissions     = disk_inode->inode->mode;
-  rec.file_size       = disk_inode->inode->size;
-  rec.block_count     = disk_inode->inode->block_count;
-  rec.btree_root      = disk_inode->inode->btree_root;
-  rec.retention_until = rec.deleted_at + DEFAULT_RECOVERY_TTL;
-
-  brelse(disk_inode->bh);
-  kfree(disk_inode);
-
-  rec_tree = btree_create_rec_entry_handle();
-
-  if (!rec_tree)
-    return -ENOMEM;
-
-  rec_tree->root_block = sbi->super->recovery_root;
-
-  mutex_lock(&sbi->rec_lock);
-
-  err = bsfs_rec_tree_add(sb, rec_tree, &rec);
-  if (err)
-    goto out_unlock;
+  // hand the parent ino + name to bsfs_evict_inode for the recovery snapshot.
+  bsfs_i(inode)->i_deleted_parent_ino = dir->i_ino;
+  strscpy(bsfs_i(inode)->i_deleted_name, dentry->d_name.name, MAX_FILENAME);
 
   err = bsfs_remove_link(dentry);
-  if (err) {
-    bsfs_rec_tree_remove(sb, rec_tree, rec.recovery_id);
-    goto out_unlock;
-  }
+  if (err)
+    return err;
 
   inode_dec_link_count(inode);
 
-out_unlock:
-  if (sbi->super->recovery_root != rec_tree->root_block) {
-    sbi->super->recovery_root = rec_tree->root_block;
-    mark_buffer_dirty(sbi->bh);
-    sbi->cached_recovery_root = rec_tree->root_block;
-  }
-  mutex_unlock(&sbi->rec_lock);
-  kfree(rec_tree);
-
-  return err;
+  return 0;
 }
 
 const struct inode_operations bsfs_dir_inode_operations = {
