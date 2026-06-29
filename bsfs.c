@@ -87,7 +87,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   // Allocate bitmap to keep the superblock small
   load_bitmap(s);
 
-  bsfs_rec_tree_init(s);
+  bsfs_rec_tree_mount_init(s);
 
   // TODO
   // __set_bit(0, sbi->s_imap[0]->b_data);

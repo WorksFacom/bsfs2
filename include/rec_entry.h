@@ -30,7 +30,7 @@
  * @param out  Output: initialized B-tree handle for the recovery tree.
  * @return 1 on success, 0 on failure.
  */
-void bsfs_rec_tree_init(struct super_block *sb);
+void bsfs_rec_tree_mount_init(struct super_block *sb);
 
 /**
  * @brief Insert a recovery entry into the Recovery B-tree.

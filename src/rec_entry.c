@@ -3,7 +3,7 @@
 
 // TODO: rec tree CLI
 // TODO: initialize rec_tree on mkfs - see old implementation
-void bsfs_rec_tree_init(struct super_block *sb) {
+void bsfs_rec_tree_mount_init(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   mutex_init(&sbi->rec_lock);
