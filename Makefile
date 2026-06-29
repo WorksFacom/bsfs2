@@ -9,8 +9,6 @@ bsfs2-src-objs := \
 	inode.o \
 	rec_entry.o
 	# rec_gc.o
-	# remove_file.o \
-	# restore_file.o
 
 obj-m += bsfs2.o
 
