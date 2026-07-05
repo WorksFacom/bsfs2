@@ -11,6 +11,7 @@
 #include "../bsfs.h"
 #include "../include/btree.h"
 #include "../include/dirent.h"
+#include "../include/file.h"
 #include "../include/inode.h"
 #include "../include/rec_entry.h"
 
@@ -360,5 +361,5 @@ const struct file_operations bsfs_dir_operations = {
     .llseek         = generic_file_llseek,
     .read           = generic_read_dir,
     .iterate_shared = bsfs_readdir,
-    .fsync          = noop_fsync, // TODO: implement
+    .fsync          = bsfs_fsync,
 };

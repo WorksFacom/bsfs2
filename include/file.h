@@ -15,6 +15,8 @@
 
 extern const struct file_operations bsfs_file_operations;
 
+int bsfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
+
 extern const struct inode_operations bsfs_file_inode_operations;
 
 extern const struct inode_operations bsfs_symlink_inode_operations;
