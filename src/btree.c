@@ -456,12 +456,15 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
 
   ret = btree_read_node(sb, parent_children[index], &child);
 
-  if (ret != 0)
+  if (ret != 0) {
+    deallocate_single_block(sb, blocknr);
     return ret;
+  }
 
-  ret = btree_read_node(sb, parent_children[index], &new_node);
+  ret = btree_read_node(sb, blocknr, &new_node);
   if (ret != 0) {
     btree_free_node(child);
+    deallocate_single_block(sb, blocknr);
     return -1;
   }
   btree_clear_node(sb, new_node);
@@ -469,7 +472,7 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
   new_node->node->is_leaf     = child->node->is_leaf;
   new_node->node->num_entries = handle->min_degree - 1;
 
-  memcpy(bentries(new_node), (char *)bchildren(child, handle) + handle->min_degree * size, (handle->min_degree - 1) * size);
+  memcpy(bentries(new_node), bentries(child) + handle->min_degree * size, (handle->min_degree - 1) * size);
 
   if (!child->node->is_leaf)
     memcpy(bchildren(new_node, handle), bchildren(child, handle) + handle->min_degree, handle->min_degree * sizeof(__u32));
