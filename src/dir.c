@@ -14,112 +14,6 @@
 #include "../include/inode.h"
 #include "../include/rec_entry.h"
 
-// TODO: .rmdir
-// int remove_directory(FILE *disk, bsfs_super_block *sb, const char *path, dir_t *cwd) {
-//   dir_t parent;
-//   char  name[MAX_FILENAME];
-//
-//   // 1. Resolve parent and name
-//   if (resolve_path(disk, sb, path, cwd, &parent, name) != 0) {
-//     fprintf(stderr, "Path resolution failed: %s\n", path);
-//     return -1;
-//   }
-//
-//   // 2. Lookup entry
-//   dir_entry_t entry;
-//   if (lookup_dir_entry(disk, sb, &parent, name, &entry) != 0) {
-//     fprintf(stderr, "Directory entry not found: %s\n", name);
-//     return -1;
-//   }
-//
-//   if (entry.file_type != FILE_TYPE_DIR) {
-//     fprintf(stderr, "Target is not a directory.\n");
-//     return -1;
-//   }
-//
-//   // 3. Load inode
-//   btree_handle_t *inode_tree = btree_create_inode_handle();
-//   inode_tree->root_block     = sb->inode_root;
-//   bsfs_inode dir_inode;
-//   if (!read_inode(disk, inode_tree, entry.inode_number, &dir_inode)) {
-//     fprintf(stderr, "Failed to read directory inode.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 4. Open the directory and check if it's empty
-//   dir_t dir;
-//   memset(&dir, 0, sizeof(dir));
-//   dir.inode         = dir_inode;
-//   dir.current_index = 0;
-//
-//   btree_handle_t *dir_tree = btree_create_dir_entry_handle();
-//   int             count    = 0;
-//   dir_entry_t     temp;
-//
-//   while (read_dir_entry(disk, sb, &dir, dir_tree, &temp) == 0) {
-//     if (strcmp(temp.filename, ".") != 0 && strcmp(temp.filename, "..") != 0) {
-//       count++;
-//       break;
-//     }
-//   }
-//
-//   free(dir_tree);
-//
-//   if (count > 0) {
-//     fprintf(stderr, "Directory is not empty.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 5. Remove directory entry from parent
-//   if (remove_dir_entry(disk, sb, &parent, name) != 0) {
-//     fprintf(stderr, "Failed to remove directory entry from parent.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   // 6. Remove inode (remove_inode returns 1 on success)
-//   if (!remove_inode(disk, sb, inode_tree, entry.inode_number)) {
-//     fprintf(stderr, "Failed to remove inode.\n");
-//     free(inode_tree);
-//     return -1;
-//   }
-//
-//   free(inode_tree);
-//   return 0;
-// }
-
-// TODO: .rename
-// int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name) {
-//   // 1. Lookup entry in source
-//   dir_entry_t entry;
-//   if (lookup_dir_entry(disk, sb, src_dir, src_name, &entry) != 0) {
-//     fprintf(stderr, "Entry '%s' not found in source directory.\n", src_name);
-//     return -1;
-//   }
-//
-//   // 2. Remove from source directory
-//   if (remove_dir_entry(disk, sb, src_dir, src_name) != 0) {
-//     fprintf(stderr, "Failed to remove entry '%s' from source.\n", src_name);
-//     return -1;
-//   }
-//
-//   // 3. Update name if needed
-//   if (strcmp(src_name, dest_name) != 0) {
-//     strncpy(entry.filename, dest_name, MAX_FILENAME);
-//     entry.filename[MAX_FILENAME - 1] = '\0'; // Ensure NUL termination
-//   }
-//
-//   // 4. Add to destination directory
-//   if (add_dir_entry(disk, sb, dest_dir, &entry) != 0) {
-//     fprintf(stderr, "Failed to insert entry into destination directory.\n");
-//     return -1;
-//   }
-//
-//   return 0;
-// }
-
 ino_t bsfs_inode_by_name(struct dentry *dentry) {
   ino_t ino = 0;
 
@@ -245,6 +139,126 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
   return 0;
 }
 
+// Walks the directory entry btree and reports whether any stored entry exists.
+// . and .. are synthesized on readdir and never stored, so any entry => not empty.
+static bool bsfs_subtree_has_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
+  struct btree_node *node;
+  __u32             *children = NULL;
+  __u32              i;
+  bool               found = false;
+
+  if (node_block == 0 || node_block == INVALID_BLOCK)
+    return false;
+
+  if (btree_read_node(sb, node_block, &node) != 0)
+    return false;
+
+  if (node->node->num_entries > 0) {
+    btree_free_node(node);
+    return true;
+  }
+
+  // empty node: defensively descend into any children before concluding
+  if (!node->node->is_leaf) {
+    children = bchildren(node, handle);
+    for (i = 0; i <= node->node->num_entries && !found; i++)
+      found = bsfs_subtree_has_entry(sb, handle, children[i]);
+  }
+
+  btree_free_node(node);
+  return found;
+}
+
+static bool bsfs_empty_dir(struct inode *dir) {
+  btree_handle_t *handle = btree_create_dir_entry_handle();
+  bool            empty;
+
+  if (!handle)
+    return false; // conservative: treat as non-empty when we can't check
+
+  handle->root_block = bsfs_i(dir)->btree_root;
+  empty              = !bsfs_subtree_has_entry(dir->i_sb, handle, handle->root_block);
+
+  kfree(handle);
+  return empty;
+}
+
+// Reverses bsfs_mkdir's link-count moves: an empty dir sits at i_nlink 2 (. and the
+// parent entry). Like bsfs_unlink, we stash the parent ino + name so bsfs_evict_inode
+// builds the recovery snapshot once i_nlink reaches 0.
+static int bsfs_rmdir(struct inode *dir, struct dentry *dentry) {
+  int           err;
+  struct inode *inode = d_inode(dentry);
+
+  if (!bsfs_empty_dir(inode))
+    return -ENOTEMPTY;
+
+  bsfs_i(inode)->i_deleted_parent_ino = dir->i_ino;
+  strscpy(bsfs_i(inode)->i_deleted_name, dentry->d_name.name, MAX_FILENAME);
+
+  err = bsfs_remove_link(dentry);
+  if (err)
+    return err;
+
+  inode_dec_link_count(inode); // drop "."          (2 -> 1)
+  inode_dec_link_count(inode); // drop parent entry (1 -> 0) => evict
+  inode_dec_link_count(dir);   // parent loses this dir's ".."
+
+  return 0;
+}
+
+// . and .. are synthesized, so moving a directory across parents needs no on-disk ".."
+// rewrite - only the parent link counts change. The single parent-entry link is moved,
+// so old_inode's i_nlink is left untouched.
+static int bsfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir,
+                       struct dentry *new_dentry, unsigned int flags) {
+  struct inode *old_inode = d_inode(old_dentry);
+  struct inode *new_inode = d_inode(new_dentry);
+  bool          is_dir    = S_ISDIR(old_inode->i_mode);
+  int           err;
+
+  if (flags & ~RENAME_NOREPLACE)
+    return -EINVAL;
+
+  if (new_inode) {
+    // overwrite an existing target
+    if (is_dir && !bsfs_empty_dir(new_inode))
+      return -ENOTEMPTY;
+
+    // snapshot for the target that is about to be evicted
+    bsfs_i(new_inode)->i_deleted_parent_ino = new_dir->i_ino;
+    strscpy(bsfs_i(new_inode)->i_deleted_name, new_dentry->d_name.name, MAX_FILENAME);
+
+    err = bsfs_remove_link(new_dentry);
+    if (err)
+      return err;
+
+    err = bsfs_add_link(new_dentry, old_inode);
+    if (err) {
+      bsfs_add_link(new_dentry, new_inode); // best-effort restore
+      return err;
+    }
+
+    if (is_dir)
+      inode_dec_link_count(new_inode); // target loses "."
+    inode_dec_link_count(new_inode);   // target loses its dir entry => evict
+  } else {
+    err = bsfs_add_link(new_dentry, old_inode);
+    if (err)
+      return err;
+    if (is_dir)
+      inode_inc_link_count(new_dir); // new_dir gains this dir's ".."
+  }
+
+  err = bsfs_remove_link(old_dentry);
+  mark_inode_dirty(old_inode);
+
+  if (is_dir)
+    inode_dec_link_count(old_dir); // old_dir loses this dir's ".."
+
+  return err;
+}
+
 const struct inode_operations bsfs_dir_inode_operations = {
     .lookup = bsfs_lookup,
     .create = bsfs_create,
@@ -252,9 +266,9 @@ const struct inode_operations bsfs_dir_inode_operations = {
     .mkdir  = bsfs_mkdir,
     // .link		= bsfs_link,
     // .symlink	= bsfs_symlink,
-    // .rmdir		= bsfs_rmdir,
-    // .mknod		= bsfs_mknod,
-    // .rename		= bsfs_rename,
+    .rmdir  = bsfs_rmdir,
+    .mknod  = bsfs_mknod,
+    .rename = bsfs_rename,
     // .getattr	= bsfs_getattr,
     // .tmpfile	= bsfs_tmpfile,
 };
