@@ -8,8 +8,10 @@
  * structures which manage stateful access.
  */
 #include "../include/file.h"
+#include "../include/inode.h"
 
 #include <linux/blkdev.h>
+#include <linux/mm.h>
 #include <linux/writeback.h>
 
 // generic_file_fsync won't cut it.
@@ -52,8 +54,31 @@ const struct file_operations bsfs_file_operations = {
     .fsync        = bsfs_fsync,
 };
 
-const struct inode_operations bsfs_file_inode_operations = {
+// VFS default truncate only updates i_size and the page cache. The on-disk extents
+// past the cut point survive, leak their blocks and read back as stale data once
+// the file is extended again. bsfs_truncate works off i_size, so set it first.
+static int bsfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *attr) {
+  struct inode *inode = d_inode(dentry);
+  int           error;
 
+  error = setattr_prepare(idmap, dentry, attr);
+  if (error)
+    return error;
+
+  if ((attr->ia_valid & ATTR_SIZE) && attr->ia_size != i_size_read(inode)) {
+    inode_dio_wait(inode);
+    truncate_setsize(inode, attr->ia_size);
+    bsfs_truncate(inode);
+    inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+  }
+
+  setattr_copy(idmap, inode, attr);
+  mark_inode_dirty(inode);
+  return 0;
+}
+
+const struct inode_operations bsfs_file_inode_operations = {
+    .setattr = bsfs_setattr,
 };
 
 const struct inode_operations bsfs_symlink_inode_operations = {
