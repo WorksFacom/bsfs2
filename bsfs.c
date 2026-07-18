@@ -20,7 +20,6 @@ static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   brelse(sbi->bh);
-  kfree(sbi->super);
   kfree(sbi);
 
   sb->s_fs_info = NULL;
@@ -54,14 +53,6 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   mutex_init(&sbi->inode_tree_lock);
   mutex_init(&sbi->bitmap_lock);
 
-  sbi->super = kzalloc(sizeof(struct bsfs_super_block), GFP_KERNEL);
-
-  if (!sbi->super) {
-    s->s_fs_info = NULL;
-    kfree(sbi);
-    return -ENOMEM;
-  }
-
   // if the struct size ever changes, the kernel won't compile
   // catches accidental ABI breaks or padding changes at build time.
   BUILD_BUG_ON(896 != sizeof(struct bsfs_inode));
@@ -77,7 +68,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   }
 
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
-  memcpy(sbi->super, bh->b_data, sizeof(struct bsfs_super_block));
+  sbi->super = bsfs_super;
   sbi->bh    = bh;
   s->s_magic = bsfs_super->magic_number;
 
@@ -162,7 +153,6 @@ out_bad_sb:
 
 out:
   s->s_fs_info = NULL;
-  kfree(sbi->super);
   kfree(sbi);
   return ret;
 }
