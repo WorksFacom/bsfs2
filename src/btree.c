@@ -488,15 +488,12 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
 
   child->node->num_entries = handle->min_degree - 1;
 
-  for (int j = (int)parent->node->num_entries; j > index; j--) {
-    parent_children[j + 1] = parent_children[j];
-  }
+  memmove(&parent_children[index + 2], &parent_children[index + 1], (parent->node->num_entries - index) * sizeof(__u32));
   parent_children[index + 1] = blocknr;
 
-  for (int j = (int)parent->node->num_entries - 1; j >= index; j--)
-    memcpy((char *)parent_entries + (j + 1) * size, (char *)parent_entries + j * size, size);
+  memmove(parent_entries + (index + 1) * size, parent_entries + index * size, (parent->node->num_entries - index) * size);
 
-  memcpy((char *)parent_entries + index * size, (char *)bentries(child) + (handle->min_degree - 1) * size, size);
+  memcpy(parent_entries + index * size, bentries(child) + (handle->min_degree - 1) * size, size);
 
   parent->node->num_entries++;
 
@@ -924,10 +921,12 @@ static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 
 
   left->node->num_entries = left_entries + right->node->num_entries;
 
-  for (__u32 i = (idx + 1); i < parent->node->num_entries; i++) {
-    memcpy(bentries(parent) + (i - 1) * size, bentries(parent) + i * size, size);
-    __u32 *c = bchildren(parent, handle);
-    c[i]     = c[i + 1];
+  {
+    __u32 *c     = bchildren(parent, handle);
+    __u32  moved = parent->node->num_entries - (idx + 1);
+
+    memmove(bentries(parent) + idx * size, bentries(parent) + (idx + 1) * size, moved * size);
+    memmove(&c[idx + 1], &c[idx + 2], moved * sizeof(__u32));
   }
 
   parent->node->num_entries--;
@@ -1010,16 +1009,11 @@ static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *han
   child_entries   = bentries(child);
   sibling_entries = bentries(sibling);
 
-  for (int i = child->node->num_entries - 1; i >= 0; i--) {
-    memcpy(child_entries + (i + 1) * size, child_entries + i * size, size);
-  }
+  memmove(child_entries + size, child_entries, child->node->num_entries * size);
 
   child_children = bchildren(child, handle);
-  if (!child->node->is_leaf) {
-    for (int i = child->node->num_entries; i >= 0; i--) {
-      child_children[i + 1] = child_children[i];
-    }
-  }
+  if (!child->node->is_leaf)
+    memmove(&child_children[1], &child_children[0], (child->node->num_entries + 1) * sizeof(__u32));
 
   memcpy(child_entries, parent_entries + (idx - 1) * size, size);
 
@@ -1078,16 +1072,10 @@ static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *han
 
   memcpy(parent_entries + idx * size, sibling_entries, size);
 
-  for (__u32 i = 1; i < sibling->node->num_entries; i++) {
-    memcpy(sibling_entries + (i - 1) * size, sibling_entries + i * size, size);
-  }
+  memmove(sibling_entries, sibling_entries + size, (sibling->node->num_entries - 1) * size);
 
-  if (!sibling->node->is_leaf && sibling->node->num_entries > 0) {
-    __u32 end = sibling->node->num_entries - 1;
-    for (__u32 i = 0; i <= end; i++) {
-      sibling_children[i] = sibling_children[i + 1];
-    }
-  }
+  if (!sibling->node->is_leaf)
+    memmove(&sibling_children[0], &sibling_children[1], sibling->node->num_entries * sizeof(__u32));
 
   child->node->num_entries++;
   sibling->node->num_entries--;

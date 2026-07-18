@@ -292,20 +292,6 @@ int btree_remove(struct super_block *sb, btree_handle_t *handle, __u32 key);
 int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const void *entry);
 
 /**
- * @brief Writes a B-tree node to disk.
- *
- * Serializes the in-memory B-tree node structure into a fixed-size block
- * and writes it to the specified block number on disk.
- *
- * @param disk Pointer to the open disk file.
- * @param handle Pointer to the B-tree handle containing entry configuration.
- * @param block The block number where the node should be written.
- * @param node Pointer to the in-memory B-tree node structure.
- * @return 0 on success, -1 on failure.
- */
-int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node_t *node);
-
-/**
  * @brief Reads and deserializes a B-tree node from disk.
  *
  * This function reads a B-tree node from the specified disk block and
