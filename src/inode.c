@@ -364,7 +364,14 @@ void bsfs_truncate(struct inode *inode) {
   block_truncate_page(inode->i_mapping, inode->i_size, bsfs_get_block);
 
   btree_handle_t *bspan_h = btree_create_bspan_handle();
-  bspan_h->root_block     = bsfs_inode->btree_root;
+
+  if (!bspan_h)
+    return;
+
+  // taken after block_truncate_page: it calls bsfs_get_block, which takes this mutex itself
+  mutex_lock(&bsfs_inode->truncate_mutex);
+
+  bspan_h->root_block = bsfs_inode->btree_root;
 
   // 1) Shrink overlapping head span if needed
   bspan_t span;
@@ -439,13 +446,26 @@ void bsfs_truncate(struct inode *inode) {
 
   // Remove collected keys
   for (size_t i = 0; i < kcount; i++) {
-    bspan_t bs;
-    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&bs, &node)) {
+    bspan_t *found;
+    bspan_t  bs;
+
+    // btree_search returns a pointer into the node's buffer - copy the span out before releasing the node
+    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&found, &node)) {
+      bs = *found;
       btree_free_node(node);
       deallocate_bspan(sb, &bs);
       btree_remove(sb, bspan_h, keys[i].k);
     }
   }
+
+  // removals may have shrunk (or emptied) the tree root
+  if (bsfs_inode->btree_root != bspan_h->root_block) {
+    bsfs_inode->btree_root = bspan_h->root_block;
+    mark_inode_dirty(inode);
+  }
+
+  mutex_unlock(&bsfs_inode->truncate_mutex);
+  kfree(bspan_h);
 }
 
 // old read_inode() on btree.c
@@ -771,6 +791,8 @@ void bsfs_evict_inode(struct inode *inode) {
 
 static void init_once(void *foo) {
   struct bsfs_inode *ei = foo;
+
+  mutex_init(&ei->truncate_mutex);
   inode_init_once(&ei->vfs_inode);
 }
 

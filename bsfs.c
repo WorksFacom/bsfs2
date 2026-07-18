@@ -51,6 +51,9 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   s->s_fs_info = sbi;
 
+  mutex_init(&sbi->inode_tree_lock);
+  mutex_init(&sbi->bitmap_lock);
+
   sbi->super = kzalloc(sizeof(struct bsfs_super_block), GFP_KERNEL);
 
   if (!sbi->super) {
@@ -61,7 +64,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   // if the struct size ever changes, the kernel won't compile
   // catches accidental ABI breaks or padding changes at build time.
-  BUILD_BUG_ON(856 != sizeof(struct bsfs_inode));
+  BUILD_BUG_ON(896 != sizeof(struct bsfs_inode));
 
   if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE)) {
     pr_err("unable to set block size");

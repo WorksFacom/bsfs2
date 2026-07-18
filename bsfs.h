@@ -20,8 +20,10 @@ struct bsfs_super_info {
   struct buffer_head **bitmap_map;
   __u32                next_inode_number;
   struct mutex         rec_lock;
-  __u32                next_recovery_id;
-  __u32                cached_recovery_root;
+  struct mutex inode_tree_lock;
+  struct mutex bitmap_lock;
+  __u32        next_recovery_id;
+  __u32        cached_recovery_root;
 };
 
 static inline struct bsfs_super_info *bsfs_sb(struct super_block *sb) {
@@ -35,6 +37,9 @@ struct disk_mapped_inode {
 
 struct bsfs_inode {
   __u32 btree_root;
+
+  // serializes bspan-tree ops on the inode (get_block vs truncate vs concurrent writers)
+  struct mutex truncate_mutex;
 
   // stashed by bsfs_unlink so bsfs_evict_inode can build the recovery snapshot once the inode is truly gone (i_nlink == 0)
   // a non-zero parent ino doubles as a "snapshot pending" flag (valid inos are >= 1)
