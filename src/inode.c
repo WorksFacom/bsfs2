@@ -783,18 +783,18 @@ void bsfs_free_cache_inode(struct inode *inode) {
   kmem_cache_free(bsfs_inode_cache, bsfs_i(inode));
 }
 
-// TODO: add rationale
 void bsfs_evict_inode(struct inode *inode) {
+  bool want_delete = !inode->i_nlink && !is_bad_inode(inode);
+
+  struct super_block     *sb  = inode->i_sb;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  struct bsfs_inode      *bi  = bsfs_i(inode);
+
   truncate_inode_pages_final(&inode->i_data);
 
-  if (!inode->i_nlink) {
+  if (want_delete) {
     // other FS would do inode->i_size = 0 then truncate(inode)
     // we don't do that here since we'll add a rec entry and need the data to still be on-disk
-    struct super_block     *sb  = inode->i_sb;
-    struct bsfs_super_info *sbi = bsfs_sb(sb);
-    struct bsfs_inode      *bi  = bsfs_i(inode);
-
-    btree_handle_t *inode_h;
 
     // build the recovery snapshot from the inode's final state, before we tear it down
     // a non-zero stashed parent ino means this inode reached nlink 0 via bsfs_unlink (vs. a bad inode or other path), so it should be
@@ -836,13 +836,15 @@ void bsfs_evict_inode(struct inode *inode) {
         pr_warn("no memory for recovery snapshot of inode %lu\n", inode->i_ino);
       }
     }
+  }
 
-    inode_h = btree_create_inode_handle();
+  invalidate_inode_buffers(inode);
+  clear_inode(inode);
+
+  if (want_delete) {
+    btree_handle_t *inode_h = btree_create_inode_handle();
 
     if (inode_h) {
-      invalidate_inode_buffers(inode);
-      clear_inode(inode);
-
       mutex_lock(&sbi->inode_tree_lock);
 
       inode_h->root_block = sbi->super->inode_root;
@@ -854,6 +856,8 @@ void bsfs_evict_inode(struct inode *inode) {
 
       mutex_unlock(&sbi->inode_tree_lock);
       kfree(inode_h);
+    } else {
+      pr_warn("no memory to remove inode %lu from inode tree\n", inode->i_ino);
     }
   }
 }
@@ -1041,7 +1045,28 @@ static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapp
 }
 
 static int bsfs_writepages(struct address_space *mapping, struct writeback_control *wbc) {
-  return mpage_writepages(mapping, wbc, bsfs_get_block);
+  struct inode *inode = mapping->host;
+  struct folio *folio = NULL;
+  int           error = 0;
+
+  while ((folio = writeback_iter(mapping, wbc, folio, &error))) {
+    loff_t i_size = i_size_read(inode);
+
+    // fully past eof: racing truncate, nothing to write
+    if (folio_pos(folio) >= i_size) {
+      folio_unlock(folio);
+      error = 0;
+      continue;
+    }
+
+    // re-zero the tail past eof on every writeback, the folio may be mmapped
+    if (folio_pos(folio) + folio_size(folio) > i_size)
+      folio_zero_segment(folio, offset_in_folio(folio, i_size), folio_size(folio));
+
+    error = __block_write_full_folio(inode, folio, bsfs_get_block, wbc);
+  }
+
+  return error;
 }
 
 static sector_t bsfs_bmap(struct address_space *mapping, sector_t block) {
