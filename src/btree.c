@@ -13,6 +13,8 @@ static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *han
                                      int idx);
 static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
                                      int idx);
+static int  btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry);
+static int  btree_find_min_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -573,15 +575,23 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
           goto out;
 
         if (pred->node->num_entries >= handle->min_degree) {
-          memcpy(bentries(node) + i * size, bentries(pred) + (pred->node->num_entries - 1) * size, size);
-
-          mark_buffer_dirty(node->bh);
-
-          __u32 pred_key = handle->get_key(bentries(pred) + (pred->node->num_entries - 1) * size);
+          // promote the subtree maximum, not pred's own last entry: pred may
+          // be internal, and its last entry is not the largest key below it
+          __u8 *scratch = kmalloc(size, GFP_KERNEL);
 
           btree_free_node(pred);
 
-          ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i], pred_key);
+          if (!scratch)
+            goto out;
+
+          if (btree_find_max_entry(sb, handle, bchildren(node, handle)[i], scratch)) {
+            memcpy(bentries(node) + i * size, scratch, size);
+            mark_buffer_dirty(node->bh);
+
+            ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i], handle->get_key(scratch));
+          }
+
+          kfree(scratch);
         } else {
           btree_free_node(pred);
 
@@ -589,21 +599,27 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
             goto out;
 
           if (succ->node->num_entries >= handle->min_degree) {
-            memcpy(bentries(node) + i * size, bentries(succ), size);
-
-            mark_buffer_dirty(node->bh);
-
-            __u32 succ_key = handle->get_key(bentries(succ));
+            // symmetric: promote the subtree minimum of the right child
+            __u8 *scratch = kmalloc(size, GFP_KERNEL);
 
             btree_free_node(succ);
 
-            ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i + 1], succ_key);
+            if (!scratch)
+              goto out;
+
+            if (btree_find_min_entry(sb, handle, bchildren(node, handle)[i + 1], scratch)) {
+              memcpy(bentries(node) + i * size, scratch, size);
+              mark_buffer_dirty(node->bh);
+
+              ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i + 1], handle->get_key(scratch));
+            }
+
+            kfree(scratch);
           } else {
+            btree_free_node(succ);
             __btree_merge(sb, handle, node_block, node, i);
             ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i], key);
           }
-          // succ was freed in the >= branch and merged into left in the else
-          // branch; do not double-free here.
         }
       }
     }
@@ -657,6 +673,30 @@ static int btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, 
   }
 
   btree_free_node(node);
+  return ok;
+}
+
+static int btree_find_min_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry) {
+  int                ok = 0;
+  struct btree_node *node;
+
+  while (node_block) {
+    if (btree_read_node(sb, handle, node_block, &node) != 0)
+      return 0;
+
+    if (node->node->is_leaf) {
+      if (node->node->num_entries > 0) {
+        memcpy(out_entry, bentries(node), handle->entry_size);
+        ok = 1;
+      }
+      btree_free_node(node);
+      break;
+    }
+
+    node_block = bchildren(node, handle)[0];
+    btree_free_node(node);
+  }
+
   return ok;
 }
 
@@ -757,28 +797,7 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
           goto out;
         }
 
-        {
-          __u32 nb = right_block;
-          while (nb) {
-            struct btree_node *n;
-
-            ret = btree_read_node(sb, handle, nb, &n);
-            if (ret != 0)
-              break;
-
-            if (n->node->is_leaf) {
-              if (n->node->num_entries > 0) {
-                memcpy(succ, bentries(n), size);
-                ok = 1;
-              }
-              btree_free_node(n);
-              break;
-            }
-
-            nb = bchildren(n, handle)[0];
-            btree_free_node(n);
-          }
-        }
+        ok = btree_find_min_entry(sb, handle, right_block, succ);
 
         if (ok) {
           memcpy(entries + i * size, succ, size);
