@@ -23,12 +23,9 @@ static inline int default_compare(const void *a, const void *b) {
 static int compute_min_degree(__u64 entry_size) {
   int t = 2;
 
-  __u64 entry_area   = entry_size * (2 * 4 - 1);
-  __u64 pointer_area = sizeof(__u32) * (2 * 4);
-
   while (1) {
-    entry_area          = entry_size * (2 * t - 1);
-    pointer_area        = sizeof(__u32) * (2 * t);
+    __u64 entry_area    = entry_size * (2 * t - 1);
+    __u64 pointer_area  = sizeof(__u32) * (2 * t);
     __u64 node_overhead = sizeof(__u8) + sizeof(__u32);
 
     if (entry_area + pointer_area + node_overhead > BSFS_BLOCK_SIZE)
@@ -187,9 +184,6 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
   __u32  next_block;
   size_t size;
 
-  if (node_block == 0 || node_block == INVALID_BLOCK)
-    return 0;
-
   size = handle->entry_size;
 
   while (node_block != 0 && node_block != INVALID_BLOCK) {
@@ -253,30 +247,15 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   while (i < (int)node->node->num_entries) {
     void *e   = entries + i * handle->entry_size;
     int   cmp = handle->cmp(e, needle);
-    (void)node_block; // suppress debug-only variables
     if (cmp >= 0)
       break;
     i++;
   }
 
-  if (i < (int)node->node->num_entries) {
-    void *e = entries + i * handle->entry_size;
-
-    int cmp_eq = handle->cmp(e, needle);
-    if (cmp_eq == 0) {
-      memcpy(output, e, handle->entry_size);
-      btree_free_node(node);
-      return 1;
-    }
-
-    // If key > entries[i], descend to right child i+1
-    if (!node->node->is_leaf && cmp_eq < 0) {
-      children = bchildren(node, handle);
-      // TODO: i think it's broken right here 👇
-      __u32 right_child = children[i + 1];
-      btree_free_node(node);
-      return btree_search_entry(sb, handle, right_child, needle, output);
-    }
+  if (i < (int)node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0) {
+    memcpy(output, entries + i * handle->entry_size, handle->entry_size);
+    btree_free_node(node);
+    return 1;
   }
 
   if (node->node->is_leaf) {
@@ -284,7 +263,7 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     return 0;
   }
 
-  // Otherwise, key is less than entries[i] (or i == num_entries): go to child i
+  // needle is less than entries[i] (or i == num_entries): go to child i
   children          = bchildren(node, handle);
   __u32 child_block = children[(__u32)i];
   btree_free_node(node);
