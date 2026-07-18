@@ -854,13 +854,8 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
       goto out;
     }
 
-    if (child->node->num_entries < (__u32)handle->min_degree) {
-      __btree_fill(sb, handle, node_block, node, child_idx);
-      mark_buffer_dirty(node->bh);
-
-      if (child_idx > (int)node->node->num_entries)
-        child_idx = node->node->num_entries;
-    }
+    if (child->node->num_entries < (__u32)handle->min_degree)
+      child_idx = __btree_fill(sb, handle, node_block, node, child_idx);
 
     btree_free_node(child);
     child = NULL;
