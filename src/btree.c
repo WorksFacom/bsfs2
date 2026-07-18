@@ -883,13 +883,22 @@ out:
 
 int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const void *entry) {
   int                success;
+  void              *needle;
   struct btree_node *root;
 
   if (!handle || handle->root_block == 0)
     return 0;
 
+  // callers may pass a pointer into a live tree node's buffer
+  // merges and shifts during removal would rewrite it mid-recursion, so compare against a stable copy
+  needle = kmemdup(entry, handle->entry_size, GFP_KERNEL);
+
+  if (!needle)
+    return 0;
+
   success = 0;
-  btree_remove_entry_internal(sb, handle, handle->root_block, entry, &success);
+  btree_remove_entry_internal(sb, handle, handle->root_block, needle, &success);
+  kfree(needle);
 
   if (success && handle->root_block != 0) {
     if (btree_read_node(sb, handle, handle->root_block, &root) == 0) {
