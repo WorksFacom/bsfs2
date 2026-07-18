@@ -375,7 +375,12 @@ void bsfs_truncate(struct inode *inode) {
 
   // 1) Shrink overlapping head span if needed
   bspan_t span;
-  if (bspan_search_le(sb, bspan_h, iblock, &span)) {
+  int     found = bspan_search_le(sb, bspan_h, iblock, &span);
+
+  if (found < 0)
+    pr_warn("truncate: bspan lookup failed (%d), skipping head-span shrink\n", found);
+
+  if (found == 1) {
     if (iblock < span.file_blk + span.length) {
       // free tail portion beyond new_size
       bspan_t tail     = span;
@@ -384,16 +389,20 @@ void bsfs_truncate(struct inode *inode) {
       tail.disk_blk    = span.disk_blk + keep_len;
       tail.length      = span.length - keep_len;
 
-      if (tail.length > 0)
-        deallocate_bspan(sb, &tail);
-
-      // shrink original span to keep portion
+      // shrink the span in the tree first
+      // only deallocate the tail blocks once the tree no longer references them
       span.length = keep_len;
       if (keep_len > 0) {
-        btree_update(sb, bspan_h, bspan_h->root_block, &span);
+        if (btree_update(sb, bspan_h, bspan_h->root_block, &span) == 1)
+          deallocate_bspan(sb, &tail);
+        else
+          pr_warn("truncate: failed to shrink span at file_blk %u, leaking %u blocks\n", span.file_blk, tail.length);
       } else {
         // remove empty span entry
-        btree_remove(sb, bspan_h, span.file_blk);
+        if (btree_remove(sb, bspan_h, span.file_blk))
+          deallocate_bspan(sb, &tail);
+        else
+          pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", span.file_blk, tail.length);
       }
     }
   }
@@ -449,12 +458,16 @@ void bsfs_truncate(struct inode *inode) {
     bspan_t *found;
     bspan_t  bs;
 
-    // btree_search returns a pointer into the node's buffer - copy the span out before releasing the node
-    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&found, &node)) {
+    // btree_search returns a pointer into the node's buffer
+    // copy the span out before releasing the node
+    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&found, &node) == 1) {
       bs = *found;
       btree_free_node(node);
-      deallocate_bspan(sb, &bs);
-      btree_remove(sb, bspan_h, keys[i].k);
+      // drop the tree reference first, then free the blocks
+      if (btree_remove(sb, bspan_h, keys[i].k))
+        deallocate_bspan(sb, &bs);
+      else
+        pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", bs.file_blk, bs.length);
     }
   }
 
