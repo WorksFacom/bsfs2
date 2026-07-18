@@ -490,11 +490,16 @@ struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino
   struct disk_mapped_inode_t *inode;
 
   btree_handle_t *inode_h = btree_create_inode_handle();
-  inode_h->root_block     = sbi->super->inode_root;
+
+  if (!inode_h)
+    return NULL;
+
+  inode_h->root_block = sbi->super->inode_root;
 
   ret = btree_search(sb, inode_h, inode_h->root_block, ino, (void **)&inode, &node);
+  kfree(inode_h);
 
-  if (!ret)
+  if (ret != 1)
     return NULL;
 
   // TODO: applicable?
@@ -509,6 +514,11 @@ struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino
   kfree(node);
 
   struct disk_mapped_inode *out = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
+
+  if (!out) {
+    brelse(bh);
+    return NULL;
+  }
 
   out->inode = inode;
   out->bh    = bh;
