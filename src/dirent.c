@@ -20,7 +20,7 @@ int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 n
   if (node_block == 0)
     return 0;
 
-  ret = btree_read_node(sb, node_block, &node);
+  ret = btree_read_node(sb, handle, node_block, &node);
 
   if (ret != 0)
     return 0;

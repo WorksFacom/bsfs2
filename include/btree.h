@@ -177,8 +177,6 @@ static inline btree_handle_t *btree_create_rec_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_RECOVERY, sizeof(rec_entry_t), compare_rec_entry, get_rec_entry_key);
 }
 
-void btree_clear_node(struct super_block *sb, struct btree_node *node);
-
 /**
  * @brief Inserts a new entry into the B-tree.
  *
@@ -328,7 +326,7 @@ int btree_write_node(struct super_block *sb, btree_handle_t *handle, __u32 block
  * @param block The disk block number to read from.
  * @return Pointer to a newly allocated and populated `btree_node_t` structure.
  */
-int btree_read_node(struct super_block *sb, __u32 block, struct btree_node **out_node);
+int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node **out_node);
 
 /**
  * @brief Frees the memory allocated for a B-tree node.

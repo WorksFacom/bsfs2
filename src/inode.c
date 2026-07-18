@@ -16,7 +16,7 @@ static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btr
     return NULL;
 
   while (node_block != 0 && node_block != INVALID_BLOCK) {
-    if (btree_read_node(sb, node_block, &node) != 0 || !node)
+    if (btree_read_node(sb, handle, node_block, &node) != 0)
       return NULL;
 
     if (node->node->num_entries == 0) {
@@ -412,7 +412,7 @@ void bsfs_truncate(struct inode *inode) {
     int   ret;
     __u32 nb = stack[--top];
 
-    ret = btree_read_node(sb, nb, &node);
+    ret = btree_read_node(sb, bspan_h, nb, &node);
 
     if (ret != 0)
       continue;

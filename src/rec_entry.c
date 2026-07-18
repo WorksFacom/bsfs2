@@ -27,7 +27,7 @@ static void rec_tree_sync_next_id(struct super_block *sb, btree_handle_t *rec_tr
   __u32              node_block = rec_tree_h->root_block;
 
   while (node_block && node_block != INVALID_BLOCK) {
-    if (btree_read_node(sb, node_block, &node) != 0 || !node)
+    if (btree_read_node(sb, rec_tree_h, node_block, &node) != 0)
       break;
 
     if (node->node->is_leaf) {

@@ -151,7 +151,7 @@ static bool bsfs_subtree_has_entry(struct super_block *sb, btree_handle_t *handl
   if (node_block == 0 || node_block == INVALID_BLOCK)
     return false;
 
-  if (btree_read_node(sb, node_block, &node) != 0)
+  if (btree_read_node(sb, handle, node_block, &node) != 0)
     return false;
 
   if (node->node->num_entries > 0) {
@@ -284,7 +284,7 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
   if (node_block == 0 || node_block == INVALID_BLOCK)
     return 0;
 
-  if (btree_read_node(sb, node_block, &node) != 0)
+  if (btree_read_node(sb, handle, node_block, &node) != 0)
     return 0;
 
   if (!node->node->is_leaf)
