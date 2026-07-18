@@ -59,10 +59,17 @@ static inline void btree_shift_left(void *entries, __u64 entry_size, int from, i
 
 // TODO: properly handle alignment (e.g: get_unaligned_le32)
 int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node **out_node) {
-  struct buffer_head  *bh;
-  struct btree_node_t *raw;
+  struct buffer_head      *bh;
+  struct btree_node_t     *raw;
+  struct bsfs_super_info  *sbi = bsfs_sb(sb);
 
   *out_node = NULL;
+
+  // corrupt child pointer must not read an arbitrary block as a node
+  if (block == 0 || block == INVALID_BLOCK || (sbi && sbi->super && block >= sbi->super->total_blocks)) {
+    pr_err("refusing to read btree node at invalid block %u\n", block);
+    return -EUCLEAN;
+  }
 
   bh = sb_bread(sb, block);
 
