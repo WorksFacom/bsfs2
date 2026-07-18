@@ -8,21 +8,25 @@
 
 static struct kmem_cache *bsfs_inode_cache;
 
-// TODO: is this working?
-static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
+static int inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct disk_mapped_inode **out) {
+  int                ret;
   struct btree_node *node = NULL;
 
+  *out = NULL;
+
   if (!handle || node_block == 0 || node_block == INVALID_BLOCK)
-    return NULL;
+    return 0;
 
   while (node_block != 0 && node_block != INVALID_BLOCK) {
-    if (btree_read_node(sb, handle, node_block, &node) != 0)
-      return NULL;
+    ret = btree_read_node(sb, handle, node_block, &node);
+
+    if (ret != 0)
+      return ret;
 
     if (node->node->num_entries == 0) {
       if (node->node->is_leaf) {
         btree_free_node(node);
-        return NULL;
+        return 0;
       }
 
       __u32 child_blk = bchildren(node, handle)[0];
@@ -49,28 +53,31 @@ static struct disk_mapped_inode *inode_tree_find_max(struct super_block *sb, btr
   if (!node || node->node->num_entries == 0) {
     if (node)
       btree_free_node(node);
-    return NULL;
+    return 0;
   }
 
   struct disk_mapped_inode_t *inode = (struct disk_mapped_inode_t *)(bentries(node) + (node->node->num_entries - 1) * handle->entry_size);
   struct buffer_head         *bh    = node->bh;
-  struct disk_mapped_inode   *out   = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
+  struct disk_mapped_inode   *max   = kmalloc(sizeof(struct disk_mapped_inode), GFP_NOFS);
 
   kfree(node);
 
-  if (!out) {
+  if (!max) {
     brelse(bh);
-    return NULL;
+    return -ENOMEM;
   }
 
-  out->inode = inode;
-  out->bh    = bh;
-  return out;
+  max->inode = inode;
+  max->bh    = bh;
+  *out       = max;
+  return 1;
 }
 
 // TODO: sync once and use cached value on sbi until unmount?
 static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) {
-  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  int                       ret;
+  struct disk_mapped_inode *max_inode;
+  struct bsfs_super_info   *sbi = bsfs_sb(sb);
 
   __u32 root_block = sbi->super->inode_root;
 
@@ -79,9 +86,15 @@ static void inode_sync_next(struct super_block *sb, btree_handle_t *inode_tree) 
     return;
   }
 
-  struct disk_mapped_inode *max_inode = inode_tree_find_max(sb, inode_tree, root_block);
+  ret = inode_tree_find_max(sb, inode_tree, root_block, &max_inode);
 
-  if (max_inode) {
+  if (ret < 0) {
+    // 0 makes get_next_inode_number report failure
+    sbi->next_inode_number = 0;
+    return;
+  }
+
+  if (ret == 1) {
     sbi->next_inode_number = max_inode->inode->ino + 1;
     brelse(max_inode->bh);
     kfree(max_inode);
@@ -94,6 +107,9 @@ __u32 get_next_inode_number(struct super_block *sb, btree_handle_t *inode_tree) 
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   inode_sync_next(sb, inode_tree);
+
+  if (!sbi->next_inode_number)
+    return 0;
 
   return sbi->next_inode_number++;
 }
@@ -888,7 +904,15 @@ int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh,
   bspan_h->root_block = bsfs_inode->btree_root;
 
   found = bspan_search_le(sb, bspan_h, iblock, &span);
-  if (found && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
+
+  // don't fall through to allocation on a failed lookup
+  // the block may already be mapped, a second allocation would shadow it
+  if (found < 0) {
+    ret = found;
+    goto out;
+  }
+
+  if (found == 1 && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
     map_bh(bh, sb, span.disk_blk + (iblock - span.file_blk));
     goto out;
   }
@@ -907,9 +931,9 @@ int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh,
   }
 
   //  try to extend predecessor span if physically contiguous
-  if (found && iblock == span.file_blk + span.length && span.disk_blk + span.length == phys_block) {
+  if (found == 1 && iblock == span.file_blk + span.length && span.disk_blk + span.length == phys_block) {
     span.length++;
-    if (!btree_update(sb, bspan_h, bspan_h->root_block, &span)) {
+    if (btree_update(sb, bspan_h, bspan_h->root_block, &span) != 1) {
       deallocate_single_block(sb, phys_block);
       ret = -EIO;
       goto out;
@@ -950,6 +974,7 @@ static int bsfs_read_folio(struct file *file, struct folio *folio) {
 // real allocation happens during writepages
 static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
   int found;
+  int ret = 0;
 
   struct super_block *sb = inode->i_sb;
 
@@ -967,9 +992,14 @@ static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct 
 
   found = bspan_search_le(sb, bspan_h, iblock, &span);
 
+  if (found < 0) {
+    ret = found;
+    goto out;
+  }
+
   // explicit bounds check
   // bspan_search_le should be correct but we're being defensive
-  if (found && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
+  if (found == 1 && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
     map_bh(bh, sb, span.disk_blk + (iblock - span.file_blk));
     goto out;
   }
@@ -986,7 +1016,7 @@ static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct 
 out:
   mutex_unlock(&bsfs_inode->truncate_mutex);
   kfree(bspan_h);
-  return 0;
+  return ret;
 }
 
 static void bsfs_write_failed(struct address_space *mapping, loff_t to) {

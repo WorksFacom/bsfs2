@@ -126,7 +126,6 @@ void btree_free_node(struct btree_node *node) {
   kfree(node);
 }
 
-// TODO: is this working?
 int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry) {
   int    ret;
   __u32  i, key;
@@ -140,8 +139,10 @@ int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
   key  = handle->get_key(new_entry);
   size = handle->entry_size;
 
-  if (btree_read_node(sb, handle, node_block, &node) != 0)
-    return 0;
+  ret = btree_read_node(sb, handle, node_block, &node);
+
+  if (ret != 0)
+    return ret;
 
   __u8 *entries = bentries(node);
 
@@ -182,6 +183,7 @@ out:
 // TODO: duplicated code with btree_update
 // TODO: is this working?
 int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, void **output, struct btree_node **out_node) {
+  int    ret;
   __u32  i;
   __u32  next_block;
   size_t size;
@@ -191,8 +193,10 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
   while (node_block != 0 && node_block != INVALID_BLOCK) {
     struct btree_node *node = NULL;
 
-    if (btree_read_node(sb, handle, node_block, &node) != 0)
-      return 0;
+    ret = btree_read_node(sb, handle, node_block, &node);
+
+    if (ret != 0)
+      return ret;
 
     __u8 *entries = bentries(node);
 
@@ -232,7 +236,7 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
 }
 
 int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, void *output) {
-  int    i;
+  int    i, ret;
   __u32 *children;
 
   struct btree_node *node;
@@ -240,8 +244,10 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   if (node_block == 0)
     return 0;
 
-  if (btree_read_node(sb, handle, node_block, &node) != 0)
-    return 0;
+  ret = btree_read_node(sb, handle, node_block, &node);
+
+  if (ret != 0)
+    return ret;
 
   __u8 *entries = bentries(node);
 
@@ -273,8 +279,9 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
 }
 
 // walks the btree to find the bspan with the greatest file_blk <= key
+// a mid-walk failure must not return the partial best-so-far or callers would map/allocate against a stale span
 int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
-  int                have = 0;
+  int                ret, have = 0;
   struct btree_node *node;
   bspan_t            best = {0};
 
@@ -283,8 +290,10 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
 
   __u32 node_block = handle->root_block;
   while (node_block) {
-    if (btree_read_node(sb, handle, node_block, &node) != 0)
-      break;
+    ret = btree_read_node(sb, handle, node_block, &node);
+
+    if (ret != 0)
+      return ret;
 
     __u8 *entries = bentries(node);
 

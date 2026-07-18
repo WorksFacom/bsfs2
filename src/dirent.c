@@ -191,10 +191,17 @@ int bsfs_add_link(struct dentry *dentry, struct inode *inode) {
   needle.name_hash         = hash_filename(needle.filename);
 
   // TODO: create btree_exist? or alike
-  if (btree_search_entry(sb, handle, handle->root_block, &needle, &existing)) {
+  err = btree_search_entry(sb, handle, handle->root_block, &needle, &existing);
+
+  if (err < 0)
+    goto out;
+
+  if (err == 1) {
     err = -EEXIST;
     goto out;
   }
+
+  err = 0;
 
   entry.ino       = inode->i_ino;
   entry.name_hash = needle.name_hash;
