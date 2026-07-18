@@ -5,7 +5,8 @@
 #include "../include/alloc.h"
 #include "../include/rec_gc.h"
 
-int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
+// caller must hold sbi->bitmap_lock
+static int __allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   if (blocks_needed == 0 || offset >= sbi->super->total_blocks) {
@@ -38,7 +39,7 @@ int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blo
         bsfs_set_bit(sb, j);
       }
       enqueue_bspan(queue, 0, run_start, run_length);
-      int result = allocate_bspan_queue(sb, queue, blocks_needed - run_length, i + 1);
+      int result = __allocate_bspan_queue(sb, queue, blocks_needed - run_length, i + 1);
       return result;
     }
   }
@@ -49,7 +50,7 @@ int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blo
       bsfs_set_bit(sb, j);
     }
     enqueue_bspan(queue, 0, run_start, run_length);
-    int result = allocate_bspan_queue(sb, queue, blocks_needed - run_length, sbi->super->total_blocks);
+    int result = __allocate_bspan_queue(sb, queue, blocks_needed - run_length, sbi->super->total_blocks);
     return result;
   }
 
@@ -63,18 +64,33 @@ int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blo
   // return allocate_bspan_queue(sb, queue, blocks_needed, offset);
 }
 
+int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  int                     ret;
+
+  mutex_lock(&sbi->bitmap_lock);
+  ret = __allocate_bspan_queue(sb, queue, blocks_needed, offset);
+  mutex_unlock(&sbi->bitmap_lock);
+
+  return ret;
+}
+
 __u32 allocate_single_block(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   __u32 i;
   __u32 start        = sbi->super->data_block_start;
   __u32 total_blocks = sbi->super->total_blocks;
+
+  mutex_lock(&sbi->bitmap_lock);
   for (i = start; i < total_blocks; i++) {
     if (bsfs_is_bit_free(sb, i)) {
       bsfs_set_bit(sb, i);
+      mutex_unlock(&sbi->bitmap_lock);
       return i;
     }
   }
+  mutex_unlock(&sbi->bitmap_lock);
 
   printk(KERN_WARNING "Error: No blocks available.\n");
 
@@ -95,15 +111,21 @@ int deallocate_single_block(struct super_block *sb, __u32 block_index) {
     return -1;
   }
 
+  mutex_lock(&sbi->bitmap_lock);
   bsfs_clear_bit(sb, block_index);
+  mutex_unlock(&sbi->bitmap_lock);
   return 0;
 }
 
 int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
   // Clear bits corresponding to the span
+  mutex_lock(&sbi->bitmap_lock);
   for (__u32 i = 0; i < bspan->length; i++) {
     bsfs_clear_bit(sb, bspan->disk_blk + i);
   }
+  mutex_unlock(&sbi->bitmap_lock);
 
   return 0;
 }

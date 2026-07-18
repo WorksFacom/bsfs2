@@ -505,11 +505,19 @@ struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino
 
 static struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
+  struct bsfs_super_info   *sbi = bsfs_sb(inode->i_sb);
+
+  // disk_inode->inode points into the tree node's buffer; hold the tree lock
+  // until we're done writing through it so a concurrent split can't move the
+  // entry out from under us
+  mutex_lock(&sbi->inode_tree_lock);
 
   disk_inode = bsfs_read_disk_inode(inode->i_sb, inode->i_ino);
 
-  if (!disk_inode)
+  if (!disk_inode) {
+    mutex_unlock(&sbi->inode_tree_lock);
     return NULL;
+  }
 
   disk_inode->inode->mode       = inode->i_mode;
   disk_inode->inode->uid        = fs_high2lowuid(i_uid_read(inode));
@@ -526,6 +534,7 @@ static struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
   //   raw_inode->i_zone[0] = old_encode_dev(inode->i_rdev);
 
   mark_buffer_dirty(disk_inode->bh);
+  mutex_unlock(&sbi->inode_tree_lock);
   return disk_inode;
 }
 
@@ -552,18 +561,26 @@ void bsfs_set_inode(struct inode *inode, dev_t rdev) {
 
 static struct inode *__set_up_inode_new(struct inode *inode) {
   struct disk_mapped_inode *disk_inode;
+  struct bsfs_super_info   *sbi = bsfs_sb(inode->i_sb);
+
+  // hold the tree lock while reading through disk_inode->inode (a pointer
+  // into the tree node's buffer)
+  mutex_lock(&sbi->inode_tree_lock);
 
   disk_inode = bsfs_read_disk_inode(inode->i_sb, inode->i_ino);
 
   struct bsfs_inode *bsfs_inode = bsfs_i(inode);
 
   if (!disk_inode) {
+    mutex_unlock(&sbi->inode_tree_lock);
     iget_failed(inode);
     return ERR_PTR(-EIO);
   }
 
   if (disk_inode->inode->nlinks == 0) {
     printk("BSFS: deleted inode referenced: %lu\n", inode->i_ino);
+    mutex_unlock(&sbi->inode_tree_lock);
+    brelse(disk_inode->bh);
     kfree(disk_inode);
     iget_failed(inode);
     return ERR_PTR(-ESTALE);
@@ -590,6 +607,7 @@ static struct inode *__set_up_inode_new(struct inode *inode) {
 
   bsfs_set_inode(inode, 0);
 
+  mutex_unlock(&sbi->inode_tree_lock);
   brelse(disk_inode->bh);
   kfree(disk_inode);
 
@@ -683,10 +701,15 @@ struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode) {
     goto err_iput;
   }
 
+  // covers ino assignment + insert so two creators can't race to the same
+  // ino or mutate the inode tree concurrently
+  mutex_lock(&sbi->inode_tree_lock);
+
   inode_h->root_block = sbi->super->inode_root;
 
   inode->i_ino = get_next_inode_number(sb, inode_h);
   if (!inode->i_ino) {
+    mutex_unlock(&sbi->inode_tree_lock);
     err = -ENOSPC;
     goto err_free_handle;
   }
@@ -694,9 +717,12 @@ struct inode *bsfs_new_inode(const struct inode *dir, umode_t mode) {
   disk_inode.ino = inode->i_ino;
 
   if (insert_inode(sb, inode_h, &disk_inode) != 0) {
+    mutex_unlock(&sbi->inode_tree_lock);
     err = -ENOSPC;
     goto err_free_handle;
   }
+
+  mutex_unlock(&sbi->inode_tree_lock);
   kfree(inode_h);
 
   bsfs_inode             = bsfs_i(inode);
@@ -778,12 +804,16 @@ void bsfs_evict_inode(struct inode *inode) {
       invalidate_inode_buffers(inode);
       clear_inode(inode);
 
+      mutex_lock(&sbi->inode_tree_lock);
+
       inode_h->root_block = sbi->super->inode_root;
       btree_remove(sb, inode_h, inode->i_ino);
       if (sbi->super->inode_root != inode_h->root_block) {
         sbi->super->inode_root = inode_h->root_block;
         mark_buffer_dirty(sbi->bh);
       }
+
+      mutex_unlock(&sbi->inode_tree_lock);
       kfree(inode_h);
     }
   }
@@ -829,6 +859,8 @@ int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh,
 
   if (!bspan_h)
     return -ENOMEM;
+
+  mutex_lock(&bsfs_inode->truncate_mutex);
 
   bspan_h->root_block = bsfs_inode->btree_root;
 
@@ -882,6 +914,7 @@ int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh,
   set_buffer_new(bh);
 
 out:
+  mutex_unlock(&bsfs_inode->truncate_mutex);
   kfree(bspan_h);
   return ret;
 }
@@ -905,6 +938,8 @@ static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct 
     return -ENOMEM;
   }
 
+  mutex_lock(&bsfs_inode->truncate_mutex);
+
   bspan_h->root_block = bsfs_inode->btree_root;
 
   found = bspan_search_le(sb, bspan_h, iblock, &span);
@@ -926,6 +961,7 @@ static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct 
   set_buffer_delay(bh);
 
 out:
+  mutex_unlock(&bsfs_inode->truncate_mutex);
   kfree(bspan_h);
   return 0;
 }
