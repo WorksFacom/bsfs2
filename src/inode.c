@@ -4,7 +4,13 @@
 #include "../include/file.h"
 #include "../include/rec_entry.h"
 #include <linux/mpage.h>
+#include <linux/version.h>
 #include <linux/writeback.h>
+
+// inode_state_read() so existe a partir do 6.19; antes disso i_state e lido direto.
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0)
+#define inode_state_read(inode) ((inode)->i_state)
+#endif
 
 static struct kmem_cache *bsfs_inode_cache;
 
@@ -662,7 +668,7 @@ struct inode *bsfs_get_vfs_inode(struct super_block *sb, unsigned long ino) {
   if (!inode)
     return ERR_PTR(-ENOMEM);
 
-  if (!(inode->i_state & I_NEW))
+  if (!(inode_state_read(inode) & I_NEW))
     return inode;
 
   return __set_up_inode_new(inode);
@@ -860,6 +866,7 @@ void bsfs_evict_inode(struct inode *inode) {
       pr_warn("no memory to remove inode %lu from inode tree\n", inode->i_ino);
     }
   }
+
 }
 
 static void init_once(void *foo) {

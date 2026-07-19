@@ -25,10 +25,23 @@ static uint64_t ceil_div_u64(uint64_t a, uint64_t b) {
   return (a + b - 1) / b;
 }
 
-static int write_block(FILE *disk, uint32_t block_num, const void *data) {
+/*
+ * Writes `len` bytes of `data` as block `block_num`, zero-padding up to the
+ * block size. `data` may be smaller than a block (e.g. the 48-byte superblock);
+ * reading BSFS_BLOCK_SIZE bytes straight from such an object walks off the end
+ * of it and can make the write fail with EFAULT.
+ */
+static int write_block_len(FILE *disk, uint32_t block_num, const void *data, size_t len) {
+  uint8_t block[BSFS_BLOCK_SIZE] = {0};
+
+  if (len > BSFS_BLOCK_SIZE)
+    return -1;
+
+  memcpy(block, data, len);
+
   if (fseek(disk, (off_t)block_num * BSFS_BLOCK_SIZE, SEEK_SET) != 0)
     return -1;
-  if (fwrite(data, BSFS_BLOCK_SIZE, 1, disk) != 1)
+  if (fwrite(block, BSFS_BLOCK_SIZE, 1, disk) != 1)
     return -1;
   return 0;
 }
@@ -53,7 +66,7 @@ static int init_bitmap_list(FILE *disk, uint32_t start_block, uint32_t num_block
       block.next_block = start_block + i + 1;
     else
       block.next_block = INVALID_BLOCK;
-    if (write_block(disk, start_block + i, &block) != 0) {
+    if (write_block_len(disk, start_block + i, &block, sizeof(block)) != 0) {
       fprintf(stderr, "mkfs.bsfs: failed to write bitmap block %u\n", start_block + i);
       return -1;
     }
@@ -138,7 +151,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
 
   {
     uint8_t zero[BSFS_BLOCK_SIZE] = {0};
-    if (write_block(disk, 0, zero) != 0) {
+    if (write_block_len(disk, 0, zero, sizeof(zero)) != 0) {
       die("failed to write reserved block 0");
       return -1;
     }
@@ -158,7 +171,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
   sb.data_block_start   = data_start;
   sb.root_inode         = BSFS_ROOT_INO;
 
-  if (write_block(disk, 1, &sb) != 0) {
+  if (write_block_len(disk, 1, &sb, sizeof(sb)) != 0) {
     die("failed to write superblock");
     return -1;
   }
@@ -189,7 +202,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
       memset(&block, 0, sizeof(block));
       memcpy(block.bits, bitmap + (size_t)i * BITMAP_BLOCK_BYTES, BITMAP_BLOCK_BYTES);
       block.next_block = (i < bitmap_blocks - 1) ? sb.block_bitmap_start + i + 1 : INVALID_BLOCK;
-      if (write_block(disk, sb.block_bitmap_start + i, &block) != 0) {
+      if (write_block_len(disk, sb.block_bitmap_start + i, &block, sizeof(block)) != 0) {
         fprintf(stderr, "mkfs.bsfs: failed to write bitmap block %u\n", sb.block_bitmap_start + i);
         free(bitmap);
         return -1;
@@ -220,7 +233,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     memcpy(node.data, &dot, sizeof(dot));
     memcpy(node.data + sizeof(dot), &dotdot, sizeof(dotdot));
 
-    if (write_block(disk, dir_root_block, &node) != 0) {
+    if (write_block_len(disk, dir_root_block, &node, sizeof(node)) != 0) {
       die("failed to write directory B-tree root");
       return -1;
     }
@@ -252,7 +265,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
 
     memcpy(node.data, &root_inode, sizeof(root_inode));
 
-    if (write_block(disk, inode_root_block, &node) != 0) {
+    if (write_block_len(disk, inode_root_block, &node, sizeof(node)) != 0) {
       die("failed to write inode B-tree root");
       return -1;
     }
