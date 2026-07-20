@@ -552,39 +552,76 @@ struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino
   return out;
 }
 
-static struct disk_mapped_inode *bsfs_update_inode(struct inode *inode) {
-  struct disk_mapped_inode *disk_inode;
-  struct bsfs_super_info   *sbi = bsfs_sb(inode->i_sb);
+/*
+ * Writes the in-core inode back into the inode tree.
+ *
+ * This goes through btree_update() rather than writing through the pointer
+ * bsfs_read_disk_inode() returns: that pointer aims into a tree node's buffer,
+ * and under copy-on-write the next mutation clones that node and releases the
+ * old block, so the write would land on a block the allocator has already
+ * handed to somebody else.
+ */
+static int bsfs_update_inode(struct inode *inode) {
+  struct super_block        *sb  = inode->i_sb;
+  struct bsfs_super_info    *sbi = bsfs_sb(sb);
+  struct disk_mapped_inode  *current_inode;
+  struct disk_mapped_inode_t entry;
+  btree_handle_t            *inode_h;
+  int                        ret = 0;
 
-  // disk_inode->inode points into the tree node's buffer; hold the tree lock
-  // until we're done writing through it so a concurrent split can't move the
-  // entry out from under us
+  inode_h = btree_create_inode_handle();
+
+  if (!inode_h)
+    return -ENOMEM;
+
   mutex_lock(&sbi->inode_tree_lock);
 
-  disk_inode = bsfs_read_disk_inode(inode->i_sb, inode->i_ino);
+  inode_h->root_block = sbi->super->inode_root;
 
-  if (!disk_inode) {
-    mutex_unlock(&sbi->inode_tree_lock);
-    return NULL;
+  // Take a private copy of the entry: the fields the VFS does not own (block
+  // count, padding) have to survive the update.
+  current_inode = bsfs_read_disk_inode(sb, inode->i_ino);
+
+  if (!current_inode) {
+    ret = -EIO;
+    goto out;
   }
 
-  disk_inode->inode->mode       = inode->i_mode;
-  disk_inode->inode->uid        = fs_high2lowuid(i_uid_read(inode));
-  disk_inode->inode->gid        = fs_high2lowgid(i_gid_read(inode));
-  disk_inode->inode->nlinks     = inode->i_nlink;
-  disk_inode->inode->size       = inode->i_size;
-  disk_inode->inode->mtime      = inode_get_mtime_sec(inode);
-  disk_inode->inode->atime      = inode_get_atime_sec(inode);
-  disk_inode->inode->ctime      = inode_get_ctime_sec(inode);
-  disk_inode->inode->btree_root = bsfs_i(inode)->btree_root;
+  entry = *current_inode->inode;
+  brelse(current_inode->bh);
+  kfree(current_inode);
+
+  entry.ino        = inode->i_ino;
+  entry.mode       = inode->i_mode;
+  entry.uid        = fs_high2lowuid(i_uid_read(inode));
+  entry.gid        = fs_high2lowgid(i_gid_read(inode));
+  entry.nlinks     = inode->i_nlink;
+  entry.size       = inode->i_size;
+  entry.mtime      = inode_get_mtime_sec(inode);
+  entry.atime      = inode_get_atime_sec(inode);
+  entry.ctime      = inode_get_ctime_sec(inode);
+  entry.btree_root = bsfs_i(inode)->btree_root;
 
   // TODO: make it work with special files
   // if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
   //   raw_inode->i_zone[0] = old_encode_dev(inode->i_rdev);
 
-  mark_buffer_dirty(disk_inode->bh);
+  if (btree_update(sb, inode_h, inode_h->root_block, &entry) != 1) {
+    ret = -EIO;
+    goto out;
+  }
+
+  // btree_update() publishes a new root on every call, so the superblock has to
+  // follow it.
+  if (inode_h->root_block != 0 && sbi->super->inode_root != inode_h->root_block) {
+    sbi->super->inode_root = inode_h->root_block;
+    mark_buffer_dirty(sbi->bh);
+  }
+
+out:
   mutex_unlock(&sbi->inode_tree_lock);
-  return disk_inode;
+  kfree(inode_h);
+  return ret;
 }
 
 void bsfs_set_inode(struct inode *inode, dev_t rdev) {
@@ -695,33 +732,21 @@ struct inode *bsfs_alloc_inode(struct super_block *sb) {
 }
 
 int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
-  int ret = 0;
+  struct bsfs_super_info *sbi = bsfs_sb(inode->i_sb);
+  int                     ret;
 
-  struct disk_mapped_inode *disk_inode;
-  struct buffer_head       *bh;
+  ret = bsfs_update_inode(inode);
 
-  disk_inode = bsfs_update_inode(inode);
+  if (ret != 0)
+    return ret;
 
-  if (!disk_inode) {
-    ret = -EIO;
-    goto out;
-  }
+  // The entry now lives in whichever node the copy-on-write update produced, so
+  // there is no single buffer to sync here; what has to be durable is the root
+  // that points at it. The node buffers themselves are flushed by bsfs_fsync()'s
+  // sync_blockdev() and by regular bdev writeback.
+  if (wbc->sync_mode == WB_SYNC_ALL && buffer_dirty(sbi->bh))
+    sync_dirty_buffer(sbi->bh);
 
-  bh = disk_inode->bh;
-
-  if (wbc->sync_mode == WB_SYNC_ALL && buffer_dirty((bh))) {
-    sync_dirty_buffer(bh);
-
-    if (buffer_req(bh) && !buffer_uptodate(bh)) {
-      printk("IO error syncing inode [%s:%08lx]\n", inode->i_sb->s_id, inode->i_ino);
-      ret = -EIO;
-    }
-  }
-
-  brelse(bh);
-  kfree(disk_inode);
-
-out:
   return ret;
 }
 

@@ -83,7 +83,8 @@ int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block,
   raw = (struct btree_node_t *)bh->b_data;
 
   if (raw->num_entries > (__u32)(2 * handle->min_degree - 1) || raw->is_leaf > 1) {
-    pr_err("corrupt btree node at block %u (num_entries=%u is_leaf=%u)\n", block, raw->num_entries, raw->is_leaf);
+    pr_err("corrupt btree node at block %u (num_entries=%u is_leaf=%u) read as tree type %d (max %u entries)\n", block, raw->num_entries,
+           raw->is_leaf, handle->type, (__u32)(2 * handle->min_degree - 1));
     brelse(bh);
     return -EUCLEAN;
   }
@@ -103,7 +104,15 @@ int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block,
 
 // grabs a freshly allocated block, zeroes it and marks it dirty; never reads
 // from disk, so stale on-disk contents can't fail validation
-static int btree_init_new_node(struct super_block *sb, __u32 block, struct btree_node **out_node) {
+/*
+ * Prepares a freshly allocated block as a node. The block still holds whatever
+ * its previous owner left there - very often file data, since copy-on-write and
+ * the data allocator hand the same freed blocks back and forth - so its
+ * contents are never read back through btree_read_node(), whose validation
+ * would (rightly) reject them. `src` is a full block image to copy in, or NULL
+ * to start from zeroes.
+ */
+static int btree_setup_new_node(struct super_block *sb, __u32 block, const void *src, struct btree_node **out_node) {
   struct buffer_head *bh;
 
   *out_node = NULL;
@@ -121,7 +130,12 @@ static int btree_init_new_node(struct super_block *sb, __u32 block, struct btree
   }
 
   lock_buffer(bh);
-  memset(bh->b_data, 0, sb->s_blocksize);
+
+  if (src)
+    memcpy(bh->b_data, src, sb->s_blocksize);
+  else
+    memset(bh->b_data, 0, sb->s_blocksize);
+
   set_buffer_uptodate(bh);
   unlock_buffer(bh);
   mark_buffer_dirty(bh);
@@ -130,6 +144,10 @@ static int btree_init_new_node(struct super_block *sb, __u32 block, struct btree
   (*out_node)->node = (struct btree_node_t *)bh->b_data;
 
   return 0;
+}
+
+static int btree_init_new_node(struct super_block *sb, __u32 block, struct btree_node **out_node) {
+  return btree_setup_new_node(sb, block, NULL, out_node);
 }
 
 void btree_free_node(struct btree_node *node) {
@@ -324,11 +342,8 @@ static int cow_clone_block(struct super_block *sb, btree_handle_t *handle, btree
   if (btree_read_node(sb, handle, old_block, &old_node) != 0 || !old_node)
     goto err_dealloc;
 
-  if (btree_read_node(sb, handle, new_block, &new_node) != 0 || !new_node)
+  if (btree_setup_new_node(sb, new_block, old_node->bh->b_data, &new_node) != 0)
     goto err_free_old;
-
-  memcpy(new_node->bh->b_data, old_node->bh->b_data, sb->s_blocksize);
-  mark_buffer_dirty(new_node->bh);
 
   btree_free_node(new_node);
   btree_free_node(old_node);
@@ -854,7 +869,10 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
     return ret;
   }
 
-  ret = btree_read_node(sb, handle, blocknr, &new_node);
+  // Freshly allocated block: set it up instead of reading it back, it still
+  // holds the previous owner's bytes.
+  ret = btree_init_new_node(sb, blocknr, &new_node);
+
   if (ret != 0) {
     btree_free_node(child);
     deallocate_single_block(sb, blocknr);
