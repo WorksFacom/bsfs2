@@ -161,26 +161,21 @@ int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
     i++;
   }
 
-  if (i < node->node->num_entries) {
-    __u32 entry_key = handle->get_key(entries + i * size);
-    // TODO: lock buffer!!!
-    if (key == entry_key) {
+  if (node->node->is_leaf) {
+    if (i < node->node->num_entries && handle->get_key(entries + i * size) == key) {
       memcpy(entries + i * size, new_entry, size);
-
       mark_buffer_dirty(node->bh);
       ret = 1;
-      goto out;
+    } else {
+      ret = 0;
     }
-  }
-
-  if (node->node->is_leaf) {
-    ret = 0;
     goto out;
   }
 
   __u32 *children = bchildren(node, handle);
+  __u32  descend  = (i < node->node->num_entries && handle->get_key(entries + i * size) == key) ? children[i + 1] : children[i];
 
-  ret = btree_update(sb, handle, children[i], new_entry);
+  ret = btree_update(sb, handle, descend, new_entry);
 
 out:
   btree_free_node(node);
@@ -217,24 +212,23 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
       i++;
     }
 
-    if (i < node->node->num_entries) {
-      __u32 entry_key = handle->get_key(entries + i * size);
-
-      if (key == entry_key) {
+    if (node->node->is_leaf) {
+      if (i < node->node->num_entries && handle->get_key(entries + i * size) == key) {
         *output   = entries + i * size;
         *out_node = node;
-        // Keep the matching node alive so the returned pointer remains valid.
-        // Ownership of this node is transferred to the caller.
+        // Ownership of this leaf node is transferred to the caller.
         return 1;
       }
-    }
-
-    if (node->node->is_leaf) {
       btree_free_node(node);
       return 0;
     }
 
-    next_block = bchildren(node, handle)[i];
+    // Internal node: separators are copies of leaf entries; keys equal to a
+    // separator live in the right subtree (see split_child leaf convention).
+    if (i < node->node->num_entries && handle->get_key(entries + i * size) == key)
+      next_block = bchildren(node, handle)[i + 1];
+    else
+      next_block = bchildren(node, handle)[i];
     btree_free_node(node);
     node_block = next_block;
   }
@@ -267,20 +261,41 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     i++;
   }
 
+<<<<<<< HEAD
   if (i < (int)node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0) {
     memcpy(output, entries + i * handle->entry_size, handle->entry_size);
     btree_free_node(node);
     return 1;
   }
 
+=======
+>>>>>>> a482844 (fix: adjust search as bplus tree)
   if (node->node->is_leaf) {
+    if (i < (int)node->node->num_entries) {
+      void *e = entries + i * handle->entry_size;
+      if (handle->cmp(e, needle) == 0) {
+        memcpy(output, e, handle->entry_size);
+        btree_free_node(node);
+        return 1;
+      }
+    }
     btree_free_node(node);
     return 0;
   }
 
+<<<<<<< HEAD
   // needle is less than entries[i] (or i == num_entries): go to child i
   children          = bchildren(node, handle);
   __u32 child_block = children[(__u32)i];
+=======
+  // Internal: descend right on separator equality (separator lives in right leaf).
+  children = bchildren(node, handle);
+  __u32 child_block;
+  if (i < (int)node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0)
+    child_block = children[i + 1];
+  else
+    child_block = children[(__u32)i];
+>>>>>>> a482844 (fix: adjust search as bplus tree)
   btree_free_node(node);
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
@@ -307,21 +322,28 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
     __u32 i = 0;
     while (i < node->node->num_entries) {
       __u32 ekey = handle->get_key(entries + i * handle->entry_size);
-
       if (ekey > key)
         break;
-
-      memcpy(&best, entries + i * handle->entry_size, sizeof(best));
-      have = 1;
       i++;
     }
 
     if (node->node->is_leaf) {
+      // Only leaf entries hold authoritative data in a B+ tree; take the
+      // largest entry <= key from this leaf.
+      if (i > 0) {
+        memcpy(&best, entries + (i - 1) * handle->entry_size, sizeof(best));
+        have = 1;
+      }
       btree_free_node(node);
       break;
     }
 
-    __u32 child = bchildren(node, handle)[i];
+    // Internal node: separator == key means the entry lives in the right subtree.
+    __u32 child;
+    if (i < node->node->num_entries && handle->get_key(entries + i * handle->entry_size) == key)
+      child = bchildren(node, handle)[i + 1];
+    else
+      child = bchildren(node, handle)[i];
     btree_free_node(node);
     node_block = child;
   }
