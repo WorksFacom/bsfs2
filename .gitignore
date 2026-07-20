@@ -95,3 +95,6 @@ docs/
 
 .env
 mkfs.bsfs
+
+# imagens e scripts ad-hoc de debug da VM
+tests/scratch/

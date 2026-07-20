@@ -261,15 +261,6 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     i++;
   }
 
-<<<<<<< HEAD
-  if (i < (int)node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0) {
-    memcpy(output, entries + i * handle->entry_size, handle->entry_size);
-    btree_free_node(node);
-    return 1;
-  }
-
-=======
->>>>>>> a482844 (fix: adjust search as bplus tree)
   if (node->node->is_leaf) {
     if (i < (int)node->node->num_entries) {
       void *e = entries + i * handle->entry_size;
@@ -283,11 +274,6 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     return 0;
   }
 
-<<<<<<< HEAD
-  // needle is less than entries[i] (or i == num_entries): go to child i
-  children          = bchildren(node, handle);
-  __u32 child_block = children[(__u32)i];
-=======
   // Internal: descend right on separator equality (separator lives in right leaf).
   children = bchildren(node, handle);
   __u32 child_block;
@@ -295,7 +281,6 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     child_block = children[i + 1];
   else
     child_block = children[(__u32)i];
->>>>>>> a482844 (fix: adjust search as bplus tree)
   btree_free_node(node);
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
@@ -354,6 +339,11 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
   }
 
   return 0;
+}
+
+void btree_clear_node(struct super_block *sb, struct btree_node *node) {
+  memset(node->bh->b_data, 0, sb->s_blocksize);
+  mark_buffer_dirty(node->bh);
 }
 
 int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry) {
@@ -469,9 +459,15 @@ static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle
         return -EIO;
       }
 
-      if (handle->cmp(entry, entries + i * size) > 0)
-        i++;
+      {
+        // B+: the separator just inserted is a copy of the right leaf's first
+        // entry, so an entry equal to it belongs in the right child.
+        void *mid = entries + i * size;
+        int   cmp = handle->cmp ? handle->cmp(entry, mid) : ((int)key - (int)handle->get_key(mid));
 
+        if (cmp >= 0)
+          i++;
+      }
       btree_free_node(child);
       child_block = children[i];
       ret         = btree_read_node(sb, handle, child_block, &child);
@@ -511,7 +507,7 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
     return ret;
   }
 
-  ret = btree_init_new_node(sb, blocknr, &new_node);
+  ret = btree_read_node(sb, blocknr, &new_node);
   if (ret != 0) {
     btree_free_node(child);
     deallocate_single_block(sb, blocknr);
@@ -521,19 +517,28 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
   new_node->node->is_leaf     = child->node->is_leaf;
   new_node->node->num_entries = handle->min_degree - 1;
 
-  memcpy(bentries(new_node), bentries(child) + handle->min_degree * size, (handle->min_degree - 1) * size);
+  // Right half: entries [t, 2t-2] move to the new node in both cases.
+  memcpy(bentries(new_node), (char *)bentries(child) + handle->min_degree * size, (handle->min_degree - 1) * size);
 
   if (!child->node->is_leaf)
     memcpy(bchildren(new_node, handle), bchildren(child, handle) + handle->min_degree, handle->min_degree * sizeof(__u32));
 
-  child->node->num_entries = handle->min_degree - 1;
+  // B+: in a leaf no record is promoted, so the child keeps t entries (the one
+  // at index t-1 is still data). In an internal node the median moves up to the
+  // parent, so the child keeps t-1.
+  child->node->num_entries = child->node->is_leaf ? handle->min_degree : handle->min_degree - 1;
 
   memmove(&parent_children[index + 2], &parent_children[index + 1], (parent->node->num_entries - index) * sizeof(__u32));
   parent_children[index + 1] = blocknr;
 
   memmove(parent_entries + (index + 1) * size, parent_entries + index * size, (parent->node->num_entries - index) * size);
 
-  memcpy(parent_entries + index * size, bentries(child) + (handle->min_degree - 1) * size, size);
+  // Separator: in a leaf it is a COPY of the right leaf's first entry (the
+  // record stays there); in an internal node it is the median, moved up.
+  if (child->node->is_leaf)
+    memcpy((char *)parent_entries + index * size, bentries(new_node), size);
+  else
+    memcpy((char *)parent_entries + index * size, (char *)bentries(child) + (handle->min_degree - 1) * size, size);
 
   parent->node->num_entries++;
 
@@ -576,176 +581,113 @@ int btree_remove(struct super_block *sb, btree_handle_t *handle, __u32 key) {
   return ret;
 }
 
+/*
+ * Index of the child to descend into to reach `needle`.
+ *
+ * B+ convention of this tree (the same one used by btree_search_entry and by
+ * the split): an internal node's separator is a COPY of the first entry of the
+ * leaf to its right, so a key equal to the separator lives in the RIGHT
+ * subtree.
+ */
+static __u32 btree_descend_index_cmp(struct btree_node *node, btree_handle_t *handle, const void *needle) {
+  __u8 *entries = bentries(node);
+  __u32 i       = 0;
+
+  while (i < node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) < 0)
+    i++;
+
+  if (i < node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0)
+    i++;
+
+  return i;
+}
+
+static __u32 btree_descend_index_key(struct btree_node *node, btree_handle_t *handle, __u32 key) {
+  __u8 *entries = bentries(node);
+  __u32 i       = 0;
+
+  while (i < node->node->num_entries && handle->get_key(entries + i * handle->entry_size) < key)
+    i++;
+
+  if (i < node->node->num_entries && handle->get_key(entries + i * handle->entry_size) == key)
+    i++;
+
+  return i;
+}
+
+/*
+ * B+ removal by key - same shape as the comparator version above: descend to
+ * the leaf, rebalancing children along the way; only the leaf deletes.
+ */
 static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key) {
   int                ret = 0;
-  __u32              i, ekey;
-  struct btree_node *node, *pred, *succ, *child;
+  __u32              i, child_idx, child_block;
+  struct btree_node *node = NULL, *child = NULL;
 
   if (node_block == 0)
     return 0;
 
   size_t size = handle->entry_size;
 
-  if (btree_read_node(sb, handle, node_block, &node) != 0)
+  if (btree_read_node(sb, node_block, &node) != 0 || !node)
     return 0;
 
-  i = 0;
-  while (i < node->node->num_entries) {
-    ekey = handle->get_key(bentries(node) + i * size);
-
-    if (key <= ekey)
-      break;
-
-    i++;
-  }
-
-  if (i < node->node->num_entries) {
-    ekey = handle->get_key(bentries(node) + i * size);
-
-    if (key == ekey) {
-      if (node->node->is_leaf) {
-        btree_shift_left(bentries(node), size, i, node->node->num_entries);
-        node->node->num_entries--;
-        mark_buffer_dirty(node->bh);
-        ret = 1;
-      } else {
-        if (btree_read_node(sb, handle, bchildren(node, handle)[i], &pred) != 0)
-          goto out;
-
-        if (pred->node->num_entries >= handle->min_degree) {
-          // promote the subtree maximum, not pred's own last entry: pred may
-          // be internal, and its last entry is not the largest key below it
-          __u8 *scratch = kmalloc(size, GFP_KERNEL);
-
-          btree_free_node(pred);
-
-          if (!scratch)
-            goto out;
-
-          if (btree_find_max_entry(sb, handle, bchildren(node, handle)[i], scratch)) {
-            memcpy(bentries(node) + i * size, scratch, size);
-            mark_buffer_dirty(node->bh);
-
-            ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i], handle->get_key(scratch));
-          }
-
-          kfree(scratch);
-        } else {
-          btree_free_node(pred);
-
-          if (btree_read_node(sb, handle, bchildren(node, handle)[i + 1], &succ) != 0)
-            goto out;
-
-          if (succ->node->num_entries >= handle->min_degree) {
-            // symmetric: promote the subtree minimum of the right child
-            __u8 *scratch = kmalloc(size, GFP_KERNEL);
-
-            btree_free_node(succ);
-
-            if (!scratch)
-              goto out;
-
-            if (btree_find_min_entry(sb, handle, bchildren(node, handle)[i + 1], scratch)) {
-              memcpy(bentries(node) + i * size, scratch, size);
-              mark_buffer_dirty(node->bh);
-
-              ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i + 1], handle->get_key(scratch));
-            }
-
-            kfree(scratch);
-          } else {
-            btree_free_node(succ);
-            __btree_merge(sb, handle, node_block, node, i);
-            ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[i], key);
-          }
-        }
-      }
-    }
-  } else {
-    if (node->node->is_leaf) {
-      ret = 0;
-    } else {
-      int child_idx = i;
-
-      if (btree_read_node(sb, handle, bchildren(node, handle)[child_idx], &child) != 0)
-        goto out;
-
-      if (child->node->num_entries < (__u32)handle->min_degree)
-        child_idx = __btree_fill(sb, handle, node_block, node, child_idx);
-
-      btree_free_node(child);
-      ret = __btree_remove_internal(sb, handle, bchildren(node, handle)[child_idx], key);
-    }
-  }
-
-out:
-  btree_free_node(node);
-
-  return ret;
-}
-
-static int btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry) {
-  int                ret, ok;
-  struct btree_node *node;
-  __u8              *entries;
-  __u32             *children;
-
-  if (node_block == 0)
-    return 0;
-
-  ret = btree_read_node(sb, handle, node_block, &node);
-  if (ret != 0)
-    return 0;
-
-  entries = bentries(node);
   if (node->node->is_leaf) {
-    if (node->node->num_entries > 0) {
-      memcpy(out_entry, entries + (node->node->num_entries - 1) * handle->entry_size, handle->entry_size);
-      ok = 1;
-    } else {
-      ok = 0;
-    }
-  } else {
-    children = bchildren(node, handle);
-    ok       = btree_find_max_entry(sb, handle, children[node->node->num_entries], out_entry);
-  }
+    i = 0;
+    while (i < node->node->num_entries && handle->get_key(bentries(node) + i * size) < key)
+      i++;
 
-  btree_free_node(node);
-  return ok;
-}
-
-static int btree_find_min_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry) {
-  int                ok = 0;
-  struct btree_node *node;
-
-  while (node_block) {
-    if (btree_read_node(sb, handle, node_block, &node) != 0)
-      return 0;
-
-    if (node->node->is_leaf) {
-      if (node->node->num_entries > 0) {
-        memcpy(out_entry, bentries(node), handle->entry_size);
-        ok = 1;
-      }
-      btree_free_node(node);
-      break;
+    if (i < node->node->num_entries && handle->get_key(bentries(node) + i * size) == key) {
+      btree_shift_left(bentries(node), size, i, node->node->num_entries);
+      node->node->num_entries--;
+      mark_buffer_dirty(node->bh);
+      ret = 1;
     }
 
-    node_block = bchildren(node, handle)[0];
     btree_free_node(node);
+    return ret;
   }
 
-  return ok;
+  child_idx = btree_descend_index_key(node, handle, key);
+
+  if (btree_read_node(sb, bchildren(node, handle)[child_idx], &child) != 0 || !child) {
+    btree_free_node(node);
+    return 0;
+  }
+
+  if (child->node->num_entries < (__u32)handle->min_degree) {
+    __btree_fill(sb, handle, node_block, node, (int)child_idx);
+    mark_buffer_dirty(node->bh);
+
+    child_idx = btree_descend_index_key(node, handle, key);
+    if (child_idx > node->node->num_entries)
+      child_idx = node->node->num_entries;
+  }
+
+  btree_free_node(child);
+
+  child_block = bchildren(node, handle)[child_idx];
+  btree_free_node(node);
+
+  return __btree_remove_internal(sb, handle, child_block, key);
 }
 
+/*
+ * B+ removal by comparator.
+ *
+ * Since every record lives in a leaf, there is no predecessor/successor swap
+ * like in a B-tree: we descend to the leaf making sure along the way that each
+ * visited child holds at least `min_degree` entries (via __btree_fill), and the
+ * deletion happens only in the leaf. Separators left stale by this are still
+ * valid routing keys.
+ */
 static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle,
                                         int *success) {
   int                ret;
-  __u32              i;
+  __u32              i, child_idx, child_block;
   __u64              size;
   __u8              *entries;
-  __u32             *children;
-  struct btree_node *node = NULL, *left = NULL, *right = NULL, *child = NULL;
+  struct btree_node *node = NULL, *child = NULL;
 
   if (node_block == 0) {
     *success = 0;
@@ -761,162 +703,55 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
   size    = handle->entry_size;
   entries = bentries(node);
 
-  i = 0;
-  while (i < node->node->num_entries) {
-    void *e   = entries + i * size;
-    int   cmp = handle->cmp(e, needle);
-    if (cmp >= 0)
-      break;
-    i++;
-  }
+  if (node->node->is_leaf) {
+    i = 0;
+    while (i < node->node->num_entries && handle->cmp(entries + i * size, needle) < 0)
+      i++;
 
-  if (i < node->node->num_entries && handle->cmp(entries + i * size, needle) == 0) {
-    if (node->node->is_leaf) {
+    if (i < node->node->num_entries && handle->cmp(entries + i * size, needle) == 0) {
       btree_shift_left(entries, size, (int)i, (int)node->node->num_entries);
       node->node->num_entries--;
       mark_buffer_dirty(node->bh);
       *success = 1;
-      goto out;
     } else {
-      __u32 left_block, right_block;
-
-      children    = bchildren(node, handle);
-      left_block  = children[i];
-      right_block = children[i + 1];
-
-      ret = btree_read_node(sb, handle, left_block, &left);
-      if (ret != 0) {
-        *success = 0;
-        goto out;
-      }
-
-      if (left->node->num_entries >= (__u32)handle->min_degree) {
-        __u8 *pred = kmalloc(size, GFP_KERNEL);
-
-        if (!pred) {
-          *success = 0;
-          goto out;
-        }
-
-        if (btree_find_max_entry(sb, handle, left_block, pred)) {
-          memcpy(entries + i * size, pred, size);
-          mark_buffer_dirty(node->bh);
-
-          btree_free_node(left);
-          left = NULL;
-          btree_free_node(node);
-          node = NULL;
-
-          btree_remove_entry_internal(sb, handle, left_block, pred, success);
-          kfree(pred);
-          return;
-        }
-
-        kfree(pred);
-        *success = 0;
-        goto out;
-      }
-
-      btree_free_node(left);
-      left = NULL;
-
-      ret = btree_read_node(sb, handle, right_block, &right);
-      if (ret != 0) {
-        *success = 0;
-        goto out;
-      }
-
-      if (right->node->num_entries >= (__u32)handle->min_degree) {
-        __u8 *succ = kmalloc(size, GFP_KERNEL);
-        int   ok   = 0;
-
-        if (!succ) {
-          *success = 0;
-          goto out;
-        }
-
-        ok = btree_find_min_entry(sb, handle, right_block, succ);
-
-        if (ok) {
-          memcpy(entries + i * size, succ, size);
-          mark_buffer_dirty(node->bh);
-
-          btree_free_node(right);
-          right = NULL;
-          btree_free_node(node);
-          node = NULL;
-
-          btree_remove_entry_internal(sb, handle, right_block, succ, success);
-          kfree(succ);
-          return;
-        }
-
-        kfree(succ);
-        *success = 0;
-        goto out;
-      }
-
-      btree_free_node(right);
-      right = NULL;
-
-      __btree_merge(sb, handle, node_block, node, (int)i);
-      children = bchildren(node, handle);
-      {
-        __u32 merged_block = children[i];
-        btree_free_node(node);
-        btree_remove_entry_internal(sb, handle, merged_block, needle, success);
-        return;
-      }
-    }
-  }
-
-  if (node->node->is_leaf) {
-    *success = 0;
-    goto out;
-  }
-
-  {
-    int   child_idx;
-    __u32 child_block;
-
-    child_idx = (int)i;
-    children  = bchildren(node, handle);
-    ret       = btree_read_node(sb, handle, children[child_idx], &child);
-    if (ret != 0) {
       *success = 0;
-      goto out;
     }
-
-    if (child->node->num_entries < (__u32)handle->min_degree)
-      child_idx = __btree_fill(sb, handle, node_block, node, child_idx);
-
-    btree_free_node(child);
-    child = NULL;
-
-    children    = bchildren(node, handle);
-    child_block = children[child_idx];
 
     btree_free_node(node);
-    node = NULL;
-
-    if (child_block == 0) {
-      *success = 0;
-      return;
-    }
-
-    btree_remove_entry_internal(sb, handle, child_block, needle, success);
     return;
   }
 
-out:
-  if (child)
-    btree_free_node(child);
-  if (right)
-    btree_free_node(right);
-  if (left)
-    btree_free_node(left);
-  if (node)
+  child_idx = btree_descend_index_cmp(node, handle, needle);
+
+  ret = btree_read_node(sb, bchildren(node, handle)[child_idx], &child);
+  if (ret != 0 || !child) {
+    *success = 0;
     btree_free_node(node);
+    return;
+  }
+
+  if (child->node->num_entries < (__u32)handle->min_degree) {
+    __btree_fill(sb, handle, node_block, node, (int)child_idx);
+    mark_buffer_dirty(node->bh);
+
+    // fill() may have merged/borrowed: the separators changed, so the descent
+    // index has to be recomputed against the already-updated node.
+    child_idx = btree_descend_index_cmp(node, handle, needle);
+    if (child_idx > node->node->num_entries)
+      child_idx = node->node->num_entries;
+  }
+
+  btree_free_node(child);
+
+  child_block = bchildren(node, handle)[child_idx];
+  btree_free_node(node);
+
+  if (child_block == 0) {
+    *success = 0;
+    return;
+  }
+
+  btree_remove_entry_internal(sb, handle, child_block, needle, success);
 }
 
 int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const void *entry) {
@@ -977,8 +812,14 @@ static void __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 
 
   __u32 left_entries = left->node->num_entries;
 
-  memcpy(bentries(left) + left_entries * size, bentries(parent) + idx * size, size);
-  left_entries++;
+  // B+: in an internal node the parent separator moves down and becomes an
+  // entry of the merged node; in a leaf it does NOT move down - it is only a
+  // copy of the right leaf's first entry, which is already being concatenated
+  // (moving it down would duplicate the record).
+  if (!left->node->is_leaf) {
+    memcpy(bentries(left) + left_entries * size, bentries(parent) + idx * size, size);
+    left_entries++;
+  }
 
   memcpy(bentries(left) + left_entries * size, bentries(right), size * right->node->num_entries);
 
@@ -1081,14 +922,20 @@ static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *han
   if (!child->node->is_leaf)
     memmove(&child_children[1], &child_children[0], (child->node->num_entries + 1) * sizeof(__u32));
 
-  memcpy(child_entries, parent_entries + (idx - 1) * size, size);
-
   sibling_children = bchildren(sibling, handle);
-  if (!child->node->is_leaf) {
-    child_children[0] = sibling_children[sibling->node->num_entries];
-  }
 
-  memcpy(parent_entries + (idx - 1) * size, sibling_entries + (sibling->node->num_entries - 1) * size, size);
+  if (child->node->is_leaf) {
+    // B+: the sibling's last RECORD becomes the child's first one, and the
+    // parent separator becomes a copy of that new first entry (rotating through
+    // the parent, as in a B-tree, would duplicate or lose a record).
+    memcpy(child_entries, sibling_entries + (sibling->node->num_entries - 1) * size, size);
+    memcpy(parent_entries + (idx - 1) * size, child_entries, size);
+  } else {
+    // Internal node: classic rotation through the parent separator.
+    memcpy(child_entries, parent_entries + (idx - 1) * size, size);
+    child_children[0] = sibling_children[sibling->node->num_entries];
+    memcpy(parent_entries + (idx - 1) * size, sibling_entries + (sibling->node->num_entries - 1) * size, size);
+  }
 
   child->node->num_entries++;
   sibling->node->num_entries--;
@@ -1128,15 +975,20 @@ static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *han
   child_entries   = bentries(child);
   sibling_entries = bentries(sibling);
 
-  memcpy(child_entries + child->node->num_entries * size, parent_entries + idx * size, size);
-
   child_children   = bchildren(child, handle);
   sibling_children = bchildren(sibling, handle);
-  if (!child->node->is_leaf) {
-    child_children[child->node->num_entries + 1] = sibling_children[0];
-  }
 
-  memcpy(parent_entries + idx * size, sibling_entries, size);
+  if (child->node->is_leaf) {
+    // B+: the right sibling's first RECORD moves to the end of the child, and
+    // the parent separator becomes a copy of the sibling's new first entry.
+    memcpy(child_entries + child->node->num_entries * size, sibling_entries, size);
+    if (sibling->node->num_entries > 1)
+      memcpy(parent_entries + idx * size, sibling_entries + size, size);
+  } else {
+    memcpy(child_entries + child->node->num_entries * size, parent_entries + idx * size, size);
+    child_children[child->node->num_entries + 1] = sibling_children[0];
+    memcpy(parent_entries + idx * size, sibling_entries, size);
+  }
 
   memmove(sibling_entries, sibling_entries + size, (sibling->node->num_entries - 1) * size);
 

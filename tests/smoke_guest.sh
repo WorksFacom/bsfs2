@@ -38,7 +38,8 @@ MKFS_OUT=$("$REPO/mkfs.bsfs" "$IMG" 2>&1) || fail "mkfs.bsfs failed: $MKFS_OUT"
 insmod "$REPO/bsfs2.ko" 2>&1 || fail "insmod failed"
 
 # 3. Attach image to a loop device.
-# busybox nao entende "losetup -f --show IMG"; -f apenas imprime o 1o livre.
+# busybox does not understand "losetup -f --show IMG"; -f only prints the
+# first free device.
 LOOP=$(losetup -f) || fail "losetup -f failed"
 losetup "$LOOP" "$IMG" || fail "losetup $LOOP failed"
 

@@ -19,6 +19,9 @@
 static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
+  // sbi->super points inside sbi->bh; there is nothing to free separately.
+  mark_buffer_dirty(sbi->bh);
+  sync_dirty_buffer(sbi->bh);
   brelse(sbi->bh);
   kfree(sbi);
 
@@ -67,6 +70,9 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
     goto out_bad_sb;
   }
 
+  // sbi->super points DIRECTLY at the superblock buffer: whoever changes a
+  // field (e.g. inode_root after a split) only needs mark_buffer_dirty(sbi->bh).
+  // With a kzalloc'd copy those changes never reached the disk.
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
   sbi->super = bsfs_super;
   sbi->bh    = bh;

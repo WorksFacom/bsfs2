@@ -1,13 +1,15 @@
 #!/bin/bash
-# Host runner for the B+ migration smoke test.
+# Host runner for the in-VM tests.
 #
-# Boots QEMU non-interactively, mounts the 9p host share, runs
-# tests/smoke_guest.sh inside the guest, and greps the console output for the
-# SMOKE_OK / SMOKE_FAIL line printed by that script.
+#   ./tests/smoke.sh                          # runs tests/smoke_guest.sh
+#   ./tests/smoke.sh tests/stress_guest.sh    # runs another script in the guest
 #
-# The initramfs (tests/mkinitramfs.sh) drops to a shell as PID 1 normally; when
-# the kernel cmdline contains "bsfs.smoke" its /init runs tests/smoke_guest.sh
-# instead and powers the VM off. Note: passing a quoted `rdinit=/bin/sh -c "..."`
+# Boots QEMU non-interactively, mounts the 9p host share, runs the guest script
+# and greps the console output for the SMOKE_OK / SMOKE_FAIL line it prints.
+#
+# The initramfs (tests/mkinitramfs.sh) drops to a shell as PID 1 normally; with
+# "bsfs.run=<script>" on the kernel cmdline its /init runs that script from the
+# share instead and powers the VM off. Note: passing a quoted `rdinit=/bin/sh -c "..."`
 # does NOT work — the kernel splits the cmdline on whitespace and sh dies with
 # "-c: option requires an argument", so the flag lives in the initramfs instead.
 #
@@ -20,18 +22,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 : "${KDIR:?KDIR not set — copy .env.example to .env}"
 
+GUEST="${1:-tests/smoke_guest.sh}"
+[ -f "$SCRIPT_DIR/$GUEST" ] || { echo "not found: $SCRIPT_DIR/$GUEST"; exit 2; }
+
 LOG=/tmp/bsfs_smoke.log
 TIMEOUT="${SMOKE_TIMEOUT:-90}"
 
 for f in "$KDIR/arch/x86/boot/bzImage" "$KDIR/initramfs.cpio.gz"; do
-  [ -f "$f" ] || { echo "faltando: $f (rode ./tests/mkinitramfs.sh e/ou compile o kernel em \$KDIR)"; exit 2; }
+  [ -f "$f" ] || { echo "missing: $f (run ./tests/mkinitramfs.sh and/or build the kernel in \$KDIR)"; exit 2; }
 done
 
 # Run QEMU under a timeout, capturing all serial output.
 timeout "$TIMEOUT" qemu-system-x86_64 \
   -kernel "$KDIR/arch/x86/boot/bzImage" \
   -initrd "$KDIR/initramfs.cpio.gz" \
-  -append "console=ttyS0 nokaslr panic=1 bsfs.smoke" \
+  -append "console=ttyS0 nokaslr panic=1 bsfs.run=$GUEST" \
   -m "${SMOKE_MEM:-1024}" \
   -nographic \
   -no-reboot \
@@ -41,14 +46,15 @@ timeout "$TIMEOUT" qemu-system-x86_64 \
 
 RC=$?
 
-if grep -q '^SMOKE_OK$' "$LOG"; then
+# The serial console sometimes ends lines with CRLF, so normalise first.
+if tr -d '\r' < "$LOG" | grep -q '^SMOKE_OK$'; then
   echo "PASS (log: $LOG)"
   exit 0
 fi
 
 if grep -q '^SMOKE_FAIL:' "$LOG"; then
   echo "FAIL:"
-  grep '^SMOKE_FAIL:' "$LOG"
+  tr -d '\r' < "$LOG" | grep '^SMOKE_FAIL:'
   echo "(full log: $LOG)"
   exit 1
 fi

@@ -230,6 +230,7 @@ int bsfs_remove_link(struct dentry *dentry) {
   btree_handle_t     *handle = NULL;
   struct btree_node  *node   = NULL;
   struct bsfs_dentry *dirent = NULL;
+  struct bsfs_dentry  needle;
   int                 err    = 0;
 
   dirent = lookup_dir_entry(dentry, &node);
@@ -238,6 +239,16 @@ int bsfs_remove_link(struct dentry *dentry) {
     err = -ENOENT;
     goto out;
   }
+
+  // lookup_dir_entry() returns a pointer INTO the node's buffer. Removal
+  // mutates that very buffer (shift_left/merge/borrow), so passing the pointer
+  // straight through as the needle makes its contents change mid-descent - and
+  // the tree ends up removing the neighbouring entry. Copy it first, then drop
+  // the node.
+  memcpy(&needle, dirent, sizeof(needle));
+  btree_free_node(node);
+  node   = NULL;
+  dirent = NULL;
 
   handle = btree_create_dir_entry_handle();
 
@@ -248,7 +259,7 @@ int bsfs_remove_link(struct dentry *dentry) {
 
   handle->root_block = bsfs_i(dir)->btree_root;
 
-  if (!btree_remove_entry(sb, handle, dirent)) {
+  if (!btree_remove_entry(sb, handle, &needle)) {
     err = -EIO;
     goto out;
   }

@@ -7,7 +7,7 @@
 #include <linux/version.h>
 #include <linux/writeback.h>
 
-// inode_state_read() so existe a partir do 6.19; antes disso i_state e lido direto.
+// inode_state_read() only exists from 6.19 on; before that i_state is read directly.
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0)
 #define inode_state_read(inode) ((inode)->i_state)
 #endif
@@ -981,9 +981,16 @@ static int bsfs_read_folio(struct file *file, struct folio *folio) {
   return block_read_full_folio(folio, bsfs_get_block);
 }
 
-// marks holes as buffer_delay without physical allocation
-// real allocation happens during writepages
-static int bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
+// Marks holes as buffer_delay without physical allocation.
+//
+// CURRENTLY UNUSED: mpage_writepages() knows nothing about BH_Delay - it only
+// looks at buffer_mapped(), so a buffer marked here with map_bh(bh, sb, 0) was
+// taken to be "already allocated" and writeback wrote the data to block 0 (the
+// reserved one), never calling bsfs_get_block() nor creating the bspan. Using
+// delayed allocation would require our own ->writepages, ext4-style
+// (mpage_da_*), deciding the allocation at flush time. Until then allocation
+// happens in write_begin.
+static int __maybe_unused bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
   int found;
   int ret = 0;
 
@@ -1043,7 +1050,7 @@ static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapp
                             void **fsdata) {
   int ret;
 
-  ret = block_write_begin(mapping, pos, len, foliop, bsfs_get_block_delalloc);
+  ret = block_write_begin(mapping, pos, len, foliop, bsfs_get_block);
 
   if (unlikely(ret))
     bsfs_write_failed(mapping, pos + len);
