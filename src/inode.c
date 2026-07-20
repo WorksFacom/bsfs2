@@ -463,11 +463,15 @@ void bsfs_truncate(struct inode *inode) {
       }
     }
 
-    for (__u32 i = 0; i < node->node->num_entries; i++) {
-      __u32 ekey = bspan_h->get_key(bentries(node) + i * bspan_h->entry_size);
-      if (ekey >= iblock) {
-        if (kcount < sizeof(keys) / sizeof(keys[0])) {
-          keys[kcount++].k = ekey;
+    // B+: only leaves hold records; entries in internal nodes are separator
+    // copies, so collecting them would just queue the same key twice.
+    if (node->node->is_leaf) {
+      for (__u32 i = 0; i < node->node->num_entries; i++) {
+        __u32 ekey = bspan_h->get_key(bentries(node) + i * bspan_h->entry_size);
+        if (ekey >= iblock) {
+          if (kcount < sizeof(keys) / sizeof(keys[0])) {
+            keys[kcount++].k = ekey;
+          }
         }
       }
     }

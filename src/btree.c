@@ -13,8 +13,6 @@ static void __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *han
                                      int idx);
 static void __btree_borrow_from_next(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent,
                                      int idx);
-static int  btree_find_max_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry);
-static int  btree_find_min_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *out_entry);
 
 static inline int default_compare(const void *a, const void *b) {
   __u32 ka = *(__u32 *)a;
@@ -341,11 +339,6 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
   return 0;
 }
 
-void btree_clear_node(struct super_block *sb, struct btree_node *node) {
-  memset(node->bh->b_data, 0, sb->s_blocksize);
-  mark_buffer_dirty(node->bh);
-}
-
 int btree_insert(struct super_block *sb, btree_handle_t *handle, void *entry) {
   int                ret;
   __u32              blocknr;
@@ -463,9 +456,8 @@ static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle
         // B+: the separator just inserted is a copy of the right leaf's first
         // entry, so an entry equal to it belongs in the right child.
         void *mid = entries + i * size;
-        int   cmp = handle->cmp ? handle->cmp(entry, mid) : ((int)key - (int)handle->get_key(mid));
 
-        if (cmp >= 0)
+        if (handle->cmp(entry, mid) >= 0)
           i++;
       }
       btree_free_node(child);
@@ -507,7 +499,7 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
     return ret;
   }
 
-  ret = btree_read_node(sb, blocknr, &new_node);
+  ret = btree_read_node(sb, handle, blocknr, &new_node);
   if (ret != 0) {
     btree_free_node(child);
     deallocate_single_block(sb, blocknr);
@@ -629,7 +621,7 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
 
   size_t size = handle->entry_size;
 
-  if (btree_read_node(sb, node_block, &node) != 0 || !node)
+  if (btree_read_node(sb, handle, node_block, &node) != 0 || !node)
     return 0;
 
   if (node->node->is_leaf) {
@@ -650,7 +642,7 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
 
   child_idx = btree_descend_index_key(node, handle, key);
 
-  if (btree_read_node(sb, bchildren(node, handle)[child_idx], &child) != 0 || !child) {
+  if (btree_read_node(sb, handle, bchildren(node, handle)[child_idx], &child) != 0 || !child) {
     btree_free_node(node);
     return 0;
   }
@@ -723,7 +715,7 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
 
   child_idx = btree_descend_index_cmp(node, handle, needle);
 
-  ret = btree_read_node(sb, bchildren(node, handle)[child_idx], &child);
+  ret = btree_read_node(sb, handle, bchildren(node, handle)[child_idx], &child);
   if (ret != 0 || !child) {
     *success = 0;
     btree_free_node(node);

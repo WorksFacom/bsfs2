@@ -28,12 +28,27 @@ static void bsfs_put_super(struct super_block *sb) {
   sb->s_fs_info = NULL;
 }
 
+/*
+ * The superblock buffer carries the tree roots (inode_root, recovery_root), so
+ * a sync(2) has to push it out; without this it only reached the disk at
+ * unmount time.
+ */
+static int bsfs_sync_fs(struct super_block *sb, int wait) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  if (wait)
+    sync_dirty_buffer(sbi->bh);
+
+  return 0;
+}
+
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
     .free_inode  = bsfs_free_cache_inode,
     .evict_inode = bsfs_evict_inode,
     .put_super   = bsfs_put_super,
+    .sync_fs     = bsfs_sync_fs,
 };
 
 static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
