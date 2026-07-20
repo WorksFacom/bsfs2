@@ -133,4 +133,42 @@ sync
 BYTES=$(cat "$MNT/regrow" | tr -d '\0' | wc -c)
 [ "$BYTES" -eq 0 ] || fail "regrow resurrected $BYTES bytes of stale data"
 
+# 8. statfs and truncating a heavily fragmented file.
+#
+#    Interleaving writes between two files gives each of them ~150 single-block
+#    spans, which is more than one collect pass of bsfs_truncate() holds - it
+#    used to silently truncate only part of the file. df(1) also only works now
+#    that the filesystem implements ->statfs, so it doubles as the check that
+#    every block really came back.
+FREE0=$(df -P "$MNT" | awk 'NR==2{print $4}')
+[ -n "$FREE0" ] && [ "$FREE0" -gt 0 ] || fail "df reported no free space (statfs missing?)"
+
+i=0
+while [ "$i" -lt 150 ]; do
+  dd if=/dev/zero of="$MNT/fragA" bs=4096 count=1 seek="$i" conv=notrunc 2>/dev/null || fail "write fragA block $i failed"
+  dd if=/dev/zero of="$MNT/fragB" bs=4096 count=1 seek="$i" conv=notrunc 2>/dev/null || fail "write fragB block $i failed"
+  i=$((i + 1))
+done
+sync
+
+FREE1=$(df -P "$MNT" | awk 'NR==2{print $4}')
+[ "$FREE1" -lt "$FREE0" ] || fail "df did not shrink after writing 300 blocks ($FREE0 -> $FREE1)"
+
+: > "$MNT/fragA" || fail "truncate fragA failed"
+sync
+FREE2=$(df -P "$MNT" | awk 'NR==2{print $4}')
+
+# 150 blocks of 4 KiB = 600 KiB; allow slack for the metadata that also moved.
+GAINED=$((FREE2 - FREE1))
+[ "$GAINED" -ge 500 ] || fail "truncating a fragmented file only returned ${GAINED}K, expected ~600K (sweep stopping early?)"
+
+SIZE=$(stat -c '%s' "$MNT/fragA")
+[ "$SIZE" -eq 0 ] || fail "fragA still has size $SIZE"
+
+remount "fragmentado"
+SIZE=$(stat -c '%s' "$MNT/fragA")
+[ "$SIZE" -eq 0 ] || fail "fragA has size $SIZE after remount"
+SIZE=$(stat -c '%s' "$MNT/fragB")
+[ "$SIZE" -eq 614400 ] || fail "fragB has size $SIZE after remount, expected 614400"
+
 echo SMOKE_OK

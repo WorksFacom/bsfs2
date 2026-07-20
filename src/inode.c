@@ -429,71 +429,90 @@ void bsfs_truncate(struct inode *inode) {
     }
   }
 
-  // 2) Collect and remove all spans starting at or after iblock
-  // Traverse tree and collect keys >= threshold
-  typedef struct {
-    __u32 k;
-  } krec;
+  // 2) Collect and remove every span starting at or after iblock.
+  //
+  // The collect buffer is bounded (it lives on the kernel stack), so a heavily
+  // fragmented file can hold more spans than fit in a single pass - it used to
+  // silently drop the excess and truncate only part of the file. Sweep instead:
+  // collect a batch, remove it, and go again until a pass finds nothing left
+  // above the cut.
+  __u32  keys[64];
+  size_t kcount;
 
-  // TODO: large stack/frame size
-  // krec   keys[1024];
-  krec   keys[256];
-  size_t kcount = 0;
-  // simple DFS stack of node blocks
-  __u32 stack[128];
-  int   top = 0;
+  // DFS over the tree. bspan entries are the smallest of all the trees here
+  // (12 bytes), so their nodes have the widest fan-out: 2t = 256 children. The
+  // stack holds a full sibling set; if it ever fills anyway, the sweep above
+  // just runs another pass.
+  __u32 stack[256];
+  int   top;
 
-  if (bspan_h->root_block)
-    stack[top++] = bspan_h->root_block;
+  for (;;) {
+    size_t removed = 0;
 
-  while (top > 0) {
-    int   ret;
-    __u32 nb = stack[--top];
+    kcount = 0;
+    top    = 0;
 
-    ret = btree_read_node(sb, bspan_h, nb, &node);
+    if (bspan_h->root_block)
+      stack[top++] = bspan_h->root_block;
 
-    if (ret != 0)
-      continue;
+    while (top > 0 && kcount < ARRAY_SIZE(keys)) {
+      int   ret;
+      __u32 nb = stack[--top];
 
-    // push children first for post-order like
-    if (!node->node->is_leaf) {
-      for (__u32 i = 0; i <= node->node->num_entries; i++) {
-        if (top < (int)(sizeof(stack) / sizeof(stack[0])))
-          stack[top++] = bchildren(node, bspan_h)[i];
+      ret = btree_read_node(sb, bspan_h, nb, &node);
+
+      if (ret != 0)
+        continue;
+
+      if (!node->node->is_leaf) {
+        for (__u32 i = 0; i <= node->node->num_entries; i++) {
+          if (top < (int)ARRAY_SIZE(stack))
+            stack[top++] = bchildren(node, bspan_h)[i];
+          else
+            pr_warn("truncate: DFS stack full, sweeping again\n");
+        }
       }
+
+      // B+: only leaves hold records; entries in internal nodes are separator
+      // copies, so collecting them would just queue the same key twice.
+      if (node->node->is_leaf) {
+        for (__u32 i = 0; i < node->node->num_entries && kcount < ARRAY_SIZE(keys); i++) {
+          __u32 ekey = bspan_h->get_key(bentries(node) + i * bspan_h->entry_size);
+
+          if (ekey >= iblock)
+            keys[kcount++] = ekey;
+        }
+      }
+
+      btree_free_node(node);
     }
 
-    // B+: only leaves hold records; entries in internal nodes are separator
-    // copies, so collecting them would just queue the same key twice.
-    if (node->node->is_leaf) {
-      for (__u32 i = 0; i < node->node->num_entries; i++) {
-        __u32 ekey = bspan_h->get_key(bentries(node) + i * bspan_h->entry_size);
-        if (ekey >= iblock) {
-          if (kcount < sizeof(keys) / sizeof(keys[0])) {
-            keys[kcount++].k = ekey;
-          }
+    if (kcount == 0)
+      break;
+
+    for (size_t i = 0; i < kcount; i++) {
+      bspan_t *found;
+      bspan_t  bs;
+
+      // btree_search returns a pointer into the node's buffer
+      // copy the span out before releasing the node
+      if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i], (void **)&found, &node) == 1) {
+        bs = *found;
+        btree_free_node(node);
+        // drop the tree reference first, then free the blocks
+        if (btree_remove(sb, bspan_h, keys[i])) {
+          deallocate_bspan(sb, &bs);
+          removed++;
+        } else {
+          pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", bs.file_blk, bs.length);
         }
       }
     }
 
-    btree_free_node(node);
-  }
-
-  // Remove collected keys
-  for (size_t i = 0; i < kcount; i++) {
-    bspan_t *found;
-    bspan_t  bs;
-
-    // btree_search returns a pointer into the node's buffer
-    // copy the span out before releasing the node
-    if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i].k, (void **)&found, &node) == 1) {
-      bs = *found;
-      btree_free_node(node);
-      // drop the tree reference first, then free the blocks
-      if (btree_remove(sb, bspan_h, keys[i].k))
-        deallocate_bspan(sb, &bs);
-      else
-        pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", bs.file_blk, bs.length);
+    // A pass that removes nothing would sweep forever.
+    if (removed == 0) {
+      pr_warn("truncate: %zu spans past the cut could not be removed\n", kcount);
+      break;
     }
   }
 
@@ -1010,62 +1029,6 @@ static int bsfs_read_folio(struct file *file, struct folio *folio) {
   return block_read_full_folio(folio, bsfs_get_block);
 }
 
-// Marks holes as buffer_delay without physical allocation.
-//
-// CURRENTLY UNUSED: mpage_writepages() knows nothing about BH_Delay - it only
-// looks at buffer_mapped(), so a buffer marked here with map_bh(bh, sb, 0) was
-// taken to be "already allocated" and writeback wrote the data to block 0 (the
-// reserved one), never calling bsfs_get_block() nor creating the bspan. Using
-// delayed allocation would require our own ->writepages, ext4-style
-// (mpage_da_*), deciding the allocation at flush time. Until then allocation
-// happens in write_begin.
-static int __maybe_unused bsfs_get_block_delalloc(struct inode *inode, sector_t iblock, struct buffer_head *bh, int create) {
-  int found;
-  int ret = 0;
-
-  struct super_block *sb = inode->i_sb;
-
-  struct bsfs_inode *bsfs_inode = bsfs_i(inode);
-  bspan_t            span;
-
-  btree_handle_t *bspan_h = btree_create_bspan_handle();
-  if (!bspan_h) {
-    return -ENOMEM;
-  }
-
-  mutex_lock(&bsfs_inode->truncate_mutex);
-
-  bspan_h->root_block = bsfs_inode->btree_root;
-
-  found = bspan_search_le(sb, bspan_h, iblock, &span);
-
-  if (found < 0) {
-    ret = found;
-    goto out;
-  }
-
-  // explicit bounds check
-  // bspan_search_le should be correct but we're being defensive
-  if (found == 1 && iblock >= span.file_blk && iblock < span.file_blk + span.length) {
-    map_bh(bh, sb, span.disk_blk + (iblock - span.file_blk));
-    goto out;
-  }
-
-  // should never happen!
-  if (!create)
-    goto out;
-
-  // hole: mark as delayed allocation, no physical block assigned yet
-  map_bh(bh, sb, 0);
-  set_buffer_new(bh);
-  set_buffer_delay(bh);
-
-out:
-  mutex_unlock(&bsfs_inode->truncate_mutex);
-  kfree(bspan_h);
-  return ret;
-}
-
 static void bsfs_write_failed(struct address_space *mapping, loff_t to) {
   struct inode *inode = mapping->host;
 
@@ -1075,6 +1038,15 @@ static void bsfs_write_failed(struct address_space *mapping, loff_t to) {
   }
 }
 
+/*
+ * Allocation happens here, not at writeback time. Delayed allocation was tried
+ * (a get_block variant that only marked holes with buffer_delay) and does not
+ * work with mpage_writepages(): it knows nothing about BH_Delay, so a buffer
+ * marked with map_bh(bh, sb, 0) looked "already allocated" and writeback wrote
+ * the data to block 0, never calling back to allocate or to create the bspan.
+ * Doing it for real needs our own ->writepages, ext4-style (mpage_da_*), which
+ * decides the allocation at flush time.
+ */
 static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop,
                             void **fsdata) {
   int ret;

@@ -23,6 +23,7 @@ static void bsfs_put_super(struct super_block *sb) {
   mark_buffer_dirty(sbi->bh);
   sync_dirty_buffer(sbi->bh);
   bsfs_commit_deferred_frees(sb);
+  release_bitmap(sb);
   brelse(sbi->bh);
   kfree(sbi);
 
@@ -49,6 +50,35 @@ static int bsfs_sync_fs(struct super_block *sb, int wait) {
   return 0;
 }
 
+/*
+ * Without this, df(1) and statfs(2) report nothing for a bsfs mount, which also
+ * makes it awkward to test running out of space. Free blocks are counted from
+ * the in-memory bitmap; blocks still parked as deferred frees are counted as
+ * used, since that is what they are until the next commit point.
+ */
+static int bsfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
+  struct super_block     *sb  = dentry->d_sb;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  __u32                   free_blocks = 0;
+  __u32                   i;
+
+  mutex_lock(&sbi->bitmap_lock);
+  for (i = sbi->super->data_block_start; i < sbi->super->total_blocks; i++) {
+    if (bsfs_is_bit_free(sb, i))
+      free_blocks++;
+  }
+  mutex_unlock(&sbi->bitmap_lock);
+
+  buf->f_type    = MAGIC_NUMBER;
+  buf->f_bsize   = sb->s_blocksize;
+  buf->f_blocks  = sbi->super->total_blocks;
+  buf->f_bfree   = free_blocks;
+  buf->f_bavail  = free_blocks;
+  buf->f_namelen = MAX_FILENAME - 1;
+
+  return 0;
+}
+
 static const struct super_operations bsfs_sops = {
     .alloc_inode = bsfs_alloc_inode,
     .write_inode = bsfs_write_inode,
@@ -56,6 +86,7 @@ static const struct super_operations bsfs_sops = {
     .evict_inode = bsfs_evict_inode,
     .put_super   = bsfs_put_super,
     .sync_fs     = bsfs_sync_fs,
+    .statfs      = bsfs_statfs,
 };
 
 static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
@@ -233,7 +264,7 @@ out1:
 
 static void __exit exit_bsfs(void) {
   unregister_filesystem(&bsfs_fs_type);
-  // TODO: destroy cache
+  destroy_inodecache();
 }
 
 module_init(init_bsfs);

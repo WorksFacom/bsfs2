@@ -208,13 +208,13 @@ static __u32 btree_descend_index_key(struct btree_node *node, btree_handle_t *ha
  *   - `allocated`: blocks created by this transaction. Freed if it aborts.
  *   - `replaced` : old blocks whose contents were cloned. Freed when it commits.
  *
- * Crash consistency: the shadow tree only
- * becomes reachable once the caller persists the new handle->root_block into
- * the superblock or the inode. Until then the on-disk tree still points at the
- * blocks this mutation replaced, so cow_publish() does not free them - it
- * queues them with bsfs_defer_free_block(), and they are only handed back to
- * the allocator at a commit point (->sync_fs, ->put_super, or when the
- * allocator runs dry), after everything dirty has been flushed.
+ * Crash consistency: the shadow tree only becomes reachable once the caller
+ * persists the new handle->root_block into the superblock or the inode. Until
+ * then the on-disk tree still points at the blocks this mutation replaced, so
+ * cow_publish() does not free them - it queues them with
+ * bsfs_defer_free_block(), and they are only handed back to the allocator at a
+ * commit point (->sync_fs, ->put_super, or when the allocator runs dry), after
+ * everything dirty has been flushed.
  * ------------------------------------------------------------------------- */
 
 struct btree_cow_ctx {
