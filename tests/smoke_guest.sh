@@ -1,6 +1,6 @@
 #!/bin/sh
 # Smoke test run inside the QEMU guest against the freshly built bsfs2.ko.
-# Exercises the search paths in src/btree.c (Step 3.1 of the B+ migration):
+# Exercises the search paths in src/btree.c
 #   - inode tree search: mount succeeds -> root inode was found.
 #   - dir tree search  : stat/ls on entries in the root dir.
 #   - bspan search_le  : reading file contents back.
@@ -64,7 +64,7 @@ stat "$MNT/b" >/dev/null 2>&1 || fail "stat b failed"
 stat "$MNT/d" >/dev/null 2>&1 || fail "stat d failed"
 
 # 6. Exercise bspan search: write a small file, then read it back.
-printf 'hello-bsfs\n' > "$MNT/a" 2>&1 || fail "write a failed"
+printf 'hello-bsfs\n' >"$MNT/a" 2>&1 || fail "write a failed"
 sync
 OUT=$(cat "$MNT/a" 2>&1) || fail "cat a failed (bspan_search_le regression?)"
 [ "$OUT" = "hello-bsfs" ] || fail "read mismatch: got '$OUT'"
