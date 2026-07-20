@@ -22,6 +22,7 @@ static void bsfs_put_super(struct super_block *sb) {
   // sbi->super points inside sbi->bh; there is nothing to free separately.
   mark_buffer_dirty(sbi->bh);
   sync_dirty_buffer(sbi->bh);
+  bsfs_commit_deferred_frees(sb);
   brelse(sbi->bh);
   kfree(sbi);
 
@@ -36,8 +37,14 @@ static void bsfs_put_super(struct super_block *sb) {
 static int bsfs_sync_fs(struct super_block *sb, int wait) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  if (wait)
-    sync_dirty_buffer(sbi->bh);
+  if (!wait)
+    return 0;
+
+  sync_dirty_buffer(sbi->bh);
+
+  // A commit point: everything is on disk, so the blocks copy-on-write replaced
+  // can finally be reused.
+  bsfs_commit_deferred_frees(sb);
 
   return 0;
 }
@@ -70,6 +77,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   mutex_init(&sbi->inode_tree_lock);
   mutex_init(&sbi->bitmap_lock);
+  mutex_init(&sbi->pending_free_lock);
 
   // if the struct size ever changes, the kernel won't compile
   // catches accidental ABI breaks or padding changes at build time.

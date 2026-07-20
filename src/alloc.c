@@ -4,6 +4,87 @@
  */
 #include "../include/alloc.h"
 #include "../include/rec_gc.h"
+#include <linux/blkdev.h>
+#include <linux/buffer_head.h>
+
+/*
+ * Deferred frees - the write barrier for copy-on-write.
+ *
+ * A mutation builds a shadow of the tree and then publishes a new root, but the
+ * new root only becomes durable when its owner (the superblock, for the inode
+ * and recovery trees; the inode itself, for the per-inode trees) is written
+ * out. Handing the replaced blocks straight back to the allocator opens a
+ * window: they get reused and overwritten while the *on-disk* tree still points
+ * at them, so a crash before the root is persisted leaves a tree referencing
+ * blocks that now belong to somebody else.
+ *
+ * So the blocks are parked here instead, and only released at a commit point,
+ * after everything dirty has reached the disk.
+ */
+int bsfs_defer_free_block(struct super_block *sb, __u32 block) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  if (block == 0 || block == INVALID_BLOCK)
+    return 0;
+
+  mutex_lock(&sbi->pending_free_lock);
+
+  if (sbi->pending_free_count == sbi->pending_free_cap) {
+    size_t new_cap = (sbi->pending_free_cap == 0) ? 64 : (sbi->pending_free_cap * 2);
+    __u32 *grown   = krealloc(sbi->pending_free, new_cap * sizeof(__u32), GFP_NOFS);
+
+    if (!grown) {
+      mutex_unlock(&sbi->pending_free_lock);
+      // Out of memory: freeing right away costs the barrier, but keeping the
+      // block would leak it, which is worse.
+      return deallocate_single_block(sb, block) == 0 ? -1 : -1;
+    }
+
+    sbi->pending_free    = grown;
+    sbi->pending_free_cap = new_cap;
+  }
+
+  sbi->pending_free[sbi->pending_free_count++] = block;
+  mutex_unlock(&sbi->pending_free_lock);
+
+  return 0;
+}
+
+void bsfs_commit_deferred_frees(struct super_block *sb) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  __u32                  *blocks;
+  size_t                  count;
+
+  mutex_lock(&sbi->pending_free_lock);
+  count  = sbi->pending_free_count;
+  blocks = sbi->pending_free;
+
+  if (count == 0) {
+    mutex_unlock(&sbi->pending_free_lock);
+    return;
+  }
+
+  // Take the list out so the flush below runs without the lock held.
+  sbi->pending_free       = NULL;
+  sbi->pending_free_count = 0;
+  sbi->pending_free_cap   = 0;
+  mutex_unlock(&sbi->pending_free_lock);
+
+  // The barrier itself: shadow nodes and inodes first, then the superblock that
+  // carries the inode/recovery roots, then the device cache.
+  sync_blockdev(sb->s_bdev);
+
+  if (sbi->bh)
+    sync_dirty_buffer(sbi->bh);
+
+  blkdev_issue_flush(sb->s_bdev);
+
+  // Only now are the replaced blocks safe to hand out again.
+  for (size_t i = 0; i < count; i++)
+    (void)deallocate_single_block(sb, blocks[i]);
+
+  kfree(blocks);
+}
 
 // caller must hold sbi->bitmap_lock
 static int __allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
@@ -91,6 +172,22 @@ __u32 allocate_single_block(struct super_block *sb) {
     }
   }
   mutex_unlock(&sbi->bitmap_lock);
+
+  // Out of space may just mean the deferred frees are holding blocks back.
+  // Commit them (which flushes, so the barrier is honoured) and scan once more.
+  if (sbi->pending_free_count > 0) {
+    bsfs_commit_deferred_frees(sb);
+
+    mutex_lock(&sbi->bitmap_lock);
+    for (i = start; i < total_blocks; i++) {
+      if (bsfs_is_bit_free(sb, i)) {
+        bsfs_set_bit(sb, i);
+        mutex_unlock(&sbi->bitmap_lock);
+        return i;
+      }
+    }
+    mutex_unlock(&sbi->bitmap_lock);
+  }
 
   printk(KERN_WARNING "Error: No blocks available.\n");
 

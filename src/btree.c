@@ -47,12 +47,12 @@ btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, b
   if (!handle)
     return NULL;
 
-  handle->type           = type;
-  handle->entry_size     = entry_size;
-  handle->cmp            = cmp ? cmp : default_compare;
-  handle->get_key        = get_key;
-  handle->root_block     = 0;
-  handle->min_degree     = compute_min_degree(entry_size);
+  handle->type       = type;
+  handle->entry_size = entry_size;
+  handle->cmp        = cmp ? cmp : default_compare;
+  handle->get_key    = get_key;
+  handle->root_block = 0;
+  handle->min_degree = compute_min_degree(entry_size);
   return handle;
 }
 
@@ -63,9 +63,9 @@ static inline void btree_shift_left(void *entries, __u64 entry_size, int from, i
 
 // TODO: properly handle alignment (e.g: get_unaligned_le32)
 int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node **out_node) {
-  struct buffer_head      *bh;
-  struct btree_node_t     *raw;
-  struct bsfs_super_info  *sbi = bsfs_sb(sb);
+  struct buffer_head     *bh;
+  struct btree_node_t    *raw;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   *out_node = NULL;
 
@@ -208,13 +208,13 @@ static __u32 btree_descend_index_key(struct btree_node *node, btree_handle_t *ha
  *   - `allocated`: blocks created by this transaction. Freed if it aborts.
  *   - `replaced` : old blocks whose contents were cloned. Freed when it commits.
  *
- * Crash consistency (see section 10 of BPTREE_MIGRATION.md): the shadow tree is
- * only reachable once the caller persists the new handle->root_block into the
- * superblock or the inode. cow_publish() hands the replaced blocks back to the
- * allocator right away, so there is still a window where a crash between the
- * commit and the caller persisting the root can leave the old tree pointing at
- * blocks that were already reused. Closing it needs the root to be written and
- * flushed before the old blocks are released - marked here, not solved.
+ * Crash consistency: the shadow tree only
+ * becomes reachable once the caller persists the new handle->root_block into
+ * the superblock or the inode. Until then the on-disk tree still points at the
+ * blocks this mutation replaced, so cow_publish() does not free them - it
+ * queues them with bsfs_defer_free_block(), and they are only handed back to
+ * the allocator at a commit point (->sync_fs, ->put_super, or when the
+ * allocator runs dry), after everything dirty has been flushed.
  * ------------------------------------------------------------------------- */
 
 struct btree_cow_ctx {
@@ -306,8 +306,11 @@ static void cow_free_block(struct super_block *sb, btree_cow_ctx_t *cow, __u32 b
 static void cow_publish(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow) {
   handle->root_block = cow->new_root;
 
+  // The replaced blocks are queued, not freed: the caller has not persisted the
+  // new root yet, so the on-disk tree can still reach them. They come back to
+  // the allocator at the next commit point (see bsfs_defer_free_block()).
   for (size_t i = 0; i < cow->replaced_count; i++)
-    (void)deallocate_single_block(sb, cow->replaced[i]);
+    (void)bsfs_defer_free_block(sb, cow->replaced[i]);
 
   kfree(cow->allocated);
   kfree(cow->replaced);
@@ -326,8 +329,7 @@ static void cow_abort(struct super_block *sb, btree_cow_ctx_t *cow) {
 }
 
 // Allocates a block and copies `old_block` into it byte for byte.
-static int cow_clone_block(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow, __u32 old_block,
-                           __u32 *out_block) {
+static int cow_clone_block(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow, __u32 old_block, __u32 *out_block) {
   struct btree_node *old_node = NULL, *new_node = NULL;
   __u32              new_block;
 
@@ -1071,8 +1073,8 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
  * deletion happens only in the leaf. Separators left stale by this are still
  * valid routing keys.
  */
-static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle,
-                                        int *success, btree_cow_ctx_t *cow) {
+static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, int *success,
+                                        btree_cow_ctx_t *cow) {
   int                ret;
   __u32              i, child_idx, child_block;
   __u64              size;

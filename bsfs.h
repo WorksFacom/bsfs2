@@ -24,6 +24,14 @@ struct bsfs_super_info {
   struct mutex bitmap_lock;
   __u32        next_recovery_id;
   __u32        cached_recovery_root;
+
+  // Blocks that copy-on-write replaced. They are only handed back to the
+  // allocator at a commit point, once the shadow tree and the roots pointing at
+  // it are on disk - see bsfs_commit_deferred_frees().
+  __u32       *pending_free;
+  size_t       pending_free_count;
+  size_t       pending_free_cap;
+  struct mutex pending_free_lock;
 };
 
 static inline struct bsfs_super_info *bsfs_sb(struct super_block *sb) {

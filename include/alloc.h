@@ -103,4 +103,24 @@ int deallocate_single_block(struct super_block *sb, __u32 block_index);
  */
 int deallocate_bspan(struct super_block *sb, const bspan_t *bspan);
 
+/**
+ * @brief Queues a block released by copy-on-write instead of freeing it now.
+ *
+ * A block replaced by a copy-on-write mutation must not be reused while the old
+ * tree can still be reached from disk: until the new root is durable, a crash
+ * leaves the on-disk tree pointing at it. Deferred blocks become free again at
+ * the next commit point.
+ *
+ * @return 0 if the block was queued, -1 if it had to be freed immediately.
+ */
+int bsfs_defer_free_block(struct super_block *sb, __u32 block);
+
+/**
+ * @brief Flushes metadata and releases every deferred block.
+ *
+ * Called from ->sync_fs, ->put_super and from the allocator when it runs out of
+ * space.
+ */
+void bsfs_commit_deferred_frees(struct super_block *sb);
+
 #endif
