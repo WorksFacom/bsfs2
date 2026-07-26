@@ -1,6 +1,6 @@
 # Bitmap Allocators Benchmark Suite - C port
 CC = gcc
-CFLAGS = -std=c11 -Wall -Wextra -Werror -O2 -Isrc/include
+CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -Isrc/include
 LDFLAGS =
 
 SRC = $(shell find src -name '*.c')
