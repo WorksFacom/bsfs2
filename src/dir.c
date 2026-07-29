@@ -287,18 +287,26 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
   if (btree_read_node(sb, handle, node_block, &node) != 0)
     return 0;
 
-  if (!node->node->is_leaf)
+  // B+: only leaves hold records. Entries in internal nodes are separators
+  // (copies), so emitting them would list files twice.
+  if (!node->node->is_leaf) {
     children = bchildren(node, handle);
+
+    for (i = 0; i <= node->node->num_entries; i++) {
+      if (bsfs_emit_subtree(sb, handle, children[i], ctx, index)) {
+        btree_free_node(node);
+        return 1;
+      }
+    }
+
+    btree_free_node(node);
+    return 0;
+  }
 
   for (i = 0; i < node->node->num_entries; i++) {
     struct bsfs_dentry *de;
     loff_t              entry_pos;
     int                 namelen;
-
-    if (!node->node->is_leaf && bsfs_emit_subtree(sb, handle, children[i], ctx, index)) {
-      btree_free_node(node);
-      return 1;
-    }
 
     de = (struct bsfs_dentry *)(bentries(node) + (size_t)i * handle->entry_size);
 
@@ -323,11 +331,6 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
     }
 
     ctx->pos = entry_pos + 1;
-  }
-
-  if (!node->node->is_leaf && bsfs_emit_subtree(sb, handle, children[node->node->num_entries], ctx, index)) {
-    btree_free_node(node);
-    return 1;
   }
 
   btree_free_node(node);

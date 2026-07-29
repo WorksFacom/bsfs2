@@ -16,6 +16,10 @@ bsfs2-objs := bsfs.o $(addprefix src/,$(bsfs2-src-objs))
 
 ccflags-y += -include $(PWD)/include/pr_fmt.h
 
+# KDIR comes from .env (the same file start_qemu.sh / tests/smoke.sh source),
+# falling back to the running kernel's build tree.
+-include .env
+export KDIR
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 SRC_FILES = $(shell find src -type f -name '*.c')

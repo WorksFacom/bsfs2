@@ -19,10 +19,64 @@
 static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
+  // sbi->super points inside sbi->bh; there is nothing to free separately.
+  mark_buffer_dirty(sbi->bh);
+  sync_dirty_buffer(sbi->bh);
+  bsfs_commit_deferred_frees(sb);
+  release_bitmap(sb);
   brelse(sbi->bh);
   kfree(sbi);
 
   sb->s_fs_info = NULL;
+}
+
+/*
+ * The superblock buffer carries the tree roots (inode_root, recovery_root), so
+ * a sync(2) has to push it out; without this it only reached the disk at
+ * unmount time.
+ */
+static int bsfs_sync_fs(struct super_block *sb, int wait) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  if (!wait)
+    return 0;
+
+  sync_dirty_buffer(sbi->bh);
+
+  // A commit point: everything is on disk, so the blocks copy-on-write replaced
+  // can finally be reused.
+  bsfs_commit_deferred_frees(sb);
+
+  return 0;
+}
+
+/*
+ * Without this, df(1) and statfs(2) report nothing for a bsfs mount, which also
+ * makes it awkward to test running out of space. Free blocks are counted from
+ * the in-memory bitmap; blocks still parked as deferred frees are counted as
+ * used, since that is what they are until the next commit point.
+ */
+static int bsfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
+  struct super_block     *sb  = dentry->d_sb;
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  __u32                   free_blocks = 0;
+  __u32                   i;
+
+  mutex_lock(&sbi->bitmap_lock);
+  for (i = sbi->super->data_block_start; i < sbi->super->total_blocks; i++) {
+    if (bsfs_is_bit_free(sb, i))
+      free_blocks++;
+  }
+  mutex_unlock(&sbi->bitmap_lock);
+
+  buf->f_type    = MAGIC_NUMBER;
+  buf->f_bsize   = sb->s_blocksize;
+  buf->f_blocks  = sbi->super->total_blocks;
+  buf->f_bfree   = free_blocks;
+  buf->f_bavail  = free_blocks;
+  buf->f_namelen = MAX_FILENAME - 1;
+
+  return 0;
 }
 
 static const struct super_operations bsfs_sops = {
@@ -31,6 +85,8 @@ static const struct super_operations bsfs_sops = {
     .free_inode  = bsfs_free_cache_inode,
     .evict_inode = bsfs_evict_inode,
     .put_super   = bsfs_put_super,
+    .sync_fs     = bsfs_sync_fs,
+    .statfs      = bsfs_statfs,
 };
 
 static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
@@ -52,6 +108,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   mutex_init(&sbi->inode_tree_lock);
   mutex_init(&sbi->bitmap_lock);
+  mutex_init(&sbi->pending_free_lock);
 
   // if the struct size ever changes, the kernel won't compile
   // catches accidental ABI breaks or padding changes at build time.
@@ -67,6 +124,9 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
     goto out_bad_sb;
   }
 
+  // sbi->super points DIRECTLY at the superblock buffer: whoever changes a
+  // field (e.g. inode_root after a split) only needs mark_buffer_dirty(sbi->bh).
+  // With a kzalloc'd copy those changes never reached the disk.
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
   sbi->super = bsfs_super;
   sbi->bh    = bh;
@@ -204,7 +264,7 @@ out1:
 
 static void __exit exit_bsfs(void) {
   unregister_filesystem(&bsfs_fs_type);
-  // TODO: destroy cache
+  destroy_inodecache();
 }
 
 module_init(init_bsfs);

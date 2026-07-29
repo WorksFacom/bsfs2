@@ -61,6 +61,13 @@ int init_bitmap_list(struct super_block *sb, __u32 start_block, __u32 num_blocks
 void load_bitmap(struct super_block *sb);
 
 /**
+ * @brief Releases everything load_bitmap() pinned (buffer heads and arrays).
+ *
+ * Flushes any bitmap block still dirty before dropping it.
+ */
+void release_bitmap(struct super_block *sb);
+
+/**
  * @brief Writes the bitmap to disk starting at the given block.
  *
  * This function traverses the linked list of bitmap blocks on disk and writes
