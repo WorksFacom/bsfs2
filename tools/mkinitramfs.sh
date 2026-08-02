@@ -7,9 +7,9 @@
 # and powers the VM off, otherwise it drops to an interactive shell.
 #
 # Usage:   ./tools/mkinitramfs.sh
-# Requires: busybox (dnf install busybox), cpio, gzip.
+# Requires: busybox, cpio, gzip, and file on PATH.
 
-set -eu
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
@@ -17,9 +17,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 BUSYBOX="${BUSYBOX:-$(command -v busybox || true)}"
 [ -x "$BUSYBOX" ] || {
-  echo "busybox not found (dnf install busybox)"
+  echo "busybox not found; install BusyBox and ensure it is on PATH (or set BUSYBOX)"
   exit 1
 }
+for cmd in cpio gzip file; do
+  command -v "$cmd" >/dev/null || {
+    echo "$cmd not found; install it and ensure it is on PATH"
+    exit 1
+  }
+done
 if ! file -L "$BUSYBOX" | grep -q "statically linked"; then
   echo "WARNING: $BUSYBOX does not look static; the initramfs may not boot."
 fi
@@ -32,6 +38,9 @@ cp "$BUSYBOX" "$ROOT/bin/busybox"
 
 # One symlink per applet, so sh/mount/insmod/losetup/... exist in PATH.
 (cd "$ROOT" && ./bin/busybox --list-full | while read -r applet; do
+  # Some BusyBox builds list their multicall binary as an applet.  Do not
+  # replace the executable we just copied with a symlink to itself.
+  [ "$applet" = "bin/busybox" ] && continue
   mkdir -p "$(dirname "$applet")"
   ln -sf /bin/busybox "$applet"
 done)
