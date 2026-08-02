@@ -16,9 +16,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 : "${KDIR:?KDIR not set - copy .env.example to .env}"
 
 BUSYBOX="${BUSYBOX:-$(command -v busybox || true)}"
-[ -x "$BUSYBOX" ] || { echo "busybox not found (dnf install busybox)"; exit 1; }
+[ -x "$BUSYBOX" ] || {
+  echo "busybox not found (dnf install busybox)"
+  exit 1
+}
 if ! file -L "$BUSYBOX" | grep -q "statically linked"; then
-	echo "WARNING: $BUSYBOX does not look static; the initramfs may not boot."
+  echo "WARNING: $BUSYBOX does not look static; the initramfs may not boot."
 fi
 
 ROOT="$(mktemp -d)"
@@ -29,23 +32,23 @@ cp "$BUSYBOX" "$ROOT/bin/busybox"
 
 # One symlink per applet, so sh/mount/insmod/losetup/... exist in PATH.
 (cd "$ROOT" && ./bin/busybox --list-full | while read -r applet; do
-	mkdir -p "$(dirname "$applet")"
-	ln -sf /bin/busybox "$applet"
+  mkdir -p "$(dirname "$applet")"
+  ln -sf /bin/busybox "$applet"
 done)
 
 # mkfs.bsfs runs in the guest straight from the 9p share, but it is a dynamic
 # binary: copy the host's libc/loader into the initramfs so it can execute.
 if [ -x "$SCRIPT_DIR/mkfs.bsfs" ]; then
-	ldd "$SCRIPT_DIR/mkfs.bsfs" 2>/dev/null | grep -oE '/[^ ]*\.so[^ ]*' | sort -u | while read -r lib; do
-		[ -e "$lib" ] || continue
-		mkdir -p "$ROOT$(dirname "$lib")"
-		cp -L "$lib" "$ROOT$lib"
-	done
+  ldd "$SCRIPT_DIR/mkfs.bsfs" 2>/dev/null | grep -oE '/[^ ]*\.so[^ ]*' | sort -u | while read -r lib; do
+    [ -e "$lib" ] || continue
+    mkdir -p "$ROOT$(dirname "$lib")"
+    cp -L "$lib" "$ROOT$lib"
+  done
 else
-	echo "WARNING: mkfs.bsfs not found; run 'make' first so its libs get embedded."
+  echo "WARNING: mkfs.bsfs not found; run 'make' first so its libs get embedded."
 fi
 
-cat > "$ROOT/init" <<'INIT'
+cat >"$ROOT/init" <<'INIT'
 #!/bin/sh
 mount -t proc     none /proc
 mount -t sysfs    none /sys
@@ -74,6 +77,6 @@ INIT
 chmod +x "$ROOT/init"
 
 OUT="$KDIR/initramfs.cpio.gz"
-(cd "$ROOT" && find . -print0 | cpio --null -H newc -o 2>/dev/null) | gzip -9 > "$OUT"
+(cd "$ROOT" && find . -print0 | cpio --null -H newc -o 2>/dev/null) | gzip -9 >"$OUT"
 
 echo "initramfs built: $OUT ($(du -h "$OUT" | cut -f1))"

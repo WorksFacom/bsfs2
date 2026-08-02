@@ -46,16 +46,16 @@ mount -t bsfs "$LOOP" "$MNT" 2>&1 || fail "mount failed"
 dd if=/dev/urandom of=/tmp/blob bs=4096 count=64 2>/dev/null || fail "dd blob failed"
 cp /tmp/blob "$MNT/big" || fail "cp big failed"
 sync
-WANT=$(md5sum < /tmp/blob | cut -d' ' -f1)
+WANT=$(md5sum </tmp/blob | cut -d' ' -f1)
 
 remount "big"
-GOT=$(md5sum < "$MNT/big" | cut -d' ' -f1)
+GOT=$(md5sum <"$MNT/big" | cut -d' ' -f1)
 [ "$WANT" = "$GOT" ] || fail "big diverged after remount ($WANT != $GOT)"
 SIZE=$(stat -c '%s' "$MNT/big")
 [ "$SIZE" -eq 262144 ] || fail "big has size $SIZE after remount, expected 262144"
 
 # 2. Truncation: frees spans and can collapse the bspan tree root back to 0.
-: > "$MNT/big" || fail "truncate big failed"
+: >"$MNT/big" || fail "truncate big failed"
 sync
 SIZE=$(stat -c '%s' "$MNT/big")
 [ "$SIZE" -eq 0 ] || fail "big has size $SIZE right after truncate"
@@ -67,7 +67,7 @@ OUT=$(cat "$MNT/big") || fail "cat big after truncate failed"
 [ -z "$OUT" ] || fail "big is not empty after truncate: '$OUT'"
 
 # 3. Rewriting a truncated file must allocate spans again.
-echo "second-life" > "$MNT/big" || fail "rewrite big failed"
+echo "second-life" >"$MNT/big" || fail "rewrite big failed"
 sync
 remount "rewrite"
 OUT=$(cat "$MNT/big") || fail "cat big after rewrite failed"
@@ -77,7 +77,7 @@ OUT=$(cat "$MNT/big") || fail "cat big after rewrite failed"
 mkdir "$MNT/sub" || fail "mkdir sub failed"
 i=1
 while [ "$i" -le 40 ]; do
-  echo "d$i" > "$MNT/sub/d$i" || fail "write sub/d$i failed"
+  echo "d$i" >"$MNT/sub/d$i" || fail "write sub/d$i failed"
   i=$((i + 1))
 done
 sync
@@ -100,7 +100,7 @@ sync
 remount "empty dir"
 LEFT=$(ls "$MNT/sub" | wc -l)
 [ "$LEFT" -eq 0 ] || fail "sub still lists $LEFT entries after removing everything"
-echo again > "$MNT/sub/back" || fail "write into the emptied dir failed"
+echo again >"$MNT/sub/back" || fail "write into the emptied dir failed"
 sync
 remount "reuse dir"
 OUT=$(cat "$MNT/sub/back") || fail "cat sub/back failed"
@@ -114,7 +114,7 @@ i=1
 while [ "$i" -le 20 ]; do
   dd if=/dev/zero of="$MNT/churn" bs=4096 count=512 2>/dev/null || fail "churn write $i failed (leaked blocks?)"
   sync
-  : > "$MNT/churn" || fail "churn truncate $i failed"
+  : >"$MNT/churn" || fail "churn truncate $i failed"
   sync
   i=$((i + 1))
 done
@@ -125,7 +125,7 @@ rm "$MNT/churn" || fail "rm churn failed"
 dd if=/dev/urandom of=/tmp/pat bs=4096 count=16 2>/dev/null || fail "dd pat failed"
 cp /tmp/pat "$MNT/regrow" || fail "write regrow failed"
 sync
-: > "$MNT/regrow" || fail "truncate regrow failed"
+: >"$MNT/regrow" || fail "truncate regrow failed"
 sync
 remount "regrow"
 truncate -s 8192 "$MNT/regrow" || fail "extend regrow failed"
@@ -154,7 +154,7 @@ sync
 FREE1=$(df -P "$MNT" | awk 'NR==2{print $4}')
 [ "$FREE1" -lt "$FREE0" ] || fail "df did not shrink after writing 300 blocks ($FREE0 -> $FREE1)"
 
-: > "$MNT/fragA" || fail "truncate fragA failed"
+: >"$MNT/fragA" || fail "truncate fragA failed"
 sync
 FREE2=$(df -P "$MNT" | awk 'NR==2{print $4}')
 

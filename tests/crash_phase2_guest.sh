@@ -31,7 +31,7 @@ done
 # have been left pointing at blocks that the crash orphaned.
 i=1
 while [ "$i" -le 30 ]; do
-  echo "post-$i" > "$MNT/post$i" || fail "write post$i after crash failed"
+  echo "post-$i" >"$MNT/post$i" || fail "write post$i after crash failed"
   i=$((i + 1))
 done
 sync

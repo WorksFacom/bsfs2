@@ -23,13 +23,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 : "${KDIR:?KDIR not set — copy .env.example to .env}"
 
 GUEST="${1:-tests/smoke_guest.sh}"
-[ -f "$SCRIPT_DIR/$GUEST" ] || { echo "not found: $SCRIPT_DIR/$GUEST"; exit 2; }
+[ -f "$SCRIPT_DIR/$GUEST" ] || {
+  echo "not found: $SCRIPT_DIR/$GUEST"
+  exit 2
+}
 
 LOG=/tmp/bsfs_smoke.log
 TIMEOUT="${SMOKE_TIMEOUT:-90}"
 
 for f in "$KDIR/arch/x86/boot/bzImage" "$KDIR/initramfs.cpio.gz"; do
-  [ -f "$f" ] || { echo "missing: $f (run ./tools/mkinitramfs.sh and/or build the kernel in \$KDIR)"; exit 2; }
+  [ -f "$f" ] || {
+    echo "missing: $f (run ./tools/mkinitramfs.sh and/or build the kernel in \$KDIR)"
+    exit 2
+  }
 done
 
 # Run QEMU under a timeout, capturing all serial output.
@@ -42,19 +48,19 @@ timeout "$TIMEOUT" qemu-system-x86_64 \
   -no-reboot \
   -fsdev "local,id=fsdev0,path=$SCRIPT_DIR,security_model=none" \
   -device virtio-9p-pci,fsdev=fsdev0,mount_tag=hostshare \
-  > "$LOG" 2>&1
+  >"$LOG" 2>&1
 
 RC=$?
 
 # The serial console sometimes ends lines with CRLF, so normalise first.
-if tr -d '\r' < "$LOG" | grep -q '^SMOKE_OK$'; then
+if tr -d '\r' <"$LOG" | grep -q '^SMOKE_OK$'; then
   echo "PASS (log: $LOG)"
   exit 0
 fi
 
 if grep -q '^SMOKE_FAIL:' "$LOG"; then
   echo "FAIL:"
-  tr -d '\r' < "$LOG" | grep '^SMOKE_FAIL:'
+  tr -d '\r' <"$LOG" | grep '^SMOKE_FAIL:'
   echo "(full log: $LOG)"
   exit 1
 fi

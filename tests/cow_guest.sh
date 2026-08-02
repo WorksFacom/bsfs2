@@ -74,7 +74,7 @@ while [ "$i" -le 300 ]; do
   i=$((i + 1))
 done
 touch "$MNT/survivor" || fail "touch survivor failed after the rollback"
-echo alive > "$MNT/survivor" || fail "write survivor failed"
+echo alive >"$MNT/survivor" || fail "write survivor failed"
 sync
 
 # 3. The tree still has to be usable and to survive a remount after all that.
@@ -86,7 +86,7 @@ OUT=$(cat "$MNT/survivor") || fail "cat survivor failed"
 # 4. And there must still be room to work: fill in a batch and read it back.
 i=1
 while [ "$i" -le 100 ]; do
-  echo "v$i" > "$MNT/k$i" || fail "post-churn write k$i failed (space exhausted?)"
+  echo "v$i" >"$MNT/k$i" || fail "post-churn write k$i failed (space exhausted?)"
   i=$((i + 1))
 done
 sync

@@ -42,7 +42,7 @@ while [ "$i" -le "$N" ]; do
 done
 
 # 2. Every one of them must be listed and reachable through lookup.
-ls "$MNT" > /tmp/stress_ls || fail "ls failed"
+ls "$MNT" >/tmp/stress_ls || fail "ls failed"
 COUNT=$(grep -c '^f[0-9]*$' /tmp/stress_ls)
 [ "$COUNT" -eq "$N" ] || fail "ls listed $COUNT of $N files (incomplete leaf traversal?)"
 
@@ -51,7 +51,7 @@ for i in 1 "$((N / 2))" "$N"; do
 done
 
 # 3. Contents: write to one of the files and read it back.
-printf 'content-%s\n' "$N" > "$MNT/f1" || fail "write f1 failed"
+printf 'content-%s\n' "$N" >"$MNT/f1" || fail "write f1 failed"
 sync
 OUT=$(cat "$MNT/f1") || fail "cat f1 failed"
 [ "$OUT" = "content-$N" ] || fail "read back of f1 diverged: '$OUT'"
@@ -59,7 +59,7 @@ OUT=$(cat "$MNT/f1") || fail "cat f1 failed"
 # 4. Persistence: everything must survive the remount.
 umount "$MNT" || fail "umount failed"
 mount -t bsfs "$LOOP" "$MNT" 2>&1 || fail "remount failed"
-ls "$MNT" > /tmp/stress_ls2 || fail "ls after remount failed"
+ls "$MNT" >/tmp/stress_ls2 || fail "ls after remount failed"
 COUNT=$(grep -c '^f[0-9]*$' /tmp/stress_ls2)
 [ "$COUNT" -eq "$N" ] || fail "after remount only $COUNT of $N files are left (COW root not persisted?)"
 OUT=$(cat "$MNT/f1") || fail "cat f1 after remount failed"
@@ -72,7 +72,7 @@ while [ "$i" -le "$N" ]; do
   i=$((i + 2))
 done
 
-ls "$MNT" > /tmp/stress_ls3 || fail "ls after rm failed"
+ls "$MNT" >/tmp/stress_ls3 || fail "ls after rm failed"
 REMAIN=$(grep -c '^f[0-9]*$' /tmp/stress_ls3)
 EXPECT=$((N / 2))
 [ "$REMAIN" -eq "$EXPECT" ] || fail "after removal $REMAIN are left, expected $EXPECT"
@@ -82,7 +82,7 @@ grep -q '^f1$' /tmp/stress_ls3 && fail "f1 still listed after rm"
 # 6. And the result of the removals must persist too.
 umount "$MNT" || fail "umount 2 failed"
 mount -t bsfs "$LOOP" "$MNT" 2>&1 || fail "remount 2 failed"
-ls "$MNT" > /tmp/stress_ls4 || fail "ls after remount 2 failed"
+ls "$MNT" >/tmp/stress_ls4 || fail "ls after remount 2 failed"
 REMAIN=$(grep -c '^f[0-9]*$' /tmp/stress_ls4)
 [ "$REMAIN" -eq "$EXPECT" ] || fail "after remount 2 $REMAIN are left, expected $EXPECT"
 

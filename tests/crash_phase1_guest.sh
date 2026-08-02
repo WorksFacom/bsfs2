@@ -16,15 +16,27 @@ REPO=/mnt/host
 MNT=/tmp/crash_mnt
 DEV=/dev/vda
 
-"$REPO/mkfs.bsfs" "$DEV" >/dev/null || { echo "PHASE1_FAIL: mkfs"; exit 1; }
-insmod "$REPO/bsfs2.ko" || { echo "PHASE1_FAIL: insmod"; exit 1; }
+"$REPO/mkfs.bsfs" "$DEV" >/dev/null || {
+  echo "PHASE1_FAIL: mkfs"
+  exit 1
+}
+insmod "$REPO/bsfs2.ko" || {
+  echo "PHASE1_FAIL: insmod"
+  exit 1
+}
 mkdir -p "$MNT"
-mount -t bsfs "$DEV" "$MNT" || { echo "PHASE1_FAIL: mount"; exit 1; }
+mount -t bsfs "$DEV" "$MNT" || {
+  echo "PHASE1_FAIL: mount"
+  exit 1
+}
 
 # Checkpoint: 60 files that must still be there after the crash.
 i=1
 while [ "$i" -le 60 ]; do
-  echo "keep-$i" > "$MNT/keep$i" || { echo "PHASE1_FAIL: write keep$i"; exit 1; }
+  echo "keep-$i" >"$MNT/keep$i" || {
+    echo "PHASE1_FAIL: write keep$i"
+    exit 1
+  }
   i=$((i + 1))
 done
 sync
@@ -34,7 +46,7 @@ echo "PHASE1: checkpoint com $(ls "$MNT" | wc -l) arquivos"
 # already on disk.
 i=1
 while [ "$i" -le 60 ]; do
-  echo "churn-$i" > "$MNT/churn$i"
+  echo "churn-$i" >"$MNT/churn$i"
   i=$((i + 1))
 done
 i=1
@@ -44,6 +56,6 @@ while [ "$i" -le 60 ]; do
 done
 
 echo "PHASE1: derrubando a VM sem umount"
-echo b > /proc/sysrq-trigger
+echo b >/proc/sysrq-trigger
 sleep 5
 echo "PHASE1_FAIL: sysrq nao derrubou a VM"
