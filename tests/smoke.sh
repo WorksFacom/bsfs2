@@ -7,7 +7,7 @@
 # Boots QEMU non-interactively, mounts the 9p host share, runs the guest script
 # and greps the console output for the SMOKE_OK / SMOKE_FAIL line it prints.
 #
-# The initramfs (tests/mkinitramfs.sh) drops to a shell as PID 1 normally; with
+# The initramfs (tools/mkinitramfs.sh) drops to a shell as PID 1 normally; with
 # "bsfs.run=<script>" on the kernel cmdline its /init runs that script from the
 # share instead and powers the VM off. Note: passing a quoted `rdinit=/bin/sh -c "..."`
 # does NOT work — the kernel splits the cmdline on whitespace and sh dies with
@@ -29,7 +29,7 @@ LOG=/tmp/bsfs_smoke.log
 TIMEOUT="${SMOKE_TIMEOUT:-90}"
 
 for f in "$KDIR/arch/x86/boot/bzImage" "$KDIR/initramfs.cpio.gz"; do
-  [ -f "$f" ] || { echo "missing: $f (run ./tests/mkinitramfs.sh and/or build the kernel in \$KDIR)"; exit 2; }
+  [ -f "$f" ] || { echo "missing: $f (run ./tools/mkinitramfs.sh and/or build the kernel in \$KDIR)"; exit 2; }
 done
 
 # Run QEMU under a timeout, capturing all serial output.

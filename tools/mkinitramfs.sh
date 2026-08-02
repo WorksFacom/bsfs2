@@ -6,7 +6,7 @@
 # /mnt/host; with "bsfs.run=<script>" on the kernel cmdline it runs that script
 # and powers the VM off, otherwise it drops to an interactive shell.
 #
-# Usage:   ./tests/mkinitramfs.sh
+# Usage:   ./tools/mkinitramfs.sh
 # Requires: busybox (dnf install busybox), cpio, gzip.
 
 set -eu
