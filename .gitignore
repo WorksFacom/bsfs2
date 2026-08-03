@@ -95,6 +95,9 @@ docs/
 
 .env
 mkfs.bsfs
+__pycache__/
+bench/build/
+bench/results/
 
 # imagens e scripts ad-hoc de debug da VM
 tests/scratch/

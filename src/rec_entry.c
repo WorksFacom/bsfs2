@@ -150,7 +150,7 @@ static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 nod
  * a snapshot is a nice-to-have, a filesystem that can still be written to is
  * not. Returns the number of entries purged.
  */
-unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries) {
+unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries, __u64 *blocks_deferred) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
   btree_handle_t         *rec_tree;
   rec_entry_t            *victim;
@@ -205,7 +205,7 @@ unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entrie
         bspan_h->prio       = BSFS_ALLOC_SHRINK;
         bspan_h->root_block = data_root;
 
-        if (btree_deallocate_all(sb, bspan_h, data_root) != 0)
+        if (btree_deallocate_all(sb, bspan_h, data_root, blocks_deferred) != 0)
           pr_warn("recovery purge leaked the blocks of id %u\n", victim->recovery_id);
 
         kfree(bspan_h);

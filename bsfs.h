@@ -2,7 +2,10 @@
 #define FILESYSTEM_BSFS
 
 #include "include/bsfs_shared.h"
+#include <linux/atomic.h>
 #include <linux/buffer_head.h>
+#include <linux/kref.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
 
 #define BSFS_V1 0x0001
@@ -12,6 +15,28 @@
 #define BSFS_ERROR_FS 0x0002
 
 #define DEFAULT_RECOVERY_TTL (30ULL * 24ULL * 60ULL * 60ULL)
+
+#define BSFS_RECLAIM_ERROR_SLOTS 16
+
+struct bsfs_reclaim_error {
+  int   error;
+  __u64 count;
+};
+
+struct bsfs_reclaim_stats {
+  struct kref references;
+  atomic64_t attempts;
+  atomic64_t successes;
+  atomic64_t entries_purged;
+  atomic64_t blocks_reclaimed;
+  atomic64_t pre_commit_ns;
+  atomic64_t purge_ns;
+  atomic64_t post_commit_ns;
+  atomic64_t failures;
+  spinlock_t error_lock;
+  struct bsfs_reclaim_error errors[BSFS_RECLAIM_ERROR_SLOTS];
+  struct dentry *debugfs_dir;
+};
 
 struct bsfs_super_info {
   bsfs_super_block    *super;
@@ -46,6 +71,8 @@ struct bsfs_super_info {
   size_t       pending_free_count;
   size_t       pending_free_cap;
   struct mutex pending_free_lock;
+
+  struct bsfs_reclaim_stats *reclaim_stats;
 };
 
 static inline struct bsfs_super_info *bsfs_sb(struct super_block *sb) {

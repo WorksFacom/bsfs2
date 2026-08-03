@@ -5,8 +5,10 @@
 #include "../include/alloc.h"
 #include "../include/rec_entry.h"
 #include "../include/rec_gc.h"
+#include "../include/reclaim_stats.h"
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
+#include <linux/ktime.h>
 #include <linux/writeback.h>
 
 /*
@@ -223,21 +225,55 @@ bool bsfs_should_reclaim(struct super_block *sb) {
  * on their own.
  */
 int bsfs_reclaim_space(struct super_block *sb) {
-  int ret;
+  struct bsfs_reclaim_stats *stats = bsfs_sb(sb)->reclaim_stats;
+  __u64                      blocks_deferred = 0;
+  __u64                      started;
+  unsigned int               purged = 0;
+  int                        ret;
 
-  if (!down_read_trylock(&sb->s_umount))
+  if (stats)
+    atomic64_inc(&stats->attempts);
+
+  if (!down_read_trylock(&sb->s_umount)) {
+    bsfs_reclaim_stats_failure(sb, -EBUSY);
     return -EBUSY;
+  }
 
+  started = ktime_get_mono_fast_ns();
   ret = __commit_deferred_frees(sb, true);
+  if (stats)
+    atomic64_add(ktime_get_mono_fast_ns() - started, &stats->pre_commit_ns);
 
   // Still short after committing everything that was already free: what is
   // left is what the recovery snapshots are holding. Deleting a file parks its
   // blocks in one deliberately, so this is the only thing that ever gives that
   // space back - and only here, where the alternative is failing the write.
-  if (ret == 0 && low_on_space(sb) && bsfs_rec_tree_purge(sb, BSFS_PURGE_BATCH) > 0)
+  if (ret == 0 && low_on_space(sb)) {
+    started = ktime_get_mono_fast_ns();
+    purged = bsfs_rec_tree_purge(sb, BSFS_PURGE_BATCH, &blocks_deferred);
+    if (stats)
+      atomic64_add(ktime_get_mono_fast_ns() - started, &stats->purge_ns);
+  }
+
+  if (purged > 0) {
+    if (stats)
+      atomic64_add(purged, &stats->entries_purged);
+    started = ktime_get_mono_fast_ns();
     ret = __commit_deferred_frees(sb, true);
+    if (stats)
+      atomic64_add(ktime_get_mono_fast_ns() - started, &stats->post_commit_ns);
+    if (ret == 0) {
+      if (stats) {
+        atomic64_inc(&stats->successes);
+        atomic64_add(blocks_deferred, &stats->blocks_reclaimed);
+      }
+    }
+  }
 
   up_read(&sb->s_umount);
+
+  if (ret)
+    bsfs_reclaim_stats_failure(sb, ret);
 
   return ret;
 }

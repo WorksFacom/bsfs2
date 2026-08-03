@@ -939,7 +939,7 @@ void bsfs_evict_inode(struct inode *inode) {
         tree_h->prio       = BSFS_ALLOC_SHRINK;
         tree_h->root_block = bi->btree_root;
 
-        if (btree_deallocate_all(sb, tree_h, tree_h->root_block) != 0)
+        if (btree_deallocate_all(sb, tree_h, tree_h->root_block, NULL) != 0)
           pr_warn("failed to reclaim the tree of inode %lu, leaking its blocks\n", inode->i_ino);
 
         kfree(tree_h);

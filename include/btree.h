@@ -338,12 +338,12 @@ void btree_free_node(struct btree_node *node);
  * block referenced by bspan_t entries (only applies to BTREE_TYPE_BSPAN).
  * Finally, it deallocates the node block itself from the bitmap.
  *
- * @param disk Pointer to the filesystem image.
- * @param sb Pointer to the superblock.
+ * @param sb Mounted filesystem superblock.
  * @param handle Pointer to the B-tree handle.
  * @param node_block Block number of the current node.
+ * @param blocks_deferred Optional counter for blocks queued for release.
  * @return 0 on success, -1 on failure (e.g., deallocation errors).
  */
-int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block);
+int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u64 *blocks_deferred);
 
 #endif // BTREE_BSFS_H

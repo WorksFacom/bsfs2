@@ -7,6 +7,7 @@ bsfs2-src-objs := \
 	dirent.o \
 	file.o \
 	inode.o \
+	reclaim_stats.o \
 	rec_entry.o
 	# rec_gc.o
 
@@ -34,9 +35,16 @@ $(MKFS): tools/mkfs.c
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C bench clean
 	rm -f $(MKFS)
+
+bench:
+	$(MAKE) -C bench
+
+bench-check:
+	$(MAKE) -C bench check
 
 compile_commands.json:
 	make -C $(KDIR) M=$(PWD) compile_commands.json
 
-.PHONY: all clean compile_commands.json
+.PHONY: all clean compile_commands.json bench bench-check

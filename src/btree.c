@@ -1506,7 +1506,7 @@ static int __btree_borrow_from_next(struct super_block *sb, btree_handle_t *hand
   return 0;
 }
 
-int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
+int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u64 *blocks_deferred) {
   int                     ret;
   __u8                   *entries;
   __u32                  *children;
@@ -1525,7 +1525,7 @@ int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 n
   if (!node->node->is_leaf) {
     children = bchildren(node, handle);
     for (__u32 i = 0; i <= node->node->num_entries; i++) {
-      if (btree_deallocate_all(sb, handle, children[i]) != 0) {
+      if (btree_deallocate_all(sb, handle, children[i], blocks_deferred) != 0) {
         btree_free_node(node);
         return -1;
       }
@@ -1558,6 +1558,8 @@ int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 n
         btree_free_node(node);
         return -1;
       }
+      if (blocks_deferred)
+        *blocks_deferred += entry->length;
     }
   }
 
@@ -1565,6 +1567,8 @@ int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 n
     btree_free_node(node);
     return -1;
   }
+  if (blocks_deferred)
+    (*blocks_deferred)++;
 
   btree_free_node(node);
   return 0;

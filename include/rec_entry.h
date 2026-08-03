@@ -103,9 +103,10 @@ int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32
  * so this is the only thing that ever gives that space back. Meant to run under
  * space pressure only - see bsfs_reclaim_space(). Takes sbi->rec_lock itself.
  *
+ * @param blocks_deferred Optional count of snapshot blocks queued for release.
  * @return the number of entries purged.
  */
-unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries);
+unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries, __u64 *blocks_deferred);
 
 /**
  * @brief Look up a recovery entry in the Recovery B-tree by ID.

@@ -5,6 +5,7 @@
 #include "include/file.h"
 #include "include/inode.h"
 #include "include/rec_entry.h"
+#include "include/reclaim_stats.h"
 #include <linux/fs.h>
 #include <linux/fs_context.h>
 #include <linux/highuid.h>
@@ -19,6 +20,7 @@
 static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
+  bsfs_reclaim_stats_unmount(sb);
   // sbi->super points inside sbi->bh; there is nothing to free separately.
   // The commit does the writing, in the right order - dirtying the buffer and
   // syncing it here first would push the roots out ahead of their trees.
@@ -164,6 +166,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   if (!s->s_root)
     goto out_no_root;
 
+  bsfs_reclaim_stats_mount(s);
   return 0;
 
 out_no_root:
@@ -231,13 +234,20 @@ static int __init init_bsfs(void) {
   if (err)
     goto out1;
 
-  err = register_filesystem(&bsfs_fs_type);
+  err = bsfs_reclaim_debugfs_init();
 
   if (err)
     goto out;
 
+  err = register_filesystem(&bsfs_fs_type);
+
+  if (err)
+    goto out_debugfs;
+
   return 0;
 
+out_debugfs:
+  bsfs_reclaim_debugfs_exit();
 out:
   destroy_inodecache();
 out1:
@@ -246,6 +256,7 @@ out1:
 
 static void __exit exit_bsfs(void) {
   unregister_filesystem(&bsfs_fs_type);
+  bsfs_reclaim_debugfs_exit();
   destroy_inodecache();
 }
 
