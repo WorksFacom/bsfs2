@@ -25,6 +25,20 @@ struct bsfs_super_info {
   __u32        next_recovery_id;
   __u32        cached_recovery_root;
 
+  // Counted once at mount and maintained by the allocator, so statfs and the
+  // reserve check don't have to rescan the whole bitmap. Both under bitmap_lock.
+  //
+  // reserved_blocks is what keeps a full filesystem recoverable: under
+  // copy-on-write even *freeing* a span has to allocate first, so data
+  // allocations stop at the reserve while metadata ones may spend it.
+  __u32 free_blocks;
+  __u32 reserved_blocks;
+
+  // Set when ->write_inode could not persist an inode, which means some
+  // per-inode root is still only in memory. While it is set no deferred block
+  // may be released: we cannot tell which ones the failed root replaced.
+  bool writeback_failed;
+
   // Blocks that copy-on-write replaced. They are only handed back to the
   // allocator at a commit point, once the shadow tree and the roots pointing at
   // it are on disk - see bsfs_commit_deferred_frees().
@@ -63,6 +77,21 @@ static inline struct bsfs_inode *bsfs_i(struct inode *inode) {
 
 typedef enum { BTREE_TYPE_INODE, BTREE_TYPE_BSPAN, BTREE_TYPE_RECOVERY, BTREE_TYPE_DIR_ENTRY } btree_data_type_t;
 
+/*
+ * How far an allocation may eat into the metadata reserve.
+ *
+ * Copy-on-write inverts the usual order of things: releasing space requires
+ * allocating first, so a filesystem that lets ordinary growth consume the last
+ * block can never be emptied again. The reserve exists to keep the shrinking
+ * paths working, so they are the ones that outrank everybody.
+ *
+ *   GROW      creates, links, extending a file - stops at the whole reserve
+ *   WRITEBACK ->write_inode - may take half of it, since persisting a root is
+ *             what makes deferred blocks releasable
+ *   SHRINK    truncate, unlink, evict, recovery purge - may take all of it
+ */
+typedef enum { BSFS_ALLOC_GROW = 0, BSFS_ALLOC_WRITEBACK, BSFS_ALLOC_SHRINK } bsfs_alloc_prio_t;
+
 typedef int (*btree_compare_fn)(const void *a, const void *b);
 
 typedef __u32 (*btree_key_fn)(const void *entry);
@@ -74,6 +103,11 @@ typedef struct {
   btree_key_fn      get_key;
   __u32             root_block;
   __u8              min_degree;
+
+  // How deep into the reserve this handle's mutations may dig. See
+  // bsfs_alloc_prio_t: the whole point is that shrinking the tree outranks
+  // growing it, because under copy-on-write shrinking is also an allocation.
+  __u8 prio;
 } btree_handle_t;
 
 struct btree_node {

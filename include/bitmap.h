@@ -54,11 +54,16 @@ int init_bitmap_list(struct super_block *sb, __u32 start_block, __u32 num_blocks
  * This function reads the bitmap from the disk, starting at the given position
  * and using the block size to determine the number of bytes to read.
  *
+ * The chain is walked under the block count the superblock declares, and that
+ * count is checked against the size of the filesystem first: both come off the
+ * disk, and the bit accessors index the resulting array without bounds checks.
+ *
  * @param disk The file pointer to the filesystem image.
  * @param bitmap_start_block The block where the bitmap starts.
- * @return A pointer to the loaded bitmap in memory, or NULL if loading fails.
+ * @return 0 on success, or a negative error. On failure the caller must still
+ *         call release_bitmap() to drop whatever was loaded.
  */
-void load_bitmap(struct super_block *sb);
+int load_bitmap(struct super_block *sb);
 
 /**
  * @brief Releases everything load_bitmap() pinned (buffer heads and arrays).
@@ -113,7 +118,9 @@ static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as allocated.
  */
-static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
+// returns true when the bit actually changed, so the caller can keep the free
+// count straight - the allocator clears some bits twice on its rollback paths
+static inline bool bsfs_set_bit(struct super_block *sb, __u32 index) {
   // TODO: #define ext4_test_and_set_bit		__test_and_set_bit_le
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
@@ -123,9 +130,13 @@ static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
   __u8  mask       = (__u8)(1U << (index & 7));
   __u8 *bits       = sbi->bitmap[block];
 
+  if (bits[byte] & mask)
+    return false;
+
   bits[byte] |= mask;
 
   mark_buffer_dirty(sbi->bitmap_map[block]);
+  return true;
 }
 
 /**
@@ -137,7 +148,7 @@ static inline void bsfs_set_bit(struct super_block *sb, __u32 index) {
  * @param bitmap The pointer to the bitmap.
  * @param index The index of the block to mark as free.
  */
-static inline void bsfs_clear_bit(struct super_block *sb, __u32 index) {
+static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   __u32 byte_index = index >> 3;
@@ -146,8 +157,12 @@ static inline void bsfs_clear_bit(struct super_block *sb, __u32 index) {
   __u8  mask       = (__u8)(1U << (index & 7));
   __u8 *bits       = sbi->bitmap[block];
 
+  if (!(bits[byte] & mask))
+    return false;
+
   bits[byte] &= (__u8)~mask;
 
   mark_buffer_dirty(sbi->bitmap_map[block]);
+  return true;
 }
 #endif // BITMAP_OPERATIONS

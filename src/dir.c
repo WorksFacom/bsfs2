@@ -16,18 +16,12 @@
 #include "../include/rec_entry.h"
 
 ino_t bsfs_inode_by_name(struct dentry *dentry) {
-  ino_t ino = 0;
+  struct bsfs_dentry dirent;
 
-  struct btree_node *node;
+  if (lookup_dir_entry(dentry, &dirent) != 1)
+    return 0;
 
-  struct bsfs_dentry *dirent = lookup_dir_entry(dentry, &node);
-
-  if (dirent) {
-    ino = dirent->ino;
-    btree_free_node(node);
-  }
-
-  return ino;
+  return dirent.ino;
 }
 
 static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags) {
@@ -45,6 +39,17 @@ static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsi
   return d_splice_alias(inode, dentry);
 }
 
+/*
+ * Every directory operation below mutates at least two trees, and under
+ * copy-on-write that means allocating. Commit the deferred list here, at the
+ * VFS entry point where no tree lock is held, rather than discovering there is
+ * nothing left halfway through a removal.
+ */
+static void bsfs_reclaim_if_low(struct inode *dir) {
+  if (bsfs_should_reclaim(dir->i_sb))
+    (void)bsfs_reclaim_space(dir->i_sb);
+}
+
 static int link_nondir(struct dentry *dentry, struct inode *inode) {
   int err = bsfs_add_link(dentry, inode);
 
@@ -58,12 +63,8 @@ static int link_nondir(struct dentry *dentry, struct inode *inode) {
   return err;
 }
 
-static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
+static int __bsfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
   struct inode *inode;
-
-  // TODO: old -> new?
-  if (!old_valid_dev(rdev))
-    return -EINVAL;
 
   inode = bsfs_new_inode(dir, mode);
 
@@ -77,11 +78,35 @@ static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry 
   return link_nondir(dentry, inode);
 }
 
+/*
+ * Both halves of a create allocate: the inode tree splits, and so does the
+ * parent's dentry tree. Under copy-on-write an ENOSPC often just means the
+ * deferred-free list is holding every free block, and this is a VFS entry point
+ * with no tree lock held - the only kind that can run the barrier and retry.
+ * Failure paths leave the dentry negative, so a second attempt is a clean one.
+ */
+static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
+  int err;
+
+  // TODO: old -> new?
+  if (!old_valid_dev(rdev))
+    return -EINVAL;
+
+  bsfs_reclaim_if_low(dir);
+
+  err = __bsfs_mknod(dir, dentry, mode, rdev);
+
+  if (err == -ENOSPC && bsfs_reclaim_space(dir->i_sb) == 0)
+    err = __bsfs_mknod(dir, dentry, mode, rdev);
+
+  return err;
+}
+
 static int bsfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {
   return bsfs_mknod(&nop_mnt_idmap, dir, dentry, mode, 0);
 }
 
-static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
+static int __bsfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode) {
   int err;
 
   struct inode *inode;
@@ -89,7 +114,7 @@ static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, str
   inode = bsfs_new_inode(dir, S_IFDIR | mode);
 
   if (IS_ERR(inode))
-    return ERR_CAST(inode);
+    return PTR_ERR(inode);
 
   inode_inc_link_count(dir); // .. in the new dir references the parent
   bsfs_set_inode(inode, 0);
@@ -106,7 +131,7 @@ static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, str
 
   d_instantiate(dentry, inode);
 out:
-  return ERR_PTR(err);
+  return err;
 
 out_fail:
   inode_dec_link_count(inode);
@@ -114,6 +139,20 @@ out_fail:
   iput(inode);
   inode_dec_link_count(dir);
   goto out;
+}
+
+// same ENOSPC retry as bsfs_mknod, see the comment there
+static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
+  int err;
+
+  bsfs_reclaim_if_low(dir);
+
+  err = __bsfs_mkdir(dir, dentry, mode);
+
+  if (err == -ENOSPC && bsfs_reclaim_space(dir->i_sb) == 0)
+    err = __bsfs_mkdir(dir, dentry, mode);
+
+  return ERR_PTR(err);
 }
 
 // Recovery snapshot is not built here: a name can be removed while the file is still open (and being written to) or while other hard links
@@ -126,6 +165,8 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
 
   if (S_ISDIR(inode->i_mode))
     return -EISDIR;
+
+  bsfs_reclaim_if_low(dir);
 
   // hand the parent ino + name to bsfs_evict_inode for the recovery snapshot.
   bsfs_i(inode)->i_deleted_parent_ino = dir->i_ino;
@@ -194,6 +235,8 @@ static int bsfs_rmdir(struct inode *dir, struct dentry *dentry) {
   if (!bsfs_empty_dir(inode))
     return -ENOTEMPTY;
 
+  bsfs_reclaim_if_low(dir);
+
   bsfs_i(inode)->i_deleted_parent_ino = dir->i_ino;
   strscpy(bsfs_i(inode)->i_deleted_name, dentry->d_name.name, MAX_FILENAME);
 
@@ -220,6 +263,8 @@ static int bsfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct de
 
   if (flags & ~RENAME_NOREPLACE)
     return -EINVAL;
+
+  bsfs_reclaim_if_low(old_dir);
 
   if (new_inode) {
     // overwrite an existing target

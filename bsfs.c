@@ -20,9 +20,10 @@ static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   // sbi->super points inside sbi->bh; there is nothing to free separately.
+  // The commit does the writing, in the right order - dirtying the buffer and
+  // syncing it here first would push the roots out ahead of their trees.
   mark_buffer_dirty(sbi->bh);
-  sync_dirty_buffer(sbi->bh);
-  bsfs_commit_deferred_frees(sb);
+  (void)bsfs_commit_deferred_frees(sb);
   release_bitmap(sb);
   brelse(sbi->bh);
   kfree(sbi);
@@ -36,44 +37,39 @@ static void bsfs_put_super(struct super_block *sb) {
  * unmount time.
  */
 static int bsfs_sync_fs(struct super_block *sb, int wait) {
-  struct bsfs_super_info *sbi = bsfs_sb(sb);
-
   if (!wait)
     return 0;
 
-  sync_dirty_buffer(sbi->bh);
-
-  // A commit point: everything is on disk, so the blocks copy-on-write replaced
-  // can finally be reused.
-  bsfs_commit_deferred_frees(sb);
-
-  return 0;
+  // A commit point: the VFS has already written the inodes back, so the barrier
+  // inside the commit covers every root and the blocks copy-on-write replaced
+  // can finally be reused. It writes sbi->bh itself, after the trees.
+  return bsfs_commit_deferred_frees(sb);
 }
 
 /*
  * Without this, df(1) and statfs(2) report nothing for a bsfs mount, which also
- * makes it awkward to test running out of space. Free blocks are counted from
- * the in-memory bitmap; blocks still parked as deferred frees are counted as
- * used, since that is what they are until the next commit point.
+ * makes it awkward to test running out of space. Blocks still parked as
+ * deferred frees are counted as used, since that is what they are until the
+ * next commit point.
+ *
+ * f_bavail excludes the metadata reserve: that is space unprivileged writes
+ * genuinely cannot have.
  */
 static int bsfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
   struct super_block     *sb  = dentry->d_sb;
   struct bsfs_super_info *sbi = bsfs_sb(sb);
-  __u32                   free_blocks = 0;
-  __u32                   i;
+  __u32                   free_blocks, avail;
 
   mutex_lock(&sbi->bitmap_lock);
-  for (i = sbi->super->data_block_start; i < sbi->super->total_blocks; i++) {
-    if (bsfs_is_bit_free(sb, i))
-      free_blocks++;
-  }
+  free_blocks = sbi->free_blocks;
+  avail       = (free_blocks > sbi->reserved_blocks) ? free_blocks - sbi->reserved_blocks : 0;
   mutex_unlock(&sbi->bitmap_lock);
 
   buf->f_type    = MAGIC_NUMBER;
   buf->f_bsize   = sb->s_blocksize;
-  buf->f_blocks  = sbi->super->total_blocks;
+  buf->f_blocks  = sbi->super->total_blocks - sbi->super->data_block_start;
   buf->f_bfree   = free_blocks;
-  buf->f_bavail  = free_blocks;
+  buf->f_bavail  = avail;
   buf->f_namelen = MAX_FILENAME - 1;
 
   return 0;
@@ -139,7 +135,12 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   }
 
   // Allocate bitmap to keep the superblock small
-  load_bitmap(s);
+  ret = load_bitmap(s);
+
+  if (ret)
+    goto out_freemap;
+
+  bsfs_init_block_counts(s);
 
   bsfs_rec_tree_mount_init(s);
 
@@ -168,35 +169,16 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 out_no_root:
   if (!silent)
     printk("BSFS: get root inode failed\n");
-  goto out_freemap;
 
-  // TODO: handle this goto
-  // out_no_bitmap:
-  printk("BSFS: bad superblock or unable to read bitmaps\n");
-
-// TODO
 out_freemap:
-  //   for (i = 0; i < sbi->s_imap_blocks; i++)
-  //     brelse(sbi->s_imap[i]);
-  //   for (i = 0; i < sbi->s_zmap_blocks; i++)
-  //     brelse(sbi->s_zmap[i]);
-  //   kfree(sbi->s_imap);
-  //   goto out_release;
-
-  // TODO: handle this goto
-  // out_no_map:
-  ret = -ENOMEM;
-  if (!silent)
-    printk("BSFS: can't allocate map\n");
-  goto out_release;
-
-  // TODO: handle this goto
-  // out_illegal_sb:
-  if (!silent)
-    printk("BSFS: bad superblock\n");
+  // load_bitmap() pins one buffer head per bitmap block and can fail halfway
+  // through; release_bitmap() copes with a partial load. Without this every
+  // failed mount leaked all of them.
+  release_bitmap(s);
   goto out_release;
 
 out_no_fs:
+  ret = -EINVAL;
   if (!silent)
     printk("VFS: Can't find a BSFS filesystem on device %s.\n", s->s_id);
 

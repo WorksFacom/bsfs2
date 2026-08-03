@@ -24,6 +24,15 @@
 #include "bitmap.h"
 #include "bspan_queue.h"
 
+// Upper bound on the metadata reserve, in blocks. Sized for a handful of full
+// root-to-leaf copy-on-write paths, which is all a truncate or an unlink needs
+// to make progress on a filesystem that is otherwise full.
+#define BSFS_META_RESERVE 64
+
+// How many recovery snapshots one reclaim pass may drop. Bounded so a single
+// write does not pay for purging the whole trash.
+#define BSFS_PURGE_BATCH 32
+
 /**
  * @brief Allocates a sequence of free blocks and fills a bspan queue.
  *
@@ -65,6 +74,21 @@ int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blo
  */
 
 __u32 allocate_single_block(struct super_block *sb);
+
+/**
+ * @brief Allocates a block for tree metadata, spending the reserve if needed.
+ *
+ * Copy-on-write has to allocate before it can release, so the paths that shrink
+ * a tree must not be the ones that hit ENOSPC first. Every clone and node split
+ * allocates through here; file data goes through allocate_single_block().
+ */
+__u32 allocate_meta_block(struct super_block *sb, __u8 prio);
+
+/**
+ * @brief Counts free blocks and sizes the metadata reserve. Call once at mount,
+ *        after the bitmap is loaded.
+ */
+void bsfs_init_block_counts(struct super_block *sb);
 
 /**
  * @brief Deallocates a single block in the filesystem.
@@ -111,16 +135,42 @@ int deallocate_bspan(struct super_block *sb, const bspan_t *bspan);
  * leaves the on-disk tree pointing at it. Deferred blocks become free again at
  * the next commit point.
  *
- * @return 0 if the block was queued, -1 if it had to be freed immediately.
+ * @return 0 if the block was queued, -ENOMEM if it had to be leaked.
  */
 int bsfs_defer_free_block(struct super_block *sb, __u32 block);
 
 /**
+ * @brief Queues every block of a span, as bsfs_defer_free_block() does.
+ *
+ * Data blocks need the same barrier as metadata: until the inode carrying the
+ * new extent root is on disk, the old tree still reaches them.
+ */
+int bsfs_defer_free_bspan(struct super_block *sb, const bspan_t *bspan);
+
+/**
  * @brief Flushes metadata and releases every deferred block.
  *
- * Called from ->sync_fs, ->put_super and from the allocator when it runs out of
- * space.
+ * Runs the barrier even when nothing is queued, so callers can use it to
+ * publish the roots. Called from ->sync_fs, ->put_super and
+ * bsfs_reclaim_space(). Returns 0, or a negative error if the barrier failed -
+ * in which case the blocks stay queued.
  */
-void bsfs_commit_deferred_frees(struct super_block *sb);
+int bsfs_commit_deferred_frees(struct super_block *sb);
+
+/**
+ * @brief Writes back dirty inodes, then commits the deferred frees.
+ *
+ * The one way to get blocks back after an ENOSPC. Must be called with no
+ * filesystem locks held, from a VFS entry point that can retry.
+ */
+int bsfs_reclaim_space(struct super_block *sb);
+
+/**
+ * @brief True when a mutation should commit the deferred list before starting.
+ *
+ * Two counter reads. Copy-on-write allocates before it releases, so an entry
+ * point that waits for ENOSPC to happen has already lost.
+ */
+bool bsfs_should_reclaim(struct super_block *sb);
 
 #endif

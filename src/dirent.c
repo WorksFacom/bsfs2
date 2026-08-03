@@ -9,63 +9,40 @@
 #include "../include/dirent.h"
 #include "../include/btree.h"
 
-// TODO: review - is this working?
-int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const char *name, struct bsfs_dentry **output,
-                         struct btree_node **out_node) {
-  int ret, i;
-
-  struct btree_node  *node;
-  struct bsfs_dentry *dirent;
-
-  if (node_block == 0)
-    return 0;
-
-  ret = btree_read_node(sb, handle, node_block, &node);
-
-  if (ret != 0)
-    return 0;
-
-  // Check current node entries first
-  for (i = 0; i < node->node->num_entries; i++) {
-    dirent = (struct bsfs_dentry *)(bentries(node) + i * handle->entry_size);
-
-    if (strncmp(dirent->filename, name, MAX_FILENAME) == 0) {
-      *output   = dirent;
-      *out_node = node;
-      return 1;
-    }
-  }
-
-  // Recurse into children if not a leaf
-  int found = 0;
-  if (!node->node->is_leaf) {
-    __u32 *children = bchildren(node, handle);
-    for (i = 0; i <= node->node->num_entries && !found; i++) {
-      found = __scan_dir_tree_find(sb, handle, children[i], name, output, out_node);
-    }
-  }
-
-  btree_free_node(node);
-  return found;
-}
-
-struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **out_node) {
+/*
+ * The tree is ordered by (hash(filename), filename) - see compare_dir_entry() -
+ * so a lookup is a descent, not a scan. This used to walk every node of the
+ * directory comparing names, which made each path resolution linear in the size
+ * of the directory and also matched separator copies in internal nodes.
+ */
+int lookup_dir_entry(struct dentry *dentry, struct bsfs_dentry *out) {
   int ret;
 
-  const char         *name   = dentry->d_name.name;
-  struct inode       *dir    = d_inode(dentry->d_parent);
-  struct super_block *sb     = dir->i_sb;
-  struct bsfs_dentry *dirent = NULL;
+  struct inode       *dir = d_inode(dentry->d_parent);
+  struct super_block *sb  = dir->i_sb;
 
-  btree_handle_t *handle = btree_create_dir_entry_handle();
-  handle->root_block     = bsfs_i(dir)->btree_root;
+  struct bsfs_dentry needle = {0};
+  btree_handle_t    *handle;
 
-  // TODO: ret useless?
-  ret = __scan_dir_tree_find(sb, handle, handle->root_block, name, &dirent, out_node);
+  if (dentry->d_name.len >= MAX_FILENAME)
+    return -ENAMETOOLONG;
+
+  handle = btree_create_dir_entry_handle();
+
+  if (!handle)
+    return -ENOMEM;
+
+  handle->root_block = bsfs_i(dir)->btree_root;
+
+  memcpy(needle.filename, dentry->d_name.name, dentry->d_name.len);
+  needle.filename[dentry->d_name.len] = '\0';
+  needle.name_hash                    = hash_filename(needle.filename);
+
+  ret = btree_search_entry(sb, handle, handle->root_block, &needle, out);
 
   kfree(handle);
 
-  return dirent;
+  return ret;
 }
 
 // static int btree_find_min_entry(FILE *disk, btree_handle_t *handle, uint32_t node_block, void *out_entry) {
@@ -228,28 +205,24 @@ int bsfs_remove_link(struct dentry *dentry) {
   struct inode       *dir    = d_inode(dentry->d_parent);
   struct super_block *sb     = dir->i_sb;
   btree_handle_t     *handle = NULL;
-  struct btree_node  *node   = NULL;
-  struct bsfs_dentry *dirent = NULL;
   struct bsfs_dentry  needle;
   int                 err    = 0;
 
-  dirent = lookup_dir_entry(dentry, &node);
+  // The needle has to be a private copy: removal mutates the very buffers a
+  // pointer into the tree would aim at (shift_left/merge/borrow, plus the
+  // copy-on-write clones), so its contents would change mid-descent and the
+  // tree would end up removing the neighbouring entry.
+  err = lookup_dir_entry(dentry, &needle);
 
-  if (!dirent) {
+  if (err < 0)
+    goto out;
+
+  if (err != 1) {
     err = -ENOENT;
     goto out;
   }
 
-  // lookup_dir_entry() returns a pointer INTO the node's buffer. Removal
-  // mutates that very buffer (shift_left/merge/borrow), so passing the pointer
-  // straight through as the needle makes its contents change mid-descent - and
-  // the tree ends up removing the neighbouring entry. Copy it first, then drop
-  // the node.
-  memcpy(&needle, dirent, sizeof(needle));
-  btree_free_node(node);
-  node   = NULL;
-  dirent = NULL;
-
+  err    = 0;
   handle = btree_create_dir_entry_handle();
 
   if (!handle) {
@@ -257,6 +230,9 @@ int bsfs_remove_link(struct dentry *dentry) {
     goto out;
   }
 
+  // removing a name is a shrink, so it may spend the whole reserve - this is
+  // one of the paths that has to keep working on a filesystem that is full
+  handle->prio       = BSFS_ALLOC_SHRINK;
   handle->root_block = bsfs_i(dir)->btree_root;
 
   if (!btree_remove_entry(sb, handle, &needle)) {
@@ -271,8 +247,6 @@ int bsfs_remove_link(struct dentry *dentry) {
   mark_inode_dirty(dir);
 
 out:
-  if (node)
-    btree_free_node(node);
   kfree(handle);
   return err;
 }

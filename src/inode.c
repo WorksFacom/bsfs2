@@ -44,13 +44,17 @@ static int inode_tree_find_max(struct super_block *sb, btree_handle_t *handle, _
     if (node->node->is_leaf)
       break;
 
-    __u32 child_idx = node->node->num_entries;
-    if (child_idx >= 2 * handle->min_degree)
-      child_idx = node->node->num_entries - 1;
+    __u32 child_blk = bchildren(node, handle)[node->node->num_entries];
 
-    __u32 child_blk = bchildren(node, handle)[child_idx];
-    if (child_blk == 0 || child_blk == INVALID_BLOCK)
-      break;
+    // B+: only the rightmost leaf holds the largest record. An internal node's
+    // last entry is a separator, i.e. a copy of some leaf's *first* entry, so
+    // falling back to it here would hand out an inode number that is already in
+    // use. A broken child pointer means we cannot answer.
+    if (child_blk == 0 || child_blk == INVALID_BLOCK) {
+      pr_err("inode tree: broken rightmost child at block %u\n", node_block);
+      btree_free_node(node);
+      return -EUCLEAN;
+    }
 
     btree_free_node(node);
     node_block = child_blk;
@@ -390,6 +394,9 @@ void bsfs_truncate(struct inode *inode) {
   if (!bspan_h)
     return;
 
+  // this is the path that gives space back, so it may spend the whole reserve
+  bspan_h->prio = BSFS_ALLOC_SHRINK;
+
   // taken after block_truncate_page: it calls bsfs_get_block, which takes this mutex itself
   mutex_lock(&bsfs_inode->truncate_mutex);
 
@@ -411,18 +418,19 @@ void bsfs_truncate(struct inode *inode) {
       tail.disk_blk    = span.disk_blk + keep_len;
       tail.length      = span.length - keep_len;
 
-      // shrink the span in the tree first
-      // only deallocate the tail blocks once the tree no longer references them
+      // shrink the span in the tree first, then queue the tail: the new extent
+      // root is still only in the dirty inode, so until it is written back the
+      // on-disk tree can still reach these blocks
       span.length = keep_len;
       if (keep_len > 0) {
         if (btree_update(sb, bspan_h, bspan_h->root_block, &span) == 1)
-          deallocate_bspan(sb, &tail);
+          bsfs_defer_free_bspan(sb, &tail);
         else
           pr_warn("truncate: failed to shrink span at file_blk %u, leaking %u blocks\n", span.file_blk, tail.length);
       } else {
         // remove empty span entry
         if (btree_remove(sb, bspan_h, span.file_blk))
-          deallocate_bspan(sb, &tail);
+          bsfs_defer_free_bspan(sb, &tail);
         else
           pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", span.file_blk, tail.length);
       }
@@ -499,9 +507,10 @@ void bsfs_truncate(struct inode *inode) {
       if (btree_search(sb, bspan_h, bspan_h->root_block, keys[i], (void **)&found, &node) == 1) {
         bs = *found;
         btree_free_node(node);
-        // drop the tree reference first, then free the blocks
+        // drop the tree reference first, then queue the blocks behind the same
+        // barrier the metadata uses
         if (btree_remove(sb, bspan_h, keys[i])) {
-          deallocate_bspan(sb, &bs);
+          bsfs_defer_free_bspan(sb, &bs);
           removed++;
         } else {
           pr_warn("truncate: failed to remove span at file_blk %u, leaking %u blocks\n", bs.file_blk, bs.length);
@@ -592,6 +601,11 @@ static int bsfs_update_inode(struct inode *inode) {
 
   if (!inode_h)
     return -ENOMEM;
+
+  // Persisting an inode is what lets the deferred blocks be released, so it
+  // outranks ordinary growth - but not the shrinking paths, which are the ones
+  // that must still work on a filesystem that is genuinely full.
+  inode_h->prio = BSFS_ALLOC_WRITEBACK;
 
   mutex_lock(&sbi->inode_tree_lock);
 
@@ -756,8 +770,16 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
 
   ret = bsfs_update_inode(inode);
 
-  if (ret != 0)
+  if (ret != 0) {
+    // This inode's tree root is still only in memory, so the on-disk tree is
+    // the old one and the blocks it replaced must not be recycled. The commit
+    // path checks this before releasing anything.
+    mutex_lock(&sbi->pending_free_lock);
+    sbi->writeback_failed = true;
+    mutex_unlock(&sbi->pending_free_lock);
+
     return ret;
+  }
 
   // The entry now lives in whichever node the copy-on-write update produced, so
   // there is no single buffer to sync here; what has to be durable is the root
@@ -839,6 +861,10 @@ void bsfs_free_cache_inode(struct inode *inode) {
 
 void bsfs_evict_inode(struct inode *inode) {
   bool want_delete = !inode->i_nlink && !is_bad_inode(inode);
+  bool snapshot    = false;
+  // btree_root means a dentry tree on a directory and an extent tree on a file;
+  // read it before clear_inode() so the reclaim below picks the right handle
+  bool is_dir      = S_ISDIR(inode->i_mode);
 
   struct super_block     *sb  = inode->i_sb;
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -882,6 +908,8 @@ void bsfs_evict_inode(struct inode *inode) {
         // bsfs_rec_tree_add persists recovery_root to the super block itself
         if (bsfs_rec_tree_add(sb, rec_tree, &rec))
           pr_warn("failed to record recovery snapshot for inode %lu\n", inode->i_ino);
+        else
+          snapshot = true; // the snapshot owns the data blocks now
 
         mutex_unlock(&sbi->rec_lock);
 
@@ -896,11 +924,38 @@ void bsfs_evict_inode(struct inode *inode) {
   clear_inode(inode);
 
   if (want_delete) {
-    btree_handle_t *inode_h = btree_create_inode_handle();
+    btree_handle_t *inode_h;
+
+    // Nobody took a recovery snapshot, so this inode's own tree - and, for a
+    // file, every block it maps - is now unreachable. Without this they stayed
+    // allocated until the next mkfs: the only code that ever freed them lives
+    // in the recovery GC, which is still out of the build.
+    if (!snapshot && bi->btree_root) {
+      // the handle decides how the entries are read, so a dentry tree must not
+      // be walked as a tree of spans
+      btree_handle_t *tree_h = is_dir ? btree_create_dir_entry_handle() : btree_create_bspan_handle();
+
+      if (tree_h) {
+        tree_h->prio       = BSFS_ALLOC_SHRINK;
+        tree_h->root_block = bi->btree_root;
+
+        if (btree_deallocate_all(sb, tree_h, tree_h->root_block) != 0)
+          pr_warn("failed to reclaim the tree of inode %lu, leaking its blocks\n", inode->i_ino);
+
+        kfree(tree_h);
+      } else {
+        pr_warn("no memory to reclaim the tree of inode %lu\n", inode->i_ino);
+      }
+
+      bi->btree_root = 0;
+    }
+
+    inode_h = btree_create_inode_handle();
 
     if (inode_h) {
       mutex_lock(&sbi->inode_tree_lock);
 
+      inode_h->prio       = BSFS_ALLOC_SHRINK;
       inode_h->root_block = sbi->super->inode_root;
       btree_remove(sb, inode_h, inode->i_ino);
       if (sbi->super->inode_root != inode_h->root_block) {
@@ -989,8 +1044,19 @@ int bsfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh,
     goto out;
   }
 
+  // This block was very likely a btree node a moment ago - copy-on-write and
+  // the data allocator trade the same blocks back and forth. Its buffer is
+  // still sitting dirty in the bdev mapping, and file data goes through the
+  // inode's mapping instead, so without this the two aliases race to the same
+  // disk block and whichever writeback runs last wins.
+  clean_bdev_aliases(sb->s_bdev, phys_block, 1);
+
   //  try to extend predecessor span if physically contiguous
-  if (found == 1 && iblock == span.file_blk + span.length && span.disk_blk + span.length == phys_block) {
+  //  bspan_t.length is a __u16, so a span has to stop growing well before it
+  //  wraps - at 0 the mapping check below silently stops matching and we would
+  //  insert a second span under the same file_blk
+  if (found == 1 && span.length < BSFS_MAX_SPAN_BLOCKS && iblock == span.file_blk + span.length &&
+      span.disk_blk + span.length == phys_block) {
     span.length++;
     if (btree_update(sb, bspan_h, bspan_h->root_block, &span) != 1) {
       deallocate_single_block(sb, phys_block);
@@ -1051,7 +1117,18 @@ static int bsfs_write_begin(const struct kiocb *iocb, struct address_space *mapp
                             void **fsdata) {
   int ret;
 
+  // cheap check, and it keeps the common case from ever reaching the retry
+  if (bsfs_should_reclaim(mapping->host->i_sb))
+    (void)bsfs_reclaim_space(mapping->host->i_sb);
+
   ret = block_write_begin(mapping, pos, len, foliop, bsfs_get_block);
+
+  // Copy-on-write parks the blocks it replaces until a commit point, so ENOSPC
+  // here may only mean the deferred list is holding them. block_write_begin()
+  // already dropped the folio on error and we hold no tree lock, so this is the
+  // one spot that can run the barrier and try again.
+  if (ret == -ENOSPC && bsfs_reclaim_space(mapping->host->i_sb) == 0)
+    ret = block_write_begin(mapping, pos, len, foliop, bsfs_get_block);
 
   if (unlikely(ret))
     bsfs_write_failed(mapping, pos + len);

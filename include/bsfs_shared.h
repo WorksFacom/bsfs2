@@ -45,6 +45,9 @@ typedef struct bspan_t {
   __u16 padding;
 } bspan_t;
 
+// length is a __u16; stop growing a span short of the wrap
+#define BSFS_MAX_SPAN_BLOCKS 0xF000
+
 typedef struct disk_mapped_inode_t {
   __u32 ino;
   __u32 size;

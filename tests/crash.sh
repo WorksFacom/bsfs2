@@ -6,11 +6,25 @@
 # checkpoint survived. This is what exercises the copy-on-write write barrier:
 # blocks replaced after the checkpoint must not have been reused before their
 # new root was durable.
+#
+#   ./tests/crash.sh              # tests/crash_phase{1,2}_guest.sh
+#   ./tests/crash.sh enospc_crash # tests/enospc_crash_phase{1,2}_guest.sh
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
 : "${KDIR:?KDIR not set - copy .env.example to .env}"
+
+PREFIX="${1:-crash}"
+PHASE1="tests/${PREFIX}_phase1_guest.sh"
+PHASE2="tests/${PREFIX}_phase2_guest.sh"
+
+for f in "$PHASE1" "$PHASE2"; do
+  [ -f "$SCRIPT_DIR/$f" ] || {
+    echo "not found: $SCRIPT_DIR/$f"
+    exit 2
+  }
+done
 
 IMG=/tmp/bsfs_crash.img
 LOG=/tmp/bsfs_crash.log
@@ -32,14 +46,14 @@ run_phase() {
 dd if=/dev/zero of="$IMG" bs=1M count=32 status=none
 : >"$LOG"
 
-run_phase tests/crash_phase1_guest.sh
-if ! tr -d '\r' <"$LOG" | grep -q '^PHASE1: derrubando'; then
+run_phase "$PHASE1"
+if ! tr -d '\r' <"$LOG" | grep -q '^PHASE1: crashing'; then
   echo "INFRA FAIL: phase 1 did not reach the crash. Tail of $LOG:"
   tail -20 "$LOG"
   exit 2
 fi
 
-run_phase tests/crash_phase2_guest.sh
+run_phase "$PHASE2"
 
 if tr -d '\r' <"$LOG" | grep -q '^SMOKE_OK$'; then
   echo "PASS (log: $LOG)"

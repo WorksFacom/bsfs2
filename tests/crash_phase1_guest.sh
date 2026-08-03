@@ -40,7 +40,7 @@ while [ "$i" -le 60 ]; do
   i=$((i + 1))
 done
 sync
-echo "PHASE1: checkpoint com $(ls "$MNT" | wc -l) arquivos"
+echo "PHASE1: checkpoint with $(ls "$MNT" | wc -l) files"
 
 # Churn with no sync: forces copy-on-write to replace nodes of the tree that is
 # already on disk.
@@ -55,7 +55,7 @@ while [ "$i" -le 60 ]; do
   i=$((i + 1))
 done
 
-echo "PHASE1: derrubando a VM sem umount"
+echo "PHASE1: crashing the VM without unmounting"
 echo b >/proc/sysrq-trigger
 sleep 5
 echo "PHASE1_FAIL: sysrq nao derrubou a VM"

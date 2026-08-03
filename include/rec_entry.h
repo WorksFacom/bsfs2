@@ -96,6 +96,18 @@ int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entr
 int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32 recovery_id);
 
 /**
+ * @brief Drops recovery snapshots, expired or oldest first, and frees the
+ *        blocks they were holding.
+ *
+ * Deleting a file parks its extent tree in a snapshot rather than releasing it,
+ * so this is the only thing that ever gives that space back. Meant to run under
+ * space pressure only - see bsfs_reclaim_space(). Takes sbi->rec_lock itself.
+ *
+ * @return the number of entries purged.
+ */
+unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries);
+
+/**
  * @brief Look up a recovery entry in the Recovery B-tree by ID.
  *
  * This function searches the Recovery B-tree for a @ref rec_entry_t whose

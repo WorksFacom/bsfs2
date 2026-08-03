@@ -1,4 +1,5 @@
 #include "../include/rec_entry.h"
+#include "../include/btree.h"
 #include "../include/inode.h"
 
 // TODO: rec tree CLI
@@ -89,6 +90,137 @@ int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entr
   }
 
   return 0;
+}
+
+/*
+ * Picks the entry to drop first: anything already past its retention, and
+ * failing that simply the oldest.
+ *
+ * B+: only leaves hold records, so internal entries are skipped - they are
+ * separator copies and would offer the same victim twice.
+ */
+static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 node_block, __u64 now, rec_entry_t *best, int *have) {
+  struct btree_node *node;
+
+  if (node_block == 0 || node_block == INVALID_BLOCK)
+    return;
+
+  if (btree_read_node(sb, h, node_block, &node) != 0)
+    return;
+
+  if (!node->node->is_leaf) {
+    __u32 *children = bchildren(node, h);
+
+    for (__u32 i = 0; i <= node->node->num_entries; i++)
+      rec_find_victim(sb, h, children[i], now, best, have);
+  } else {
+    for (__u32 i = 0; i < node->node->num_entries; i++) {
+      rec_entry_t *e = (rec_entry_t *)(bentries(node) + i * h->entry_size);
+
+      int e_expired = (e->retention_until != 0 && e->retention_until <= now);
+      int b_expired;
+
+      if (!*have) {
+        *best = *e;
+        *have = 1;
+        continue;
+      }
+
+      b_expired = (best->retention_until != 0 && best->retention_until <= now);
+
+      if ((e_expired && !b_expired) || (e_expired == b_expired && e->deleted_at < best->deleted_at))
+        *best = *e;
+    }
+  }
+
+  btree_free_node(node);
+}
+
+/*
+ * Drops recovery snapshots, oldest (or expired) first, and frees the blocks
+ * they were holding.
+ *
+ * Deleting a file does not free anything on its own: bsfs_evict_inode() hands
+ * the file's extent tree to a recovery snapshot instead, deliberately, so it
+ * can be restored later. Nothing ever took those blocks back - the code that
+ * was supposed to lives in src/rec_gc.c, which is still userspace and out of
+ * the build - so in practice space was gone until the next mkfs.
+ *
+ * This is the reclaim end of that deal, and it only runs under space pressure:
+ * a snapshot is a nice-to-have, a filesystem that can still be written to is
+ * not. Returns the number of entries purged.
+ */
+unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  btree_handle_t         *rec_tree;
+  rec_entry_t            *victim;
+  unsigned int            purged = 0;
+
+  if (sbi->super->recovery_root == 0)
+    return 0;
+
+  rec_tree = btree_create_rec_entry_handle();
+  victim   = kmalloc(sizeof(*victim), GFP_NOFS);
+
+  if (!rec_tree || !victim) {
+    kfree(rec_tree);
+    kfree(victim);
+    return 0;
+  }
+
+  // purging is the last source of free space there is, so it outranks
+  // everything else when it comes to the reserve
+  rec_tree->prio = BSFS_ALLOC_SHRINK;
+
+  mutex_lock(&sbi->rec_lock);
+
+  while (purged < max_entries) {
+    int   have = 0;
+    __u32 data_root;
+
+    rec_tree->root_block = sbi->super->recovery_root;
+
+    if (rec_tree->root_block == 0)
+      break;
+
+    rec_find_victim(sb, rec_tree, rec_tree->root_block, ktime_get_real_seconds(), victim, &have);
+
+    if (!have)
+      break;
+
+    data_root = victim->btree_root;
+
+    // drop the snapshot first: it is the only thing still referring to those
+    // blocks, and releasing them while it can be found would be the same
+    // dangling reference copy-on-write exists to avoid
+    if (!bsfs_rec_tree_remove(sb, rec_tree, victim->recovery_id)) {
+      pr_warn("recovery purge could not remove id %u, giving up\n", victim->recovery_id);
+      break;
+    }
+
+    if (data_root) {
+      btree_handle_t *bspan_h = btree_create_bspan_handle();
+
+      if (bspan_h) {
+        bspan_h->prio       = BSFS_ALLOC_SHRINK;
+        bspan_h->root_block = data_root;
+
+        if (btree_deallocate_all(sb, bspan_h, data_root) != 0)
+          pr_warn("recovery purge leaked the blocks of id %u\n", victim->recovery_id);
+
+        kfree(bspan_h);
+      }
+    }
+
+    purged++;
+  }
+
+  mutex_unlock(&sbi->rec_lock);
+
+  kfree(rec_tree);
+  kfree(victim);
+
+  return purged;
 }
 
 int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32 recovery_id) {

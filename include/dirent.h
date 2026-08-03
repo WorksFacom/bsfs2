@@ -73,14 +73,16 @@ int bsfs_remove_link(struct dentry *dentry);
 /**
  * @brief Looks up a directory entry by name in a given directory.
  *
- * @param disk Pointer to the disk image.
- * @param sb Pointer to the superblock.
- * @param dir Pointer to the open directory (dir_t).
- * @param name Name of the entry to look for.
- * @param result Output parameter: filled with the entry if found.
- * @return 0 if found, -1 if not found.
+ * Descends the entry B-tree by (hash, name) rather than scanning it, so this is
+ * logarithmic in the size of the directory. The entry is copied out: returning a
+ * pointer into a node's buffer is a trap under copy-on-write, where the next
+ * mutation clones that node and releases the block it came from.
+ *
+ * @param dentry The dentry whose name is looked up in its parent.
+ * @param out Filled with the matching entry when the return value is 1.
+ * @return 1 if found, 0 if not, a negative error on I/O failure.
  */
-struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **out_node);
+int lookup_dir_entry(struct dentry *dentry, struct bsfs_dentry *out);
 
 /**
  * @brief Reads the next directory entry from a directory.
@@ -97,22 +99,5 @@ struct bsfs_dentry *lookup_dir_entry(struct dentry *dentry, struct btree_node **
  * reached.
  */
 // int read_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *dir, btree_handle_t *handle, dir_entry_t *out);
-
-/**
- * @brief Recursively search a directory B-tree for an exact filename match.
- *
- * Traverses the directory entries B-tree in depth-first order starting at
- * @p node_block, comparing each entry's name against @p name. Copies the
- * first matching entry into @p out and returns 1 when found.
- *
- * @param disk Pointer to the open disk file.
- * @param handle B-tree handle for directory entries.
- * @param node_block Root block of the subtree to scan.
- * @param name Null-terminated filename to match exactly.
- * @param out Output parameter to receive the matching entry on success.
- * @return 1 if found; 0 otherwise.
- */
-int __scan_dir_tree_find(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const char *name, struct bsfs_dentry **output,
-                         struct btree_node **out_node);
 
 #endif // !DIRECTORY_OPERATIONS
