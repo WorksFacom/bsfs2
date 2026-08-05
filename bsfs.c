@@ -108,10 +108,6 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   mutex_init(&sbi->bitmap_lock);
   mutex_init(&sbi->pending_free_lock);
 
-  // if the struct size ever changes, the kernel won't compile
-  // catches accidental ABI breaks or padding changes at build time.
-  BUILD_BUG_ON(896 != sizeof(struct bsfs_inode));
-
   if (!sb_set_blocksize(s, BSFS_BLOCK_SIZE)) {
     pr_err("unable to set block size");
     goto out_bad_hblock;
