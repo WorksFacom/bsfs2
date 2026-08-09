@@ -5,10 +5,11 @@ import argparse
 from collections import defaultdict
 import csv
 import json
-import os
 from pathlib import Path
 import statistics
 from typing import Any, Iterable
+
+from bench.orchestration.report import write_report
 
 
 GROUP_FIELDS = ("filesystem", "scenario", "phase", "worker_count", "worker_id")
@@ -151,107 +152,9 @@ def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def safe_name(value: str) -> str:
-    return "".join(
-        char if char.isalnum() or char in "-_" else "_" for char in value
-    )
-
-
-def charts(
-    summary: list[dict[str, Any]],
-    output: Path,
-    failures: list[dict[str, Any]] | None = None,
-) -> None:
-    os.environ.setdefault("MPLCONFIGDIR", str(output / ".matplotlib"))
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError as error:
-        raise RuntimeError(
-            "chart generation requires matplotlib and numpy"
-        ) from error
-
-    chart_specs = (
-        ("durable_throughput_mib_s", "MiB/s including flush", "Higher is better"),
-        ("durable_iops", "operations/s including flush", "Higher is better"),
-        ("durable_total_ns", "nanoseconds", "Lower is better"),
-        ("latency_p99_ns", "nanoseconds", "Lower is better"),
-        ("write_amplification", "device bytes / logical bytes", "Lower is better"),
-    )
-    # a filesystem absent from a chart because it failed must not read as
-    # "not run", so name the failures under the axis
-    failed_by_phase: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for failure in failures or []:
-        key = (str(failure.get("scenario")), str(failure.get("phase")))
-        failed_by_phase[key].add(str(failure.get("filesystem")))
-
-    phase_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in summary:
-        phase_groups[(str(row["scenario"]), str(row["phase"]))].append(row)
-
-    for (scenario, phase), rows in sorted(phase_groups.items()):
-        for metric, label, direction in chart_specs:
-            median_field = f"{metric}_median"
-            if not any(row.get(median_field) is not None for row in rows):
-                continue
-            chart_rows = [
-                row for row in rows if row.get(median_field) is not None
-            ]
-            chart_rows.sort(
-                key=lambda row: (
-                    str(row["filesystem"]),
-                    int(row["worker_count"]),
-                    -1 if row.get("worker_id") is None else int(row["worker_id"]),
-                )
-            )
-            labels = [
-                (
-                    f"{row['filesystem']} (w={row['worker_count']}, "
-                    f"id={row['worker_id']})"
-                    if row.get("worker_id") is not None
-                    else f"{row['filesystem']} (w={row['worker_count']}, aggregate)"
-                )
-                for row in chart_rows
-            ]
-            medians = [float(row[median_field]) for row in chart_rows]
-            minimums = [
-                float(row[f"{metric}_minimum"]) for row in chart_rows
-            ]
-            maximums = [
-                float(row[f"{metric}_maximum"]) for row in chart_rows
-            ]
-            lower = [median - minimum for median, minimum in zip(medians, minimums)]
-            upper = [maximum - median for median, maximum in zip(maximums, medians)]
-            figure, axis = plt.subplots(figsize=(max(7, len(labels) * 1.3), 4.8))
-            positions = list(range(len(labels)))
-            axis.bar(positions, medians, color="#3b6ea8")
-            axis.errorbar(
-                positions,
-                medians,
-                yerr=[lower, upper],
-                fmt="none",
-                ecolor="black",
-                capsize=4,
-            )
-            axis.set_xticks(positions, labels, rotation=30, ha="right")
-            axis.set_ylabel(f"{label} — {direction}")
-            axis.set_title(f"{scenario}: {phase}")
-            axis.grid(axis="y", alpha=0.25)
-            failed = sorted(failed_by_phase.get((scenario, phase), set()))
-            if failed:
-                axis.set_xlabel(f"failed, not shown: {', '.join(failed)}")
-            figure.tight_layout()
-            stem = safe_name(f"{scenario}-{phase}-{metric}")
-            for suffix in ("png", "svg"):
-                figure.savefig(output / f"{stem}.{suffix}", dpi=180)
-            plt.close(figure)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Aggregate BSFS JSONL results and render publication charts"
+        description="Aggregate BSFS JSONL results and render an HTML report"
     )
     parser.add_argument("run_dir", type=Path)
     return parser.parse_args()
@@ -275,6 +178,7 @@ def main() -> int:
         for record in records
         if record.get("validation_status") != "passed"
     ]
+    manifest: dict[str, Any] = {}
     manifest_path = run_dir / "manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -283,10 +187,19 @@ def main() -> int:
     write_csv(output / "summary.csv", summary)
     write_csv(output / "concurrency-scaling.csv", scaling)
     write_csv(output / "failed-phases.csv", failures)
-    charts(summary, output, failures)
+    write_report(
+        output / "report.html",
+        run_dir=run_dir,
+        records=records,
+        summary=summary,
+        scaling=scaling,
+        failures=failures,
+        skipped=skipped,
+        manifest=manifest,
+    )
     print(
         f"analyzed {len(records)} records: {len(summary)} groups, "
-        f"{len(failures)} failed phases"
+        f"{len(failures)} failed phases; report: {output / 'report.html'}"
     )
     return 0
 

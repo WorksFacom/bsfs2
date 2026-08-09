@@ -128,16 +128,18 @@ Failures are retained in JSONL and logs. The runner continues with later
 filesystem/scenario combinations after a measured workload failure and returns
 nonzero after cleanup.
 
-Generate publication tables and PNG/SVG charts with:
+Generate publication tables and a consolidated HTML report with:
 
 ```sh
 python3 -m bench.orchestration.analyze bench/results/RUN_ID
 ```
 
-The analyzer uses Python's standard library and Matplotlib. It writes
-median/min/max, mean, standard deviation, device write amplification, failed
-phases, and concurrency scaling under `derived/`. It never creates a combined
-filesystem score.
+The analyzer uses Python's standard library. It writes median/min/max, mean,
+standard deviation, device write amplification, failed phases, and concurrency
+scaling as CSV files under `derived/`. It also writes `derived/report.html`, a
+single self-contained, locally viewable report with inline styling,
+interactive SVG comparisons, run provenance, failures, scaling, and the
+complete summary table. It never creates a combined filesystem score.
 
 ## How throughput is reported
 

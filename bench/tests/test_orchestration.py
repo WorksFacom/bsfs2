@@ -15,6 +15,7 @@ from bench.orchestration.analyze import (
     derive_summary,
     load_records,
 )
+from bench.orchestration.report import render_report
 from bench.orchestration.command import CommandRunner
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
@@ -201,6 +202,65 @@ def result(
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_report_is_self_contained_and_preserves_complete_data(self) -> None:
+        row = derive_summary([result(workers=1, throughput=10.0)])[0]
+        row["phase"] = "write </script><script>alert(1)</script>"
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            records=[result(workers=1, throughput=10.0)],
+            summary=[row],
+            scaling=[
+                {
+                    "filesystem": "bsfs",
+                    "scenario": "concurrency-seq",
+                    "phase": "write",
+                    "one_worker_mib_s": 10.0,
+                    "four_worker_mib_s": 30.0,
+                    "scaling_ratio": 3.0,
+                }
+            ],
+            failures=[{"filesystem": "bsfs", "error": "bad <module>"}],
+            skipped=["results.jsonl:2: bad <record>"],
+            manifest={
+                "run_id": "run-1",
+                "publication_eligible": False,
+                "hostname": "test-host",
+                "config": {"profile": "quick", "repetitions": 1},
+                "kernel": {"release": "test-kernel"},
+                "filesystem_schedule": [
+                    {"repetition": 0, "order": ["bsfs", "ext4"]}
+                ],
+            },
+        )
+
+        self.assertIn("BSFS benchmark report — run-1", report)
+        self.assertIn("Not publication eligible", report)
+        self.assertIn("Complete derived data", report)
+        self.assertIn("durable_throughput_mib_s_median", report)
+        self.assertIn("scaling_ratio", report)
+        self.assertIn("test-host", report)
+        self.assertIn("bsfs &rarr; ext4", report)
+        self.assertIn("\\u003c/script", report)
+        self.assertNotIn("<script>alert(1)</script>", report)
+        self.assertNotIn("<script src=", report)
+        self.assertNotIn("<link ", report)
+        self.assertNotIn("<img ", report)
+
+    def test_empty_report_still_renders_without_manifest(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/interrupted-run"),
+            records=[],
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        self.assertIn("interrupted-run", report)
+        self.assertIn("Eligibility not recorded", report)
+        self.assertIn('"summary":[]', report)
+
     def test_null_device_stats_do_not_become_zero_amplification(self) -> None:
         summary = derive_summary([result(workers=1, throughput=10.0)])
 
