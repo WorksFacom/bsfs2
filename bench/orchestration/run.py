@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import signal
 import sys
-from typing import Iterator
+from typing import Iterator, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -68,6 +68,38 @@ else:
 
 COMMON_FILESYSTEMS = ("bsfs", "old-bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
 KERNEL_FILESYSTEMS = ("bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
+
+
+def sudo_invoker_owner(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[int, int] | None:
+    """Return the uid/gid of the user that invoked sudo, when available."""
+    environment = os.environ if environ is None else environ
+    uid_text = environment.get("SUDO_UID")
+    gid_text = environment.get("SUDO_GID")
+    if uid_text is None or gid_text is None:
+        return None
+    try:
+        uid = int(uid_text)
+        gid = int(gid_text)
+    except ValueError:
+        return None
+    if uid < 0 or gid < 0:
+        return None
+    return uid, gid
+
+
+def transfer_result_ownership(run_dir: Path, owner: tuple[int, int]) -> None:
+    """Give a completed result tree to the user who invoked sudo.
+
+    Symlinks are deliberately not followed: benchmark artifacts must not be
+    able to change ownership outside the run directory.
+    """
+    if not run_dir.exists():
+        return
+    uid, gid = owner
+    for path in (run_dir, *run_dir.rglob("*")):
+        os.chown(path, uid, gid, follow_symlinks=False)
 
 
 class BenchmarkRun:
@@ -565,6 +597,7 @@ def main() -> int:
     if not args.dry_run and os.geteuid() != 0:
         raise SystemExit("actual loop or physical runs require root")
     runner = CommandRunner(run_dir, dry_run=args.dry_run)
+    result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
     loop_device: str | None = None
     publication_eligible = config.publication and args.device is not None
@@ -819,6 +852,14 @@ def main() -> int:
                 check=False,
                 label="detach-loop-device",
             )
+        if result_owner:
+            try:
+                transfer_result_ownership(run_dir, result_owner)
+            except OSError as error:
+                print(
+                    f"benchmark result ownership transfer failed: {error}",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":

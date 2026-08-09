@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import call, patch
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY))
@@ -26,6 +27,10 @@ from bench.orchestration.safety import (
     validate_loop_image,
 )
 from bench.orchestration.topology import physical_cores, sibling_conflicts
+from bench.orchestration.run import (
+    sudo_invoker_owner,
+    transfer_result_ownership,
+)
 
 class ConfigTests(unittest.TestCase):
     def test_quick_profile_is_valid(self) -> None:
@@ -95,6 +100,42 @@ class CommandTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0)
             self.assertFalse(run_dir.exists())
+
+
+class ResultOwnershipTests(unittest.TestCase):
+    def test_sudo_invoker_owner_uses_sudo_identity(self) -> None:
+        self.assertEqual(
+            sudo_invoker_owner({"SUDO_UID": "1000", "SUDO_GID": "1001"}),
+            (1000, 1001),
+        )
+
+    def test_sudo_invoker_owner_ignores_missing_or_invalid_identity(self) -> None:
+        self.assertIsNone(sudo_invoker_owner({}))
+        self.assertIsNone(
+            sudo_invoker_owner({"SUDO_UID": "not-a-number", "SUDO_GID": "1"})
+        )
+        self.assertIsNone(
+            sudo_invoker_owner({"SUDO_UID": "1", "SUDO_GID": "-1"})
+        )
+
+    def test_transfer_result_ownership_visits_every_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            nested = run_dir / "raw" / "artifacts"
+            nested.mkdir(parents=True)
+            result = nested / "results.jsonl"
+            result.touch()
+
+            with patch("bench.orchestration.run.os.chown") as chown:
+                transfer_result_ownership(run_dir, (1000, 1001))
+
+            self.assertCountEqual(
+                chown.call_args_list,
+                [
+                    call(path, 1000, 1001, follow_symlinks=False)
+                    for path in (run_dir, run_dir / "raw", nested, result)
+                ],
+            )
 
 
 class BenchmarkBinaryTests(unittest.TestCase):

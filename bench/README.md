@@ -63,6 +63,9 @@ sudo python3 -m bench.orchestration.run \
   --filesystems bsfs old-bsfs ext4 btrfs
 ```
 
+When launched through `sudo`, the completed result directory is handed back to
+the invoking user, so analysis can run without `sudo`.
+
 Before an actual run, build the C runner(s) required by the selected
 filesystems. The launcher verifies they are executable before it creates or
 attaches the loop image; it does not build them automatically.
