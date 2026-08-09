@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .command import CommandError, CommandRunner
 
@@ -16,6 +16,45 @@ GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("alias", ("tests/smoke.sh", "tests/alias_guest.sh")),
     ("reclaim", ("tests/smoke.sh", "tests/reclaim_guest.sh")),
 )
+
+
+class BenchmarkBinaryError(RuntimeError):
+    pass
+
+
+def validate_benchmark_binaries(
+    repository: Path, filesystems: Iterable[str]
+) -> None:
+    """Require the C runners needed by the selected filesystem adapters."""
+    selected = set(filesystems)
+    required: list[Path] = []
+    if selected - {"old-bsfs"}:
+        required.append(repository / "bench/bin/bench-posix")
+    if "old-bsfs" in selected:
+        required.extend(
+            (
+                repository / "bench/bin/bench-old",
+                repository / "bench/bin/mkfs-old-bsfs",
+            )
+        )
+    missing = [
+        path
+        for path in required
+        if not path.is_file() or not path.stat().st_mode & 0o111
+    ]
+    if not missing:
+        return
+
+    command = (
+        "make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old"
+        if "old-bsfs" in selected
+        else "make -C bench bin/bench-posix"
+    )
+    paths = ", ".join(str(path.relative_to(repository)) for path in missing)
+    raise BenchmarkBinaryError(
+        f"benchmark C binaries are missing or not executable: {paths}; "
+        f"build them first with: {command}"
+    )
 
 
 class CorrectnessGateError(RuntimeError):
@@ -52,4 +91,3 @@ def run_correctness_gates(
             {"name": name, "passed": True, "returncode": result.returncode}
         )
     return outcomes
-

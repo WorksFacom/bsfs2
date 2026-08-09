@@ -26,8 +26,10 @@ if __package__ in {None, ""}:
     from bench.orchestration.governor import PerformanceGovernor
     from bench.orchestration.manifest import collect_manifest, write_manifest
     from bench.orchestration.preflight import (
+        BenchmarkBinaryError,
         CorrectnessGateError,
         run_correctness_gates,
+        validate_benchmark_binaries,
     )
     from bench.orchestration.safety import (
         DeviceInfo,
@@ -49,7 +51,12 @@ else:
     )
     from .governor import PerformanceGovernor
     from .manifest import collect_manifest, write_manifest
-    from .preflight import CorrectnessGateError, run_correctness_gates
+    from .preflight import (
+        BenchmarkBinaryError,
+        CorrectnessGateError,
+        run_correctness_gates,
+        validate_benchmark_binaries,
+    )
     from .safety import (
         DeviceInfo,
         SafetyError,
@@ -541,6 +548,12 @@ def main() -> int:
     unknown = set(selected) - set(COMMON_FILESYSTEMS)
     if unknown:
         raise SystemExit(f"unknown filesystems: {', '.join(sorted(unknown))}")
+    if not args.dry_run:
+        try:
+            validate_benchmark_binaries(repository, selected)
+        except BenchmarkBinaryError as error:
+            print(f"benchmark setup failed: {error}", file=sys.stderr)
+            return 2
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = (
         args.run_dir.resolve()
@@ -602,10 +615,6 @@ def main() -> int:
             )
 
         runner.run(["make", "-C", str(repository)], label="build-current-bsfs")
-        runner.run(
-            ["make", "-C", str(repository / "bench")],
-            label="build-benchmark-runners",
-        )
         debugfs = runner.run(
             ["mountpoint", "--quiet", "/sys/kernel/debug"],
             check=False,

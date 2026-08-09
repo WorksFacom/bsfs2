@@ -18,6 +18,13 @@ make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old
 make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old check
 ```
 
+For runs that do not select `old-bsfs`, build only the POSIX runner without an
+old-BSFS checkout:
+
+```sh
+make -C bench bin/bench-posix
+```
+
 The build creates:
 
 - `bench/bin/bench-posix`
@@ -55,6 +62,10 @@ sudo python3 -m bench.orchestration.run \
   --loop-image /tmp/bsfs-bench.img \
   --filesystems bsfs old-bsfs ext4 btrfs
 ```
+
+Before an actual run, build the C runner(s) required by the selected
+filesystems. The launcher verifies they are executable before it creates or
+attaches the loop image; it does not build them automatically.
 
 The quick profile runs reduced versions of every common, recovery, and
 one-/four-worker scenario. Specify only installed filesystems; `zfs` and

@@ -16,6 +16,10 @@ from bench.orchestration.analyze import (
 )
 from bench.orchestration.command import CommandRunner
 from bench.orchestration.config import load_config
+from bench.orchestration.preflight import (
+    BenchmarkBinaryError,
+    validate_benchmark_binaries,
+)
 from bench.orchestration.safety import (
     SafetyError,
     cyclic_schedule,
@@ -91,6 +95,45 @@ class CommandTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0)
             self.assertFalse(run_dir.exists())
+
+
+class BenchmarkBinaryTests(unittest.TestCase):
+    def create_binary(self, repository: Path, name: str) -> Path:
+        binary = repository / "bench/bin" / name
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.touch(mode=0o755)
+        return binary
+
+    def test_posix_selection_requires_only_posix_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            self.create_binary(repository, "bench-posix")
+
+            validate_benchmark_binaries(repository, ("bsfs", "ext4"))
+
+    def test_old_bsfs_selection_requires_its_runner_and_formatter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            self.create_binary(repository, "bench-old")
+
+            with self.assertRaisesRegex(
+                BenchmarkBinaryError,
+                "make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old",
+            ):
+                validate_benchmark_binaries(repository, ("old-bsfs",))
+
+    def test_non_executable_runner_is_rejected_with_posix_build_command(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            binary = self.create_binary(repository, "bench-posix")
+            binary.chmod(0o644)
+
+            with self.assertRaisesRegex(
+                BenchmarkBinaryError, "make -C bench bin/bench-posix"
+            ):
+                validate_benchmark_binaries(repository, ("ext4",))
 
 
 def result(

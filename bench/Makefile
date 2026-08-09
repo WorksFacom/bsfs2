@@ -1,8 +1,8 @@
 CC ?= cc
 
-# clean and help do not read the old tree, so do not demand it for them
+# Only targets that link the old userspace implementation need its source tree.
 ifeq ($(strip $(OLD_BSFS_DIR)),)
-ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(filter-out clean help bin/bench-posix,$(or $(MAKECMDGOALS),all)),)
 $(error OLD_BSFS_DIR is required; pass OLD_BSFS_DIR=/absolute/path/to/bsfs_old)
 endif
 endif
@@ -37,7 +37,9 @@ POSIX_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/posix/%.o,$(COMMON_SOURCES)) \
 OLD_CPPFLAGS := $(CPPFLAGS) -I$(OLD_BSFS_DIR)/src/include
 OLD_COMMON_OBJECTS := $(patsubst src/%.c,$(BUILD_DIR)/old/%.o,$(COMMON_SOURCES)) \
 	$(BUILD_DIR)/old/backend_old_bsfs.o
+ifneq ($(strip $(OLD_BSFS_DIR)),)
 OLD_OPERATION_SOURCES := $(shell find $(OLD_BSFS_DIR)/src/operations -type f -name '*.c' | sort)
+endif
 OLD_OPERATION_OBJECTS := $(patsubst $(OLD_BSFS_DIR)/%.c,$(BUILD_DIR)/oldlib/%.o,$(OLD_OPERATION_SOURCES))
 OLD_API_OBJECT := $(BUILD_DIR)/oldlib/src/browser/api_bsfs.o
 OLD_FORMAT_OBJECT := $(BUILD_DIR)/oldlib/src/format/mkfs_bsfs.o
