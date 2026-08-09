@@ -59,6 +59,11 @@ struct bsfs_super_info {
   __u32 free_blocks;
   __u32 reserved_blocks;
 
+  // Whatever index the compiled-in allocation strategy keeps over the bitmap.
+  // Owned entirely by src/alloc_<strategy>.c, built at mount, dropped at
+  // unmount, never written to disk. Also under bitmap_lock.
+  void *alloc_private;
+
   // Set when ->write_inode could not persist an inode, which means some
   // per-inode root is still only in memory. While it is set no deferred block
   // may be released: we cannot tell which ones the failed root replaced.

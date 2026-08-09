@@ -1,5 +1,6 @@
 bsfs2-src-objs := \
 	alloc.o \
+	alloc_linear.o \
 	bitmap.o \
 	bspan_queue.o \
 	btree.o \
