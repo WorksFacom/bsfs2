@@ -37,6 +37,7 @@ __u32 bsfs_alloc_strategy_alloc(struct super_block *sb) {
   for (i = start; i < total_blocks; i++) {
     if (bsfs_is_bit_free(sb, i)) {
       bsfs_set_bit(sb, i);
+      BSFS_STAT_INC(sb, from_cursor);
       return i;
     }
   }
@@ -53,3 +54,9 @@ void bsfs_alloc_strategy_freed(struct super_block *sb, __u32 block) {
   (void)block;
 }
 
+void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len) {
+  (void)sb;
+
+  if (len)
+    buf[0] = '\0';
+}

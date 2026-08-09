@@ -28,6 +28,7 @@ static void bsfs_put_super(struct super_block *sb) {
   mark_buffer_dirty(sbi->bh);
   (void)bsfs_commit_deferred_frees(sb);
 
+  bsfs_alloc_log_unmount(sb);
   bsfs_alloc_strategy_destroy(sb);
 
   release_bitmap(sb);

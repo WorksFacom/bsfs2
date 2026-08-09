@@ -289,6 +289,7 @@ static void __release_run(struct super_block *sb, __u32 start, __u32 length) {
   for (__u32 i = 0; i < length; i++) {
     if (bsfs_clear_bit(sb, start + i)) {
       sbi->free_blocks++;
+      BSFS_STAT_INC(sb, frees);
       bsfs_alloc_strategy_freed(sb, start + i);
     }
   }
@@ -459,6 +460,7 @@ static __u32 __allocate_single_block(struct super_block *sb, __u32 floor) {
   }
 
   sbi->free_blocks--;
+  BSFS_STAT_INC(sb, allocs);
 
   return block;
 }
@@ -539,6 +541,7 @@ int deallocate_single_block(struct super_block *sb, __u32 block_index) {
   // rollback paths can reach the same block twice; only a real transition counts
   if (bsfs_clear_bit(sb, block_index)) {
     sbi->free_blocks++;
+    BSFS_STAT_INC(sb, frees);
     bsfs_alloc_strategy_freed(sb, block_index);
   }
   mutex_unlock(&sbi->bitmap_lock);
@@ -552,6 +555,9 @@ int deallocate_single_block(struct super_block *sb, __u32 block_index) {
  * there is otherwise no way to tell from a running system - or from a test log -
  * which .ko is loaded, and "the benchmark ran against the wrong build" is a
  * mistake that does not announce itself.
+ *
+ * The counter keys in the unmount summary are stable and space-separated so
+ * tests/alloc_guest.sh can pull them out of dmesg with sed.
  */
 void bsfs_alloc_log_mount(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -560,6 +566,22 @@ void bsfs_alloc_log_mount(struct super_block *sb) {
           sbi->reserved_blocks);
 }
 
+void bsfs_alloc_log_unmount(struct super_block *sb) {
+#ifdef BSFS_ALLOC_STATS
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  char                    detail[96];
+
+  mutex_lock(&sbi->bitmap_lock);
+  bsfs_alloc_strategy_stats(sb, detail, sizeof(detail));
+
+  pr_info("alloc[%s] allocs=%llu frees=%llu from_index=%llu from_cursor=%llu index_peak=%llu fallback_scans=%llu %s\n",
+          BSFS_ALLOC_STRATEGY_NAME, sbi->alloc_stats.allocs, sbi->alloc_stats.frees, sbi->alloc_stats.from_index,
+          sbi->alloc_stats.from_cursor, sbi->alloc_stats.index_peak, sbi->alloc_stats.fallback_scans, detail);
+  mutex_unlock(&sbi->bitmap_lock);
+#else
+  (void)sb;
+#endif
+}
 
 int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -569,6 +591,7 @@ int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
   for (__u32 i = 0; i < bspan->length; i++) {
     if (bsfs_clear_bit(sb, bspan->disk_blk + i)) {
       sbi->free_blocks++;
+      BSFS_STAT_INC(sb, frees);
       bsfs_alloc_strategy_freed(sb, bspan->disk_blk + i);
     }
   }

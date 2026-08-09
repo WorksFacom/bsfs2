@@ -87,8 +87,53 @@ __u32 bsfs_alloc_strategy_alloc(struct super_block *sb);
 void bsfs_alloc_strategy_freed(struct super_block *sb, __u32 block);
 
 /**
- * @brief Logs which strategy the module was built with, once per mount.
+ * @brief One line about the strategy's state, for the unmount summary.
+ *
+ * Only ever called under BSFS_ALLOC_STATS. Writes at most @len bytes into @buf.
+ * A strategy with nothing to report may write an empty string.
+ */
+void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
+
+/*
+ * Allocation counters.
+ *
+ * These exist so a test can tell that a strategy is actually engaged, instead of
+ * only that the filesystem did not break - "the min-heap recycled 9871 blocks"
+ * is an assertion; "no test failed" is not. Off by default, since the counters
+ * sit on the allocation hot path:
+ *
+ *   make BSFS_ALLOC=heap BSFS_ALLOC_STATS=y
+ *
+ * Guarded rather than always-on because with them compiled out the accounting
+ * disappears entirely, leaving the exact code the benchmarks should measure.
+ */
+#ifdef BSFS_ALLOC_STATS
+#define BSFS_STAT_INC(sb, field)                                                                                                           \
+  do {                                                                                                                                     \
+    bsfs_sb(sb)->alloc_stats.field++;                                                                                                      \
+  } while (0)
+#define BSFS_STAT_MAX(sb, field, value)                                                                                                    \
+  do {                                                                                                                                     \
+    typeof(value) __v = (value);                                                                                                           \
+    if (__v > bsfs_sb(sb)->alloc_stats.field)                                                                                              \
+      bsfs_sb(sb)->alloc_stats.field = __v;                                                                                                \
+  } while (0)
+#else
+#define BSFS_STAT_INC(sb, field)                                                                                                           \
+  do {                                                                                                                                     \
+  } while (0)
+#define BSFS_STAT_MAX(sb, field, value)                                                                                                    \
+  do {                                                                                                                                     \
+  } while (0)
+#endif
+
+/**
+ * @brief Logs the strategy name at mount, and the counters at unmount.
+ *
+ * The name line is unconditional (one line per mount); the counters only exist
+ * under BSFS_ALLOC_STATS.
  */
 void bsfs_alloc_log_mount(struct super_block *sb);
+void bsfs_alloc_log_unmount(struct super_block *sb);
 
 #endif // BSFS_ALLOC_STRATEGY_H
