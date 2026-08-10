@@ -64,11 +64,16 @@ sudo python3 -m bench.orchestration.run \
 ```
 
 When launched through `sudo`, the completed result directory is handed back to
-the invoking user, so analysis can run without `sudo`.
+the invoking user, so analysis can run without `sudo`. The mountpoint under
+`mnt/` is skipped while it is still mounted, and a loop image passed with
+`--loop-image` lives outside the result directory and stays root-owned.
 
 Before an actual run, build the C runner(s) required by the selected
 filesystems. The launcher verifies they are executable before it creates or
-attaches the loop image; it does not build them automatically.
+attaches the loop image; it does not build them automatically, so rebuild after
+editing anything under `bench/src/`. Every run records the size, mtime, and
+SHA-256 of each built artifact under `built_artifacts` in `manifest.json`, so a
+stale binary is detectable after the fact.
 
 When `bsfs` is selected, the launcher does build `bsfs2.ko`, removes any
 stale `bsfs2` module, and verifies the new module can load on the running

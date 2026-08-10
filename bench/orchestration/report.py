@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -26,13 +27,42 @@ REPORT_METRICS = (
 
 
 def _json_for_html(value: Any) -> str:
-    """Serialize data without allowing it to terminate the script element."""
+    """Serialize data without allowing it to terminate the script element.
+
+    allow_nan is off because NaN/Infinity aren't valid JSON. one slipping
+    through would make JSON.parse throw and blank the whole report, and
+    failing loud here beats shipping an empty page.
+    """
     return (
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
     )
+
+
+def _failed_by_phase(
+    failures: list[dict[str, Any]],
+) -> dict[str, dict[str, list[str]]]:
+    """a filesystem missing from a chart because it failed shouldn't read as
+    "not run". failures with no phase apply to every phase in the scenario,
+    so they land under the empty key."""
+    collected: dict[str, dict[str, set[str]]] = {}
+    for failure in failures:
+        scenario = failure.get("scenario")
+        filesystem = failure.get("filesystem")
+        if not scenario or not filesystem:
+            continue
+        phase = failure.get("phase")
+        collected.setdefault(str(scenario), {}).setdefault(
+            str(phase) if phase else "", set()
+        ).add(str(filesystem))
+    return {
+        scenario: {phase: sorted(names) for phase, names in sorted(phases.items())}
+        for scenario, phases in sorted(collected.items())
+    }
 
 
 def _manifest_context(manifest: dict[str, Any]) -> tuple[str, str, str]:
@@ -88,7 +118,7 @@ def _manifest_context(manifest: dict[str, Any]) -> tuple[str, str, str]:
 def render_report(
     *,
     run_dir: Path,
-    records: list[dict[str, Any]],
+    record_count: int,
     summary: list[dict[str, Any]],
     scaling: list[dict[str, Any]],
     failures: list[dict[str, Any]],
@@ -108,6 +138,7 @@ def render_report(
             "summary": summary,
             "scaling": scaling,
             "failures": failures,
+            "failedByPhase": _failed_by_phase(failures),
             "skipped": skipped,
             "fields": fields,
             "metrics": REPORT_METRICS,
@@ -132,7 +163,7 @@ def render_report(
         "__RUN_ID__": escape(run_id),
         "__STATUS__": escape(status),
         "__STATUS_CLASS__": status_class,
-        "__RECORD_COUNT__": str(len(records)),
+        "__RECORD_COUNT__": str(record_count),
         "__GROUP_COUNT__": str(len(summary)),
         "__FILESYSTEM_COUNT__": str(len(filesystems)),
         "__SCENARIO_COUNT__": str(len(scenarios)),
@@ -143,10 +174,15 @@ def render_report(
         "__OVERRIDES__": escape(overrides),
         "__REPORT_DATA__": payload,
     }
-    report = REPORT_TEMPLATE
-    for marker, value in replacements.items():
-        report = report.replace(marker, value)
-    return report
+    # single pass so a substituted value never gets rescanned for a later
+    # marker; longest first so no marker gets shadowed by a prefix of itself
+    pattern = "|".join(
+        re.escape(marker)
+        for marker in sorted(replacements, key=len, reverse=True)
+    )
+    return re.sub(
+        pattern, lambda match: replacements[match.group()], REPORT_TEMPLATE
+    )
 
 
 def write_report(path: Path, **kwargs: Any) -> None:
@@ -230,6 +266,7 @@ select, input {
 .range-cap { stroke: #a9bbc5; stroke-width: 2; }
 .bar { fill: var(--blue); transition: fill .15s ease; }
 .bar:hover { fill: var(--accent); }
+.chart-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--danger); border-radius: 4px; background: #341c22; font-size: .85rem; }
 .chart-label { fill: var(--muted); font-size: 11px; }
 .chart-value { fill: var(--ink); font-size: 11px; font-weight: 700; }
 .table-wrap { max-height: 72vh; margin-top: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
@@ -344,9 +381,10 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   function formatValue(value) {
     if (value === null || value === undefined || value === "") return "—";
     if (typeof value !== "number") return String(value);
+    // pinned to en-US so a decimal comma doesn't get misread as a thousands separator
     const magnitude = Math.abs(value);
-    if (magnitude >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+    if (magnitude >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+    return value.toLocaleString("en-US", { maximumFractionDigits: 3 });
   }
 
   function compareValues(left, right) {
@@ -442,10 +480,11 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     const height = 300;
     const top = 40;
     const baseline = 238;
-    const maximum = Math.max(
+    // scale to the data, not to 1, so sub-1 metrics don't render as slivers
+    const observed = Math.max(
       ...values.map((row) => Number.isFinite(row[maximumField]) ? row[maximumField] : row[medianField]),
-      1,
     );
+    const maximum = observed > 0 ? observed : 1;
     const y = (value) => baseline - (value / maximum) * (baseline - top);
     const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${title}, ${direction}` });
     if (values.length > 5) svg.style.minWidth = `${width}px`;
@@ -484,6 +523,12 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     return container;
   }
 
+  function failedFor(scenario, phase) {
+    const phases = data.failedByPhase[scenario];
+    if (!phases) return [];
+    return [...new Set([...(phases[phase] || []), ...(phases[""] || [])])].sort();
+  }
+
   function renderComparisons() {
     const grouped = new Map();
     data.summary.forEach((row) => {
@@ -492,13 +537,14 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       if (!phases.has(row.phase)) phases.set(row.phase, []);
       phases.get(row.phase).push(row);
     });
+    const byName = (left, right) => String(left[0]).localeCompare(String(right[0]));
     const target = document.querySelector("#scenario-groups");
-    [...grouped.entries()].forEach(([scenario, phases], scenarioIndex) => {
+    [...grouped.entries()].sort(byName).forEach(([scenario, phases], scenarioIndex) => {
       const scenarioDetails = element("details", "scenario");
       scenarioDetails.open = scenarioIndex === 0;
       scenarioDetails.append(element("summary", "", `${scenario} · ${phases.size} phases`));
       const scenarioBody = element("div", "details-body phase-grid");
-      [...phases.entries()].forEach(([phase, rows], phaseIndex) => {
+      [...phases.entries()].sort(byName).forEach(([phase, rows], phaseIndex) => {
         const phaseDetails = element("details", "phase");
         phaseDetails.open = scenarioIndex === 0 && phaseIndex === 0;
         phaseDetails.append(element("summary", "", phase));
@@ -520,6 +566,10 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
           selector.addEventListener("change", draw);
           phaseBody.append(selector, chartHolder);
           draw();
+        }
+        const failed = failedFor(scenario, phase);
+        if (failed.length) {
+          phaseBody.append(element("p", "chart-note", `Failed here, absent from the chart: ${failed.join(", ")}`));
         }
         phaseDetails.append(phaseBody);
         scenarioBody.append(phaseDetails);

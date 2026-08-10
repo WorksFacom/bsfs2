@@ -23,6 +23,7 @@ from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
     BsfsModuleError,
+    build_module_argv,
     validate_bsfs_module,
     validate_benchmark_binaries,
 )
@@ -37,6 +38,9 @@ from bench.orchestration.run import (
     sudo_invoker_owner,
     transfer_result_ownership,
 )
+
+BUILD_ARGV = build_module_argv(REPOSITORY)
+
 
 class ConfigTests(unittest.TestCase):
     def test_quick_profile_is_valid(self) -> None:
@@ -143,6 +147,53 @@ class ResultOwnershipTests(unittest.TestCase):
                 ],
             )
 
+    def test_transfer_result_ownership_skips_a_mounted_mountpoint(self) -> None:
+        """a failed umount leaves a live benchmark filesystem under run_dir,
+        and chowning through it would rewrite the device under test."""
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            mounted = run_dir / "mnt"
+            (mounted / "payload").mkdir(parents=True)
+            (mounted / "payload" / "big.bin").touch()
+            results = run_dir / "raw"
+            results.mkdir()
+            (results / "results.jsonl").touch()
+
+            with (
+                patch("bench.orchestration.run.os.chown") as chown,
+                patch(
+                    "bench.orchestration.run.os.path.ismount",
+                    side_effect=lambda path: Path(path) == mounted,
+                ),
+            ):
+                self.assertEqual(
+                    transfer_result_ownership(run_dir, (1000, 1001)), []
+                )
+
+            touched = {arguments[0] for arguments, _ in chown.call_args_list}
+            self.assertEqual(
+                touched, {run_dir, results, results / "results.jsonl"}
+            )
+            self.assertNotIn(mounted, touched)
+
+    def test_transfer_result_ownership_continues_past_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            stubborn = run_dir / "stubborn"
+            stubborn.touch()
+            (run_dir / "results.jsonl").touch()
+
+            def chown(path: Path, *_: object, **__: object) -> None:
+                if path == stubborn:
+                    raise PermissionError("read-only file system")
+
+            with patch("bench.orchestration.run.os.chown", side_effect=chown):
+                failed = transfer_result_ownership(run_dir, (1000, 1001))
+
+            self.assertEqual(len(failed), 1)
+            self.assertIn("stubborn", failed[0])
+
 
 class BenchmarkBinaryTests(unittest.TestCase):
     def create_binary(self, repository: Path, name: str) -> Path:
@@ -186,11 +237,15 @@ class BenchmarkBinaryTests(unittest.TestCase):
 class BsfsModulePreflightTests(unittest.TestCase):
     def test_loadable_module_is_built_loaded_and_unloaded(self) -> None:
         module = REPOSITORY / "bsfs2.ko"
-        with patch("bench.orchestration.preflight._run_capture") as capture:
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=False,
+            ),
+        ):
             capture.side_effect = [
-                subprocess.CompletedProcess(
-                    ["make", "-C", str(REPOSITORY)], 0, "", ""
-                ),
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
                 subprocess.CompletedProcess(["insmod", str(module)], 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 0, "", ""),
@@ -201,20 +256,30 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertEqual(
             capture.call_args_list,
             [
-                call(["make", "-C", str(REPOSITORY)]),
+                call(BUILD_ARGV),
                 call(["rmmod", "bsfs2"]),
                 call(["insmod", str(module)]),
                 call(["rmmod", "bsfs2"]),
             ],
         )
 
+    def test_build_pins_pwd_to_the_repository(self) -> None:
+        """make -C moves CURDIR but not PWD, and the kernel build uses
+        M=$(PWD), so a launcher started elsewhere would build the wrong tree."""
+        self.assertIn(f"PWD={REPOSITORY}", BUILD_ARGV)
+        self.assertEqual(BUILD_ARGV[:3], ["make", "-C", str(REPOSITORY)])
+
     def test_load_failure_reports_kernel_and_vermagic(self) -> None:
         module = REPOSITORY / "bsfs2.ko"
-        with patch("bench.orchestration.preflight._run_capture") as capture:
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=False,
+            ),
+        ):
             capture.side_effect = [
-                subprocess.CompletedProcess(
-                    ["make", "-C", str(REPOSITORY)], 0, "", ""
-                ),
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
                 subprocess.CompletedProcess(
                     ["insmod", str(module)], 1, "", "Invalid module format"
@@ -234,6 +299,64 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertIn("Invalid module format", message)
         self.assertIn("module vermagic: 6.18.15-dirty", message)
         self.assertIn("KDIR", message)
+
+    def test_busy_module_is_not_blamed_on_kdir(self) -> None:
+        module = REPOSITORY / "bsfs2.ko"
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=True,
+            ),
+        ):
+            capture.side_effect = [
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
+                subprocess.CompletedProcess(
+                    ["rmmod", "bsfs2"], 1, "", "rmmod: ERROR: Module bsfs2 is in use"
+                ),
+                subprocess.CompletedProcess(
+                    ["modinfo", "-F", "vermagic", str(module)], 0, "6.18.15\n", ""
+                ),
+            ]
+
+            with self.assertRaises(BsfsModuleError) as raised:
+                validate_bsfs_module(REPOSITORY)
+
+        message = str(raised.exception)
+        self.assertIn("still in use", message)
+        self.assertNotIn("KDIR", message)
+        # insmod must not run against a module that is already loaded and busy
+        self.assertNotIn(
+            call(["insmod", str(module)]), capture.call_args_list
+        )
+
+
+class AnalyzeEntryPointTests(unittest.TestCase):
+    def test_analyze_runs_as_a_script_from_an_unrelated_directory(self) -> None:
+        """analyze.py is executable and has a shebang, so it needs to work
+        without the repository root already on sys.path."""
+        script = REPOSITORY / "bench/orchestration/analyze.py"
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            raw = run_dir / "raw"
+            raw.mkdir(parents=True)
+            (raw / "results.jsonl").write_text(
+                json.dumps(result(workers=1, throughput=10.0)) + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(script), str(run_dir)],
+                cwd=directory,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = run_dir / "derived" / "report.html"
+            self.assertTrue(report.is_file())
+            self.assertIn("BSFS benchmark report", report.read_text("utf-8"))
 
 
 class BsfsSetupFailureTests(unittest.TestCase):
@@ -330,7 +453,7 @@ class AnalysisTests(unittest.TestCase):
         row["phase"] = "write </script><script>alert(1)</script>"
         report = render_report(
             run_dir=Path("/results/run-1"),
-            records=[result(workers=1, throughput=10.0)],
+            record_count=1,
             summary=[row],
             scaling=[
                 {
@@ -372,7 +495,7 @@ class AnalysisTests(unittest.TestCase):
     def test_empty_report_still_renders_without_manifest(self) -> None:
         report = render_report(
             run_dir=Path("/results/interrupted-run"),
-            records=[],
+            record_count=0,
             summary=[],
             scaling=[],
             failures=[],
@@ -383,6 +506,67 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("interrupted-run", report)
         self.assertIn("Eligibility not recorded", report)
         self.assertIn('"summary":[]', report)
+
+    def test_a_manifest_value_cannot_expand_into_another_marker(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={"run_id": "run-1", "hostname": "__REPORT_DATA__"},
+        )
+
+        self.assertIn("<dd>__REPORT_DATA__</dd>", report)
+        self.assertEqual(report.count('"summary":[]'), 1)
+
+    def test_a_non_finite_metric_fails_loudly_instead_of_blanking_the_page(
+        self,
+    ) -> None:
+        """a bare NaN token makes JSON.parse throw, which would leave the
+        reader an empty page instead of just a broken number."""
+        with self.assertRaises(ValueError):
+            render_report(
+                run_dir=Path("/results/run-1"),
+                record_count=1,
+                summary=[{"filesystem": "bsfs", "durable_iops_median": float("nan")}],
+                scaling=[],
+                failures=[],
+                skipped=[],
+                manifest={},
+            )
+
+    def test_failures_are_attributed_to_the_chart_they_are_missing_from(
+        self,
+    ) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[
+                {"filesystem": "btrfs", "scenario": "bulk", "phase": "verify"},
+                {"filesystem": "zfs", "scenario": "bulk", "error": "no zpool"},
+                {"error": "kernel log finding"},
+            ],
+            skipped=[],
+            manifest={},
+        )
+
+        payload = json.loads(
+            report.split('id="report-data" type="application/json">')[1]
+            .split("</script>")[0]
+            .replace("\\u003c", "<")
+            .replace("\\u003e", ">")
+            .replace("\\u0026", "&")
+        )
+
+        # a scenario-wide failure has no phase, so it belongs to every phase
+        self.assertEqual(
+            payload["failedByPhase"],
+            {"bulk": {"": ["zfs"], "verify": ["btrfs"]}},
+        )
 
     def test_null_device_stats_do_not_become_zero_amplification(self) -> None:
         summary = derive_summary([result(workers=1, throughput=10.0)])

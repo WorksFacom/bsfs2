@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,14 @@ import platform
 import socket
 import subprocess
 from typing import Any, Iterable
+
+BUILT_ARTIFACTS = (
+    "bench/bin/bench-posix",
+    "bench/bin/bench-old",
+    "bench/bin/mkfs-old-bsfs",
+    "bsfs2.ko",
+    "mkfs.bsfs",
+)
 
 from .config import RunConfig
 from .safety import DeviceInfo
@@ -42,6 +51,29 @@ def _git(repository: Path) -> dict[str, Any]:
         "branch": _capture(["git", "branch", "--show-current"], repository),
         "status": _capture(["git", "status", "--porcelain=v1"], repository),
     }
+
+
+def _artifacts(repository: Path) -> dict[str, Any]:
+    """the launcher never rebuilds the C runners, so the recorded commit alone
+    can't prove which binaries made these numbers. hash them instead."""
+    described: dict[str, Any] = {}
+    for relative in BUILT_ARTIFACTS:
+        path = repository / relative
+        try:
+            stat = path.stat()
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            described[relative] = {"present": False}
+            continue
+        described[relative] = {
+            "present": True,
+            "size_bytes": stat.st_size,
+            "modified_at": datetime.fromtimestamp(
+                stat.st_mtime, timezone.utc
+            ).isoformat(),
+            "sha256": digest,
+        }
+    return described
 
 
 def _governors(cpus: tuple[int, ...]) -> dict[str, str]:
@@ -116,6 +148,7 @@ def collect_manifest(
             "current": _git(repository),
             "old": _git(old_repository),
         },
+        "built_artifacts": _artifacts(repository),
         "config": {
             "path": str(config_path),
             "profile": config.profile,

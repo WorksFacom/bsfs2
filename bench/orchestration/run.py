@@ -29,6 +29,7 @@ if __package__ in {None, ""}:
         BenchmarkBinaryError,
         BsfsModuleError,
         CorrectnessGateError,
+        build_module_argv,
         run_correctness_gates,
         validate_bsfs_module,
         validate_benchmark_binaries,
@@ -57,6 +58,7 @@ else:
         BenchmarkBinaryError,
         BsfsModuleError,
         CorrectnessGateError,
+        build_module_argv,
         run_correctness_gates,
         validate_bsfs_module,
         validate_benchmark_binaries,
@@ -93,17 +95,37 @@ def sudo_invoker_owner(
     return uid, gid
 
 
-def transfer_result_ownership(run_dir: Path, owner: tuple[int, int]) -> None:
+def transfer_result_ownership(
+    run_dir: Path, owner: tuple[int, int]
+) -> list[str]:
     """Give a completed result tree to the user who invoked sudo.
 
-    Symlinks are deliberately not followed: benchmark artifacts must not be
-    able to change ownership outside the run directory.
+    returns the paths that couldn't be transferred, so one unwritable entry
+    doesn't strand the rest of the tree under root. symlinks aren't followed,
+    and mounted directories are skipped outright, since the benchmark
+    mountpoint lives under run_dir and a failed umount would otherwise send
+    this chown recursively across the device under test.
     """
     if not run_dir.exists():
-        return
+        return []
     uid, gid = owner
-    for path in (run_dir, *run_dir.rglob("*")):
-        os.chown(path, uid, gid, follow_symlinks=False)
+    failed: list[str] = []
+
+    def transfer(path: Path) -> None:
+        try:
+            os.chown(path, uid, gid, follow_symlinks=False)
+        except OSError as error:
+            failed.append(f"{path}: {error}")
+
+    transfer(run_dir)
+    for parent, directories, files in os.walk(run_dir):
+        base = Path(parent)
+        directories[:] = [
+            name for name in directories if not os.path.ismount(base / name)
+        ]
+        for name in (*directories, *files):
+            transfer(base / name)
+    return failed
 
 
 class BenchmarkRun:
@@ -579,6 +601,7 @@ def main() -> int:
     args = parse_args()
     repository = Path(__file__).resolve().parents[2]
     old_repository = repository.parent / "bsfs_old"
+    build_bsfs_argv = build_module_argv(repository)
     config = load_config(args.config.resolve())
     selected = tuple(args.filesystems or config.filesystems)
     unknown = set(selected) - set(COMMON_FILESYSTEMS)
@@ -657,11 +680,9 @@ def main() -> int:
                 f"{config.loop_size_mib * 1024**2}"
             )
 
+        # a dry run skips the preflight, so show the build it would have done
         if args.dry_run and "bsfs" in selected:
-            runner.run(
-                ["make", "-C", str(repository)],
-                label="build-current-bsfs",
-            )
+            runner.run(build_bsfs_argv, label="build-current-bsfs")
         debugfs = runner.run(
             ["mountpoint", "--quiet", "/sys/kernel/debug"],
             check=False,
@@ -680,6 +701,10 @@ def main() -> int:
 
         correctness: list[dict[str, object]] = []
         if config.publication and not args.skip_correctness_gates:
+            # the gates boot a VM against $REPO/bsfs2.ko and $REPO/mkfs.bsfs, so
+            # they need a build even when bsfs is not a measured filesystem
+            if "bsfs" not in selected:
+                runner.run(build_bsfs_argv, label="build-gate-artifacts")
             try:
                 correctness = run_correctness_gates(runner, repository)
             except CorrectnessGateError as error:
@@ -867,11 +892,11 @@ def main() -> int:
                 label="detach-loop-device",
             )
         if result_owner:
-            try:
-                transfer_result_ownership(run_dir, result_owner)
-            except OSError as error:
+            unowned = transfer_result_ownership(run_dir, result_owner)
+            if unowned:
                 print(
-                    f"benchmark result ownership transfer failed: {error}",
+                    f"benchmark result ownership transfer failed for "
+                    f"{len(unowned)} paths, first: {unowned[0]}",
                     file=sys.stderr,
                 )
 
