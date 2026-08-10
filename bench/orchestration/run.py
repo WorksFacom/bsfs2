@@ -27,8 +27,10 @@ if __package__ in {None, ""}:
     from bench.orchestration.manifest import collect_manifest, write_manifest
     from bench.orchestration.preflight import (
         BenchmarkBinaryError,
+        BsfsModuleError,
         CorrectnessGateError,
         run_correctness_gates,
+        validate_bsfs_module,
         validate_benchmark_binaries,
     )
     from bench.orchestration.safety import (
@@ -53,8 +55,10 @@ else:
     from .manifest import collect_manifest, write_manifest
     from .preflight import (
         BenchmarkBinaryError,
+        BsfsModuleError,
         CorrectnessGateError,
         run_correctness_gates,
+        validate_bsfs_module,
         validate_benchmark_binaries,
     )
     from .safety import (
@@ -596,6 +600,12 @@ def main() -> int:
         raise SystemExit(f"run directory is not empty: {run_dir}")
     if not args.dry_run and os.geteuid() != 0:
         raise SystemExit("actual loop or physical runs require root")
+    if not args.dry_run and "bsfs" in selected:
+        try:
+            validate_bsfs_module(repository)
+        except BsfsModuleError as error:
+            print(f"benchmark setup failed: {error}", file=sys.stderr)
+            return 2
     runner = CommandRunner(run_dir, dry_run=args.dry_run)
     result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
@@ -647,7 +657,11 @@ def main() -> int:
                 f"{config.loop_size_mib * 1024**2}"
             )
 
-        runner.run(["make", "-C", str(repository)], label="build-current-bsfs")
+        if args.dry_run and "bsfs" in selected:
+            runner.run(
+                ["make", "-C", str(repository)],
+                label="build-current-bsfs",
+            )
         debugfs = runner.run(
             ["mountpoint", "--quiet", "/sys/kernel/debug"],
             check=False,

@@ -70,6 +70,13 @@ Before an actual run, build the C runner(s) required by the selected
 filesystems. The launcher verifies they are executable before it creates or
 attaches the loop image; it does not build them automatically.
 
+When `bsfs` is selected, the launcher does build `bsfs2.ko`, removes any
+stale `bsfs2` module, and verifies the new module can load on the running
+kernel before it creates a result directory or touches the benchmark target.
+If this fails (for example, `.env` points `KDIR` at a different kernel), the
+launcher exits with setup status 2 and reports the running kernel and module
+vermagic. Set `KDIR` to the running kernel's build tree, rebuild, and retry.
+
 The quick profile runs reduced versions of every common, recovery, and
 one-/four-worker scenario. Specify only installed filesystems; `zfs` and
 `zfs-4k` require working `zpool`, `zfs`, and the matching kernel module. A

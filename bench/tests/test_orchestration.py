@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,6 +22,8 @@ from bench.orchestration.command import CommandRunner
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
+    BsfsModuleError,
+    validate_bsfs_module,
     validate_benchmark_binaries,
 )
 from bench.orchestration.safety import (
@@ -29,6 +33,7 @@ from bench.orchestration.safety import (
 )
 from bench.orchestration.topology import physical_cores, sibling_conflicts
 from bench.orchestration.run import (
+    main,
     sudo_invoker_owner,
     transfer_result_ownership,
 )
@@ -176,6 +181,124 @@ class BenchmarkBinaryTests(unittest.TestCase):
                 BenchmarkBinaryError, "make -C bench bin/bench-posix"
             ):
                 validate_benchmark_binaries(repository, ("ext4",))
+
+
+class BsfsModulePreflightTests(unittest.TestCase):
+    def test_loadable_module_is_built_loaded_and_unloaded(self) -> None:
+        module = REPOSITORY / "bsfs2.ko"
+        with patch("bench.orchestration.preflight._run_capture") as capture:
+            capture.side_effect = [
+                subprocess.CompletedProcess(
+                    ["make", "-C", str(REPOSITORY)], 0, "", ""
+                ),
+                subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
+                subprocess.CompletedProcess(["insmod", str(module)], 0, "", ""),
+                subprocess.CompletedProcess(["rmmod", "bsfs2"], 0, "", ""),
+            ]
+
+            validate_bsfs_module(REPOSITORY)
+
+        self.assertEqual(
+            capture.call_args_list,
+            [
+                call(["make", "-C", str(REPOSITORY)]),
+                call(["rmmod", "bsfs2"]),
+                call(["insmod", str(module)]),
+                call(["rmmod", "bsfs2"]),
+            ],
+        )
+
+    def test_load_failure_reports_kernel_and_vermagic(self) -> None:
+        module = REPOSITORY / "bsfs2.ko"
+        with patch("bench.orchestration.preflight._run_capture") as capture:
+            capture.side_effect = [
+                subprocess.CompletedProcess(
+                    ["make", "-C", str(REPOSITORY)], 0, "", ""
+                ),
+                subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
+                subprocess.CompletedProcess(
+                    ["insmod", str(module)], 1, "", "Invalid module format"
+                ),
+                subprocess.CompletedProcess(
+                    ["modinfo", "-F", "vermagic", str(module)],
+                    0,
+                    "6.18.15-dirty SMP preempt mod_unload\n",
+                    "",
+                ),
+            ]
+
+            with self.assertRaises(BsfsModuleError) as raised:
+                validate_bsfs_module(REPOSITORY)
+
+        message = str(raised.exception)
+        self.assertIn("Invalid module format", message)
+        self.assertIn("module vermagic: 6.18.15-dirty", message)
+        self.assertIn("KDIR", message)
+
+
+class BsfsSetupFailureTests(unittest.TestCase):
+    def test_module_preflight_failure_creates_no_run_directory(self) -> None:
+        config = REPOSITORY / "bench/config/quick.toml"
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "results"
+            loop_image = Path(directory) / "bench.img"
+            args = argparse.Namespace(
+                config=config,
+                device=None,
+                loop_image=loop_image,
+                confirm=None,
+                allow_size_outside_range=False,
+                allow_shared_disk=False,
+                run_dir=run_dir,
+                filesystems=("bsfs",),
+                dry_run=False,
+                skip_correctness_gates=False,
+            )
+            with (
+                patch("bench.orchestration.run.parse_args", return_value=args),
+                patch("bench.orchestration.run.os.geteuid", return_value=0),
+                patch("bench.orchestration.run.validate_benchmark_binaries"),
+                patch(
+                    "bench.orchestration.run.validate_bsfs_module",
+                    side_effect=BsfsModuleError("invalid module format"),
+                ),
+                patch("bench.orchestration.run.CommandRunner") as runner,
+            ):
+                self.assertEqual(main(), 2)
+
+            self.assertFalse(run_dir.exists())
+            self.assertFalse(loop_image.exists())
+            runner.assert_not_called()
+
+    def test_non_bsfs_selection_skips_module_preflight(self) -> None:
+        config = REPOSITORY / "bench/config/quick.toml"
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(
+                config=config,
+                device="/dev/benchmark-test",
+                loop_image=None,
+                confirm="/dev/benchmark-test",
+                allow_size_outside_range=False,
+                allow_shared_disk=False,
+                run_dir=Path(directory) / "results",
+                filesystems=("ext4",),
+                dry_run=False,
+                skip_correctness_gates=False,
+            )
+            with (
+                patch("bench.orchestration.run.parse_args", return_value=args),
+                patch("bench.orchestration.run.os.geteuid", return_value=0),
+                patch("bench.orchestration.run.validate_benchmark_binaries"),
+                patch("bench.orchestration.run.validate_bsfs_module") as module,
+                patch("bench.orchestration.run.CommandRunner"),
+                patch(
+                    "bench.orchestration.run.inspect_physical_device",
+                    side_effect=SafetyError("stop after preflight"),
+                ),
+            ):
+                self.assertEqual(main(), 2)
+
+            module.assert_not_called()
 
 
 def result(
