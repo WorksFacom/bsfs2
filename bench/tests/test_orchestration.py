@@ -492,6 +492,24 @@ class AnalysisTests(unittest.TestCase):
         self.assertNotIn("<link ", report)
         self.assertNotIn("<img ", report)
 
+    def test_report_has_page_local_light_and_dark_theme_switch(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        self.assertIn('role="switch" aria-checked="false"', report)
+        self.assertIn('aria-label="Switch to dark mode"', report)
+        self.assertIn('html[data-theme="dark"]', report)
+        self.assertIn('setTheme("light");', report)
+        self.assertIn('themeSwitch.addEventListener("click"', report)
+        self.assertNotIn("localStorage", report)
+
     def test_empty_report_still_renders_without_manifest(self) -> None:
         report = render_report(
             run_dir=Path("/results/interrupted-run"),
