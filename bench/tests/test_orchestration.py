@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import Any
 import unittest
 from unittest.mock import call, patch
 
@@ -447,6 +448,16 @@ def result(
     }
 
 
+def embedded_report_data(report: str) -> dict[str, Any]:
+    return json.loads(
+        report.split('id="report-data" type="application/json">')[1]
+        .split("</script>")[0]
+        .replace("\\u003c", "<")
+        .replace("\\u003e", ">")
+        .replace("\\u0026", "&")
+    )
+
+
 class AnalysisTests(unittest.TestCase):
     def test_report_is_self_contained_and_preserves_complete_data(self) -> None:
         row = derive_summary([result(workers=1, throughput=10.0)])[0]
@@ -572,18 +583,108 @@ class AnalysisTests(unittest.TestCase):
             manifest={},
         )
 
-        payload = json.loads(
-            report.split('id="report-data" type="application/json">')[1]
-            .split("</script>")[0]
-            .replace("\\u003c", "<")
-            .replace("\\u003e", ">")
-            .replace("\\u0026", "&")
-        )
+        payload = embedded_report_data(report)
 
         # a scenario-wide failure has no phase, so it belongs to every phase
         self.assertEqual(
             payload["failedByPhase"],
             {"bulk": {"": ["zfs"], "verify": ["btrfs"]}},
+        )
+
+    def test_report_describes_known_generated_and_unknown_chart_phases(
+        self,
+    ) -> None:
+        phases = (
+            ("bulk", "sequential-write", None),
+            ("metadata", "lookup-stat-warm", None),
+            ("mixed", "edit-cycle-durable-total", None),
+            ("concurrency-mixed", "mixed-create", None),
+            ("concurrency-mixed", "mixed-create-worker-1", 1),
+            ("recovery-pressure", "cycle-2-refill", None),
+            (
+                "recovery-pressure",
+                "cycle-1-native-namespace-removal",
+                None,
+            ),
+            ("old-recovery", "restore-fixed-subset", None),
+            ("future-workload", "novel-phase", None),
+        )
+        summary = [
+            {
+                "filesystem": "bsfs",
+                "scenario": scenario,
+                "phase": phase,
+                "worker_count": 4 if scenario.startswith("concurrency-") else 1,
+                "worker_id": worker_id,
+                "durable_throughput_mib_s_median": 1.0,
+            }
+            for scenario, phase, worker_id in phases
+        ]
+
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=len(summary),
+            summary=summary,
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+        descriptions = embedded_report_data(report)["phaseDescriptions"]
+
+        self.assertIn("1 MiB requests", descriptions["bulk"]["sequential-write"])
+        self.assertIn("dentries cached", descriptions["metadata"]["lookup-stat-warm"])
+        self.assertIn("final flush", descriptions["mixed"]["edit-cycle-durable-total"])
+        self.assertIn(
+            "aggregates all workers",
+            descriptions["concurrency-mixed"]["mixed-create"],
+        )
+        self.assertIn(
+            "isolates worker 1",
+            descriptions["concurrency-mixed"]["mixed-create-worker-1"],
+        )
+        self.assertIn(
+            "Recovery cycle 2",
+            descriptions["recovery-pressure"]["cycle-2-refill"],
+        )
+        self.assertIn(
+            "preceding refill files",
+            descriptions["recovery-pressure"]["cycle-1-native-namespace-removal"],
+        )
+        self.assertIn(
+            "fixed subset",
+            descriptions["old-recovery"]["restore-fixed-subset"],
+        )
+        self.assertEqual(
+            descriptions["future-workload"]["novel-phase"],
+            'Compares filesystems for benchmark phase "novel-phase".',
+        )
+
+    def test_chart_description_tracks_the_selected_metric(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+        metrics = {
+            metric[0]: metric[4] for metric in embedded_report_data(report)["metrics"]
+        }
+
+        self.assertIn("recorded final flush", metrics["durable_throughput_mib_s"])
+        self.assertIn("recorded final flush", metrics["durable_iops"])
+        self.assertIn("Operation-path time", metrics["durable_total_ns"])
+        self.assertIn("excluding the final flush", metrics["latency_p99_ns"])
+        self.assertIn(
+            "only for phases with a final flush", metrics["write_amplification"]
+        )
+        self.assertIn('element("p", "chart-description")', report)
+        self.assertIn(
+            "description.textContent = `${descriptionFor(scenario, phase)} ${metric[4]}`;",
+            report,
         )
 
     def test_null_device_stats_do_not_become_zero_amplification(self) -> None:

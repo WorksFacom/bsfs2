@@ -13,17 +13,208 @@ REPORT_METRICS = (
         "Durable throughput",
         "MiB/s",
         "Higher is better",
+        "Logical data divided by operation time plus any recorded final flush; higher is better.",
     ),
-    ("durable_iops", "Durable IOPS", "ops/s", "Higher is better"),
-    ("durable_total_ns", "Durable total time", "ns", "Lower is better"),
-    ("latency_p99_ns", "p99 latency", "ns", "Lower is better"),
+    (
+        "durable_iops",
+        "Durable IOPS",
+        "ops/s",
+        "Higher is better",
+        "Completed operations divided by operation time plus any recorded final flush; higher is better.",
+    ),
+    (
+        "durable_total_ns",
+        "Durable total time",
+        "ns",
+        "Lower is better",
+        "Operation-path time plus any recorded final flush; lower is better.",
+    ),
+    (
+        "latency_p99_ns",
+        "p99 latency",
+        "ns",
+        "Lower is better",
+        "Nearest-rank p99 of individual operation latencies, excluding the final flush; lower is better.",
+    ),
     (
         "write_amplification",
         "Write amplification",
         "device bytes / logical bytes",
         "Lower is better",
+        "Device bytes written per logical byte, shown only for phases with a final flush; lower is better.",
     ),
 )
+
+
+PHASE_DESCRIPTIONS = {
+    "bulk": {
+        "sequential-write": (
+            "Creates one file, writes it sequentially in 1 MiB requests, then flushes it."
+        ),
+        "sequential-read-cold": (
+            "Reads and validates the whole file sequentially after caches are dropped."
+        ),
+        "sequential-read-warm": (
+            "Repeats the sequential read and validation with the file data cached."
+        ),
+        "random-read-4k": (
+            "Performs deterministic 4 KiB random reads and validates every block."
+        ),
+        "random-overwrite-4k": (
+            "Performs deterministic 4 KiB in-place overwrites, then flushes them."
+        ),
+        "verify-overwrites": (
+            "Rereads every overwritten block and validates its most recent contents."
+        ),
+    },
+    "metadata": {
+        "mkdir": "Creates the benchmark directory tree, then flushes it.",
+        "create": "Creates and closes empty files across the directory tree, then flushes it.",
+        "lookup-stat-cold": (
+            "Stats every file in randomized order after caches are dropped and validates its size."
+        ),
+        "lookup-stat-warm": (
+            "Repeats the randomized stat pass with dentries cached and validates each file's size."
+        ),
+        "iteration": (
+            "Enumerates every directory and verifies that every expected file appears exactly once."
+        ),
+        "rename": (
+            "Renames a fixed subset of files into neighboring directories, then flushes the changes."
+        ),
+        "native-namespace-removal": (
+            "Unlinks every file from the namespace, then flushes the removals."
+        ),
+        "directory-removal": (
+            "Removes the emptied child directories and benchmark root, then flushes the removals."
+        ),
+        "verify-empty-namespace": (
+            "Checks that the removed benchmark namespace no longer exists."
+        ),
+    },
+    "mixed": {
+        "create-tree": (
+            "Creates and writes a tree of mixed-size files, then flushes the complete tree."
+        ),
+        "cold-read-tree": (
+            "Reads the mixed-size files in randomized order after caches are dropped and validates their contents."
+        ),
+        "append-4k": "Appends 4 KiB to a selected fifth of the files.",
+        "overwrite-4k": "Overwrites 4 KiB in place in a different selected fifth of the files.",
+        "rename": "Renames a selected tenth of the files within the tree.",
+        "native-namespace-removal": "Unlinks a selected fifth of the files from the namespace.",
+        "edit-cycle-durable-total": (
+            "Combines the append, overwrite, rename, and unlink edit phases and their final flush."
+        ),
+        "verify-tree": (
+            "Checks every file's expected path, size, contents, and removal state after the edit cycle."
+        ),
+    },
+    "concurrency-seq": {
+        "sequential-write": (
+            "Concurrent workers each write a separate file sequentially in 1 MiB requests."
+        ),
+        "sequential-read-cold": (
+            "Concurrent workers each read and validate a separate file after caches are dropped."
+        ),
+    },
+    "concurrency-mixed": {
+        "mixed-create": (
+            "Concurrent workers each create and write a separate mixed-size file tree."
+        ),
+        "mixed-read": (
+            "Concurrent workers each read and validate their separate mixed-size "
+            "file tree after caches are dropped."
+        ),
+        "mixed-edit": (
+            "Concurrent workers append, overwrite, rename, or unlink selected files in their own trees."
+        ),
+        "mixed-verify": (
+            "Concurrent workers validate every expected path, size, content change, and removal in their own trees."
+        ),
+    },
+    "recovery-pressure": {
+        "seed-create": (
+            "Creates and writes the initial set of 64 KiB recovery-pressure files, then flushes them."
+        ),
+        "seed-native-namespace-removal": (
+            "Unlinks the initial seed files, records reclaim activity, then flushes the removals."
+        ),
+        "verify-survivors": (
+            "Enumerates the final refill's surviving files and validates every file's contents."
+        ),
+    },
+    "old-recovery": {
+        "create": (
+            "Creates and writes the 64 KiB files used by the old-BSFS recovery "
+            "test, then flushes them."
+        ),
+        "native-retention-logical-deletion": (
+            "Logically deletes the files while old-BSFS retains recovery entries, then flushes the deletions."
+        ),
+        "retention-verify": (
+            "Lists retained recovery entries and verifies that every deleted file is represented."
+        ),
+        "restore-fixed-subset": (
+            "Restores a fixed subset of retained files, validates their contents, then flushes the restores."
+        ),
+        "explicit-purge": (
+            "Explicitly purges retained recovery data, records reclaimed blocks, then flushes the purge."
+        ),
+    },
+}
+
+
+def _phase_description(scenario: str, phase: str) -> str:
+    """describe a workload phase, including the generated per-worker names."""
+    base_phase = phase
+    worker_suffix = ""
+    worker_match = re.fullmatch(r"(.+)-worker-(\d+)", phase)
+    if scenario in {"concurrency-seq", "concurrency-mixed"} and worker_match:
+        base_phase = worker_match.group(1)
+        worker_suffix = (
+            f" This chart isolates worker {worker_match.group(2)} within each "
+            "worker-count configuration."
+        )
+    elif scenario in {"concurrency-seq", "concurrency-mixed"}:
+        worker_suffix = (
+            " This chart aggregates all workers in each worker-count configuration."
+        )
+
+    description = PHASE_DESCRIPTIONS.get(scenario, {}).get(base_phase)
+    if description is None and scenario == "recovery-pressure":
+        refill_match = re.fullmatch(r"cycle-(\d+)-refill", phase)
+        removal_match = re.fullmatch(r"cycle-(\d+)-native-namespace-removal", phase)
+        if refill_match:
+            description = (
+                f"Recovery cycle {refill_match.group(1)} creates 64 KiB files "
+                "until the reclaim target or ENOSPC is reached, then flushes them."
+            )
+        elif removal_match:
+            description = (
+                f"Recovery cycle {removal_match.group(1)} unlinks the preceding "
+                "refill files, records reclaim activity, then flushes the removals."
+            )
+    if description is None:
+        description = f'Compares filesystems for benchmark phase "{phase}".'
+    return description + worker_suffix
+
+
+def _phase_descriptions(
+    summary: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    descriptions: dict[str, dict[str, str]] = {}
+    for row in summary:
+        scenario = row.get("scenario")
+        phase = row.get("phase")
+        if scenario is None or phase is None:
+            continue
+        scenario_name = str(scenario)
+        phase_name = str(phase)
+        descriptions.setdefault(scenario_name, {})[phase_name] = _phase_description(
+            scenario_name, phase_name
+        )
+    return descriptions
 
 
 def _json_for_html(value: Any) -> str:
@@ -142,6 +333,7 @@ def render_report(
             "skipped": skipped,
             "fields": fields,
             "metrics": REPORT_METRICS,
+            "phaseDescriptions": _phase_descriptions(summary),
         }
     )
 
@@ -307,6 +499,7 @@ select, input {
 .range-cap { stroke: var(--range-cap); stroke-width: 2; }
 .bar { fill: var(--blue); transition: fill .15s ease; }
 .bar:hover { fill: var(--accent); }
+.chart-description { margin: 9px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
 .chart-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--danger); border-radius: 4px; background: var(--notice-danger); font-size: .85rem; }
 .chart-label { fill: var(--muted); font-size: 11px; }
 .chart-value { fill: var(--ink); font-size: 11px; font-weight: 700; }
@@ -592,6 +785,11 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     return [...new Set([...(phases[phase] || []), ...(phases[""] || [])])].sort();
   }
 
+  function descriptionFor(scenario, phase) {
+    return data.phaseDescriptions[scenario]?.[phase] ||
+      `Compares filesystems for benchmark phase "${phase}".`;
+  }
+
   function renderComparisons() {
     const grouped = new Map();
     data.summary.forEach((row) => {
@@ -625,9 +823,14 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
             selector.append(option);
           });
           const chartHolder = element("div");
-          const draw = () => chartHolder.replaceChildren(renderChart(rows, available[Number(selector.value)]));
+          const description = element("p", "chart-description");
+          const draw = () => {
+            const metric = available[Number(selector.value)];
+            chartHolder.replaceChildren(renderChart(rows, metric));
+            description.textContent = `${descriptionFor(scenario, phase)} ${metric[4]}`;
+          };
           selector.addEventListener("change", draw);
-          phaseBody.append(selector, chartHolder);
+          phaseBody.append(selector, chartHolder, description);
           draw();
         }
         const failed = failedFor(scenario, phase);
