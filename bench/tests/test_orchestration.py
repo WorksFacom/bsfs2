@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,7 +21,7 @@ from bench.orchestration.analyze import (
     load_records,
 )
 from bench.orchestration.report import render_report
-from bench.orchestration.command import CommandRunner
+from bench.orchestration.command import CommandResult, CommandRunner
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
@@ -34,7 +36,17 @@ from bench.orchestration.safety import (
     validate_loop_image,
 )
 from bench.orchestration.topology import physical_cores, sibling_conflicts
+from bench.orchestration.filesystems import FilesystemAdapter, FilesystemContext
+from bench.orchestration.plan import build_plan
+from bench.orchestration.progress import (
+    Level,
+    PhaseMetricsReader,
+    RunReporter,
+    describe_metrics,
+    format_duration,
+)
 from bench.orchestration.run import (
+    BenchmarkRun,
     main,
     sudo_invoker_owner,
     transfer_result_ownership,
@@ -377,6 +389,9 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 filesystems=("bsfs",),
                 dry_run=False,
                 skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
             )
             with (
                 patch("bench.orchestration.run.parse_args", return_value=args),
@@ -408,6 +423,9 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 filesystems=("ext4",),
                 dry_run=False,
                 skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
             )
             with (
                 patch("bench.orchestration.run.parse_args", return_value=args),
@@ -753,6 +771,519 @@ class AnalysisTests(unittest.TestCase):
 
             self.assertEqual(len(records), 1)
             self.assertEqual(len(skipped), 1)
+
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class StubAdapter(FilesystemAdapter):
+    """stands in for a real filesystem so the matrices can be walked offline."""
+
+    mount_options = "stub"
+
+    def __init__(self, context: FilesystemContext, name: str):
+        super().__init__(context)
+        self.name = name
+
+    def format(self) -> None:
+        return
+
+    def mount(self) -> None:
+        return
+
+    def unmount(self) -> None:
+        return
+
+
+class PlanTests(unittest.TestCase):
+    def _executed_phases(self, config_name: str) -> tuple[list, Any]:
+        config = load_config(REPOSITORY / f"bench/config/{config_name}.toml")
+        executed: list[tuple[str, str, str, int]] = []
+
+        def record(
+            self, adapter, scenario, phase, repetition, seed, workers=1, **kwargs
+        ):
+            executed.append((adapter.name, scenario, phase, workers))
+
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = RunReporter(stream=io.StringIO(), level=Level.QUIET)
+            runner = CommandRunner(
+                Path(directory), dry_run=True, reporter=reporter
+            )
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=Path(directory),
+                config=config,
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            with (
+                patch(
+                    "bench.orchestration.run.create_adapter",
+                    side_effect=lambda name, context: StubAdapter(context, name),
+                ),
+                patch.object(
+                    BenchmarkRun, "run_phase", autospec=True, side_effect=record
+                ),
+            ):
+                if config.publication:
+                    benchmark.validation_matrix(config.filesystems)
+                benchmark.common_matrix(config.filesystems)
+                benchmark.recovery_matrix(config.filesystems)
+                benchmark.concurrency_matrix(config.filesystems)
+        return executed, config
+
+    def test_quick_plan_matches_executed_phases(self) -> None:
+        executed, config = self._executed_phases("quick")
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(len(executed), plan.total_phases)
+        for filesystem in config.filesystems:
+            self.assertEqual(
+                sum(1 for row in executed if row[0] == filesystem),
+                plan.phases_for(filesystem),
+                filesystem,
+            )
+
+    def test_publication_plan_matches_executed_phases(self) -> None:
+        executed, config = self._executed_phases("publication")
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(len(executed), plan.total_phases)
+
+    def test_plan_names_the_phases_the_matrices_run(self) -> None:
+        executed, config = self._executed_phases("quick")
+        plan = build_plan(config, config.filesystems)
+        planned = sorted(
+            (unit.filesystem, unit.scenario, phase, unit.workers)
+            for unit in plan.units
+            for phase in unit.phases
+        )
+
+        self.assertEqual(sorted(executed), planned)
+
+    def test_a_filesystem_only_in_the_config_is_still_planned(self) -> None:
+        config = load_config(REPOSITORY / "bench/config/quick.toml")
+        plan = build_plan(config, ("ext4",))
+
+        self.assertEqual(plan.filesystems, ("ext4",))
+        # ext4 is a kernel filesystem, so it has no recovery units
+        self.assertEqual(
+            {unit.matrix for unit in plan.units}, {"common", "concurrency"}
+        )
+
+
+class PhaseReportingTests(unittest.TestCase):
+    def test_a_phase_reports_the_metric_its_runner_just_wrote(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            stream = io.StringIO()
+            reporter = RunReporter(
+                stream=stream, level=Level.NORMAL, color=False
+            )
+            runner = CommandRunner(run_dir, reporter=reporter)
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=run_dir,
+                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
+
+            def fake_run(argv, **kwargs):
+                with benchmark.results.open("a", encoding="utf-8") as results:
+                    results.write(
+                        json.dumps(result(workers=1, throughput=312.4)) + "\n"
+                    )
+                return CommandResult((), 0, "", "")
+
+            with patch.object(runner, "run", side_effect=fake_run):
+                benchmark.run_phase(adapter, "bulk", "prepare", 0, 1234)
+
+            text = stream.getvalue()
+            self.assertIn("bulk/prepare", text)
+            self.assertIn("312.4 MiB/s", text)
+
+    def test_a_phase_that_writes_nothing_still_reports_its_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            stream = io.StringIO()
+            reporter = RunReporter(
+                stream=stream, level=Level.NORMAL, color=False
+            )
+            runner = CommandRunner(run_dir, reporter=reporter)
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=run_dir,
+                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
+
+            with patch.object(
+                runner, "run", return_value=CommandResult((), 0, "", "")
+            ):
+                benchmark.run_phase(adapter, "bulk", "prepare", 0, 1234)
+
+            self.assertIn("bulk/prepare", stream.getvalue())
+            self.assertFalse(reporter.degraded)
+
+
+class ReporterTests(unittest.TestCase):
+    def _reporter(self, level: Level = Level.NORMAL) -> tuple[RunReporter, Any]:
+        stream = io.StringIO()
+        return RunReporter(stream=stream, level=level, color=False), stream
+
+    def test_output_has_no_escape_sequences_without_color(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        text = stream.getvalue()
+        self.assertNotIn("\x1b", text)
+        self.assertIn("bulk/prepare", text)
+        self.assertIn("FAILED", text)
+        self.assertTrue(text.endswith("\n"))
+
+    def test_every_line_puts_its_duration_in_one_column(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.timed("condition device", "no-discard"):
+            pass
+        reporter.cache_event("unmount + drop_caches + mount", 1.2)
+        for scenario, phase, workers in (
+            ("bulk", "prepare", 1),
+            ("concurrency-mixed", "create", 4),
+        ):
+            with reporter.phase(
+                filesystem="ext4",
+                scenario=scenario,
+                phase=phase,
+                workers=workers,
+            ):
+                pass
+        reporter.end_section()
+
+        columns = []
+        for line in stream.getvalue().splitlines():
+            if not line.startswith("  "):
+                continue
+            # the duration is the first thing on a line shaped like a time
+            match = re.search(r"\d+\.\ds", line)
+            if match:
+                columns.append(match.end())
+
+        self.assertGreaterEqual(len(columns), 5, stream.getvalue())
+        self.assertEqual(len(set(columns)), 1, stream.getvalue())
+
+    def test_color_only_adds_escapes_around_the_same_text(self) -> None:
+        plain, plain_stream = self._reporter()
+        stream = io.StringIO()
+        colored = RunReporter(stream=stream, level=Level.NORMAL, color=True)
+        for reporter in (plain, colored):
+            reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        self.assertIn("\x1b", stream.getvalue())
+        self.assertEqual(
+            ANSI.sub("", stream.getvalue()), plain_stream.getvalue()
+        )
+
+    def test_quiet_keeps_failures_and_drops_phase_lines(self) -> None:
+        reporter, stream = self._reporter(Level.QUIET)
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        text = stream.getvalue()
+        self.assertNotIn("bulk/prepare", text)
+        self.assertIn("FAILED", text)
+
+    def test_commands_are_reported_only_when_verbose(self) -> None:
+        quiet, quiet_stream = self._reporter()
+        verbose, verbose_stream = self._reporter(Level.VERBOSE)
+        for reporter in (quiet, verbose):
+            reporter.command("ext4-format", ("mkfs.ext4", "/dev/loop0"), 0, 1.5)
+
+        self.assertEqual(quiet_stream.getvalue(), "")
+        self.assertIn("ext4-format", verbose_stream.getvalue())
+
+    def test_a_broken_stream_never_reaches_the_run(self) -> None:
+        class Exploding(io.StringIO):
+            def write(self, text: str) -> int:
+                raise OSError("no terminal")
+
+        reporter = RunReporter(stream=Exploding(), level=Level.NORMAL, color=False)
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp"),
+        )
+
+        self.assertTrue(reporter.degraded)
+        self.assertEqual(reporter.completed_phases, 1)
+
+    def test_a_failing_phase_is_counted_and_marked(self) -> None:
+        reporter, stream = self._reporter()
+        with self.assertRaises(RuntimeError):
+            with reporter.phase(
+                filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+            ):
+                raise RuntimeError("boom")
+
+        self.assertEqual(reporter.failed_phases, 1)
+        self.assertIn("FAILED", stream.getvalue())
+
+    def test_summary_reports_the_phases_that_were_reached(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=2,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertIn("1/30 planned phases were reached", text)
+        self.assertIn("kernel log: 2 relevant findings", text)
+        self.assertIn("analyze /tmp/run", text)
+
+    def test_each_unit_reports_its_own_elapsed_time(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        for phase in ("prepare", "cold-read"):
+            with reporter.phase(
+                filesystem="ext4", scenario="bulk", phase=phase, workers=1
+            ):
+                pass
+        reporter.unit_start(
+            matrix="common", filesystem="btrfs", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="btrfs", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertIn("unit total (2 phases)", text)
+        self.assertIn("unit total (1 phase)", text)
+        # the first unit closes above the second headline, the last one at summary
+        self.assertLess(text.index("unit total (2 phases)"), text.index("btrfs"))
+
+    def test_sections_report_their_elapsed_time_once(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.section("preflight")
+        reporter.step("benchmark binaries ok")
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertEqual(text.count("preflight total"), 1)
+        self.assertEqual(text.count("matrix total"), 1)
+        self.assertEqual(text.count("unit total"), 1)
+        self.assertLess(text.index("preflight total"), text.index("matrix"))
+        self.assertLess(text.index("unit total"), text.index("matrix total"))
+
+    def test_quiet_drops_unit_and_section_totals(self) -> None:
+        reporter, stream = self._reporter(Level.QUIET)
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertNotIn("unit total", text)
+        self.assertNotIn("matrix total", text)
+        self.assertIn("summary  test", text)
+
+    def test_durations_read_as_time(self) -> None:
+        self.assertEqual(format_duration(3.14), "3.1s")
+        self.assertEqual(format_duration(305), "5m05s")
+        self.assertEqual(format_duration(7200), "2h00m")
+
+
+class PhaseMetricsTests(unittest.TestCase):
+    def test_only_rows_written_by_this_phase_are_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(
+                json.dumps(result(workers=1, throughput=10.0)) + "\n",
+                encoding="utf-8",
+            )
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(result(workers=1, throughput=99.0)) + "\n"
+                )
+
+            record = reader.collect(path)
+
+            self.assertIsNotNone(record)
+            self.assertEqual(record["durable_throughput_mib_s"], 99.0)
+
+    def test_the_aggregate_row_wins_over_worker_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            worker = dict(result(workers=4, throughput=10.0), worker_id=0)
+            aggregate = result(workers=4, throughput=40.0)
+            path.write_text(
+                json.dumps(worker) + "\n" + json.dumps(aggregate) + "\n"
+                + json.dumps(dict(worker, worker_id=1)) + "\n",
+                encoding="utf-8",
+            )
+
+            record = reader.collect(path)
+
+            self.assertEqual(record["durable_throughput_mib_s"], 40.0)
+
+    def test_a_truncated_line_is_left_for_the_next_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            path.write_text('{"filesystem": "bsfs", "scen', encoding="utf-8")
+
+            self.assertIsNone(reader.collect(path))
+
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write('ario": "bulk"}\n')
+
+            self.assertEqual(
+                reader.collect(path),
+                {"filesystem": "bsfs", "scenario": "bulk"},
+            )
+
+    def test_a_missing_file_is_not_fatal(self) -> None:
+        reader = PhaseMetricsReader()
+        missing = Path("/nonexistent/results.jsonl")
+        reader.start(missing)
+
+        self.assertIsNone(reader.collect(missing))
+
+    def test_metadata_phases_are_summarized_as_operations(self) -> None:
+        record = {
+            "durable_throughput_mib_s": 0.02,
+            "durable_iops": 18200.0,
+            "latency_p99_ns": 1_400_000,
+            "validation_status": "passed",
+        }
+
+        self.assertEqual(describe_metrics(record), "18.2k ops/s  p99 1.40ms")
+
+    def test_a_failed_validation_is_shouted_about(self) -> None:
+        self.assertEqual(
+            describe_metrics({"validation_status": "failed"}),
+            "VALIDATION failed",
+        )
+
+
+class CommandDurationTests(unittest.TestCase):
+    def test_commands_record_their_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory))
+            runner.run(["true"], label="probe")
+
+            record = json.loads(
+                (Path(directory) / "commands.jsonl").read_text(encoding="utf-8")
+            )
+
+            self.assertGreaterEqual(record["duration_s"], 0.0)
+            self.assertEqual(record["returncode"], 0)
+
+    def test_a_failing_command_leaves_a_stderr_log_to_point_at(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory))
+            runner.run(["false"], check=False, label="probe")
+
+            self.assertIsNotNone(runner.last_error_log)
+            self.assertTrue(runner.last_error_log.exists())
 
 
 if __name__ == "__main__":
