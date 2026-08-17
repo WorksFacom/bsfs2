@@ -5,13 +5,15 @@
  * Everything about allocating blocks in BSFS is strategy-independent except one
  * question: given the bitmap, which free block do we hand out next? The linear
  * scan that used to answer it lives in src/alloc_linear.c now; src/alloc_heap.c
- * answers it with a min-heap, and further strategies (two-level index, red-black
- * tree) plug in the same way.
+ * answers it with a min-heap of recycled blocks, src/alloc_twolevel.c with a
+ * free count per bucket, and further strategies (red-black tree, ...) plug in
+ * the same way.
  *
  * Exactly one implementation is compiled into the module, chosen at build time:
  *
- *   make                    # BSFS_ALLOC=linear, the historical behaviour
- *   make BSFS_ALLOC=heap    # min-heap
+ *   make                        # BSFS_ALLOC=linear, the historical behaviour
+ *   make BSFS_ALLOC=heap        # min-heap
+ *   make BSFS_ALLOC=twolevel    # two-level index
  *
  * so these are plain extern functions rather than a vtable - the linker picks
  * the implementation and the calls stay direct.

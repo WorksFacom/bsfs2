@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs the whole QEMU suite against every block-allocation strategy.
 #
-#   ./tests/alloc_matrix.sh                 # linear heap
+#   ./tests/alloc_matrix.sh                 # linear heap twolevel
 #   ./tests/alloc_matrix.sh heap            # just one
 #   MATRIX_TESTS="smoke alloc" ./tests/alloc_matrix.sh
 #
@@ -24,7 +24,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO" || exit 2
 
 STRATEGIES=("$@")
-[ ${#STRATEGIES[@]} -eq 0 ] && STRATEGIES=(linear heap)
+[ ${#STRATEGIES[@]} -eq 0 ] && STRATEGIES=(linear heap twolevel)
 
 # name:timeout. The timeouts are wall-clock for a KASAN kernel in QEMU, and the
 # slow ones are slow for a reason: reclaim and alloc each fill a 32 MB image
