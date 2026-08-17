@@ -775,7 +775,9 @@ int bsfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
     // the old one and the blocks it replaced must not be recycled. The commit
     // path checks this before releasing anything.
     mutex_lock(&sbi->pending_free_lock);
-    sbi->writeback_failed = true;
+    // a hard error outranks a stored ENOSPC, so the commit reports the worst thing that happened
+    if (!sbi->writeback_error || (sbi->writeback_error == -ENOSPC && ret != -ENOSPC))
+      sbi->writeback_error = ret;
     mutex_unlock(&sbi->pending_free_lock);
 
     return ret;

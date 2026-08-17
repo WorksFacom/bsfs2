@@ -88,10 +88,11 @@ struct bsfs_super_info {
   struct bsfs_alloc_stats alloc_stats;
 #endif
 
-  // Set when ->write_inode could not persist an inode, which means some
-  // per-inode root is still only in memory. While it is set no deferred block
-  // may be released: we cannot tell which ones the failed root replaced.
-  bool writeback_failed;
+  // errno from the last ->write_inode that could not persist an inode, which
+  // means some per-inode root is still only in memory. while it is non-zero no
+  // deferred block may be released, since we cannot tell which ones that root
+  // replaced. -ENOSPC here is routine, not a device problem.
+  int writeback_error;
 
   // Blocks that copy-on-write replaced. They are only handed back to the
   // allocator at a commit point, once the shadow tree and the roots pointing at
