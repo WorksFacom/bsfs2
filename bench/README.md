@@ -64,11 +64,16 @@ sudo python3 -m bench.orchestration.run \
 ```
 
 When launched through `sudo`, the completed result directory is handed back to
-the invoking user, so analysis can run without `sudo`.
+the invoking user, so analysis can run without `sudo`. The mountpoint under
+`mnt/` is skipped while it is still mounted, and a loop image passed with
+`--loop-image` lives outside the result directory and stays root-owned.
 
 Before an actual run, build the C runner(s) required by the selected
 filesystems. The launcher verifies they are executable before it creates or
-attaches the loop image; it does not build them automatically.
+attaches the loop image; it does not build them automatically, so rebuild after
+editing anything under `bench/src/`. Every run records the size, mtime, and
+SHA-256 of each built artifact under `built_artifacts` in `manifest.json`, so a
+stale binary is detectable after the fact.
 
 When `bsfs` is selected, the launcher does build `bsfs2.ko`, removes any
 stale `bsfs2` module, and verifies the new module can load on the running
@@ -82,6 +87,64 @@ one-/four-worker scenario. Specify only installed filesystems; `zfs` and
 `zfs-4k` require working `zpool`, `zfs`, and the matching kernel module. A
 filesystem whose tools are missing is recorded as a failure and the run exits
 nonzero.
+
+## Progress output
+
+Every run reports what it is doing on **stderr**, so `stdout` stays empty and
+the run can be piped or `tee`d without losing the log. The header states the
+config, the pinned CPUs, the result directory, and the full plan: how many
+filesystems, mkfs cycles, and measured phases the matrix will execute. After
+that, each fresh filesystem prints its conditioning, mkfs, and mount, and each
+phase prints a counter, its wall time, and the headline metric read back from
+`raw/results.jsonl`:
+
+```
+[fs 1/2 bsfs] common/bulk r0  eta 9m12s
+  condition device (no-discard)                   0.2s
+  mkfs bsfs                                       0.9s
+  mount (noatime)                                 0.1s
+  [ 1/62   2%] bulk/prepare               w1     14.2s   312.4 MiB/s
+  cache: unmount + drop_caches + mount            0.6s
+  [ 2/62   3%] bulk/cold-read             w1     21.7s   198.1 MiB/s  p99   1.40ms
+  [ 9/62  15%] metadata/stat-warm         w1      2.3s  555.5k ops/s  p99    2.5us
+  unmount                                         0.3s
+  unit total (6 phases)                          38.1s
+```
+
+Every line shares one column grid, so the durations of the mkfs cycle's own
+steps line up with the measured phases', and the throughput and p99 cells stack
+whatever unit they end up in.
+
+Each mkfs cycle closes with `unit total`, the real time it took including its
+conditioning, mkfs, mount and unmount, and each section closes with its own
+total, so the ETA can be read against what actually happened:
+
+```
+preflight
+  ...
+  preflight total                                1m04s
+
+matrix
+  ...
+  matrix total                                  42m11s
+```
+
+Failures are printed as they happen, with the path to the failing command's
+captured stderr, instead of only surfacing in `manifest.json`. A closing
+summary gives the total wall time, per-filesystem phase and failure counts,
+the kernel-log finding count, and the `analyze` command to run next.
+
+| flag | effect |
+| --- | --- |
+| *(default)* | phase-level progress, device steps, cache transitions, unit and section totals, failures |
+| `-v`, `--verbose` | additionally every subprocess with its duration, and the per-filesystem plan breakdown |
+| `-q`, `--quiet` | only the run title, failures, and the closing summary |
+| `--no-color` | never emit ANSI colour (also honoured via `NO_COLOR`, and colour is off automatically when stderr is not a terminal) |
+
+Reporting cannot perturb a measurement: it writes only from the main thread
+between subprocess calls, uses no background threads or timers, and reads
+results back only after the measured process has exited. Each command's wall
+time is also recorded as `duration_s` in `commands.jsonl`.
 
 ## Physical publication run
 

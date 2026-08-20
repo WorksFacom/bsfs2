@@ -39,8 +39,19 @@ def _run_capture(
             capture_output=True,
             check=False,
         )
-    except FileNotFoundError as error:
+    except OSError as error:
         return subprocess.CompletedProcess(argv, 127, "", str(error))
+
+
+def build_module_argv(repository: Path) -> list[str]:
+    """make -C moves CURDIR but leaves PWD pointing at the caller's directory,
+    and the kernel build uses M=$(PWD). pass PWD explicitly so the build lands
+    in the repo no matter where this got invoked from."""
+    return ["make", "-C", str(repository), f"PWD={repository}"]
+
+
+def _module_loaded() -> bool:
+    return Path("/sys/module/bsfs2").exists()
 
 
 def _module_vermagic(module: Path) -> str:
@@ -55,6 +66,10 @@ def _module_failure(
     step: str,
     result: subprocess.CompletedProcess[str],
     module: Path,
+    remedy: str = (
+        "Set KDIR to the running kernel's build tree, rebuild bsfs2.ko, "
+        "and retry."
+    ),
 ) -> BsfsModuleError:
     output = (result.stderr.strip() or result.stdout.strip() or "no output")
     return BsfsModuleError(
@@ -63,8 +78,7 @@ def _module_failure(
         f"running kernel: {platform.release()}\n"
         f"module vermagic: {_module_vermagic(module)}\n"
         f"command output: {output}\n"
-        "Set KDIR to the running kernel's build tree, rebuild bsfs2.ko, "
-        "and retry."
+        f"{remedy}"
     )
 
 
@@ -76,13 +90,22 @@ def validate_bsfs_module(repository: Path) -> None:
     CommandRunner, so a failure cannot create a benchmark result directory.
     """
     module = repository / "bsfs2.ko"
-    build = _run_capture(["make", "-C", str(repository)])
+    build = _run_capture(build_module_argv(repository))
     if build.returncode != 0:
         raise _module_failure("building bsfs2.ko", build, module)
 
     # Match the adapter's behavior: an already-loaded stale module cannot be
-    # the module being benchmarked.  A failed removal is surfaced by insmod.
-    _run_capture(["rmmod", "bsfs2"])
+    # the module being benchmarked. rmmod also fails when nothing's loaded,
+    # so /sys/module tells that harmless case apart from one still in use.
+    removal = _run_capture(["rmmod", "bsfs2"])
+    if removal.returncode != 0 and _module_loaded():
+        raise _module_failure(
+            "removing the stale bsfs2 module",
+            removal,
+            module,
+            "bsfs2 is loaded and still in use; unmount every bsfs filesystem "
+            "and close anything holding one open, then retry.",
+        )
     load = _run_capture(["insmod", str(module)])
     if load.returncode != 0:
         raise _module_failure("loading bsfs2.ko", load, module)

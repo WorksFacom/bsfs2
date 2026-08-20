@@ -120,7 +120,7 @@ static int __commit_deferred_frees(struct super_block *sb, bool writeback) {
   sbi->pending_free_cap   = 0;
 
   if (writeback)
-    sbi->writeback_failed = false;
+    sbi->writeback_error = 0;
 
   mutex_unlock(&sbi->pending_free_lock);
 
@@ -157,11 +157,15 @@ static int __commit_deferred_frees(struct super_block *sb, bool writeback) {
   // inode still carries the new root in memory, so the tree on disk is the old
   // one and these blocks are exactly what it points at. Under ENOSPC that
   // failure is routine, since persisting an inode has to allocate.
-  if (!ret && sbi->writeback_failed)
-    ret = -EIO;
+  if (!ret)
+    ret = sbi->writeback_error;
 
   if (ret) {
-    pr_warn("commit barrier failed (%d), keeping %zu deferred blocks\n", ret, count);
+    if (ret == -ENOSPC)
+      pr_warn_ratelimited("commit barrier out of space, keeping %zu deferred blocks\n", count);
+    else
+      pr_warn("commit barrier failed (%d), keeping %zu deferred blocks\n", ret, count);
+
     requeue_pending(sb, blocks, count);
     return ret;
   }

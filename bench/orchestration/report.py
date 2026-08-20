@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -12,27 +13,247 @@ REPORT_METRICS = (
         "Durable throughput",
         "MiB/s",
         "Higher is better",
+        "Logical data divided by operation time plus any recorded final flush; higher is better.",
     ),
-    ("durable_iops", "Durable IOPS", "ops/s", "Higher is better"),
-    ("durable_total_ns", "Durable total time", "ns", "Lower is better"),
-    ("latency_p99_ns", "p99 latency", "ns", "Lower is better"),
+    (
+        "durable_iops",
+        "Durable IOPS",
+        "ops/s",
+        "Higher is better",
+        "Completed operations divided by operation time plus any recorded final flush; higher is better.",
+    ),
+    (
+        "durable_total_ns",
+        "Durable total time",
+        "ns",
+        "Lower is better",
+        "Operation-path time plus any recorded final flush; lower is better.",
+    ),
+    (
+        "latency_p99_ns",
+        "p99 latency",
+        "ns",
+        "Lower is better",
+        "Nearest-rank p99 of individual operation latencies, excluding the final flush; lower is better.",
+    ),
     (
         "write_amplification",
         "Write amplification",
         "device bytes / logical bytes",
         "Lower is better",
+        "Device bytes written per logical byte, shown only for phases with a final flush; lower is better.",
     ),
 )
 
 
+PHASE_DESCRIPTIONS = {
+    "bulk": {
+        "sequential-write": (
+            "Creates one file, writes it sequentially in 1 MiB requests, then flushes it."
+        ),
+        "sequential-read-cold": (
+            "Reads and validates the whole file sequentially after caches are dropped."
+        ),
+        "sequential-read-warm": (
+            "Repeats the sequential read and validation with the file data cached."
+        ),
+        "random-read-4k": (
+            "Performs deterministic 4 KiB random reads and validates every block."
+        ),
+        "random-overwrite-4k": (
+            "Performs deterministic 4 KiB in-place overwrites, then flushes them."
+        ),
+        "verify-overwrites": (
+            "Rereads every overwritten block and validates its most recent contents."
+        ),
+    },
+    "metadata": {
+        "mkdir": "Creates the benchmark directory tree, then flushes it.",
+        "create": "Creates and closes empty files across the directory tree, then flushes it.",
+        "lookup-stat-cold": (
+            "Stats every file in randomized order after caches are dropped and validates its size."
+        ),
+        "lookup-stat-warm": (
+            "Repeats the randomized stat pass with dentries cached and validates each file's size."
+        ),
+        "iteration": (
+            "Enumerates every directory and verifies that every expected file appears exactly once."
+        ),
+        "rename": (
+            "Renames a fixed subset of files into neighboring directories, then flushes the changes."
+        ),
+        "native-namespace-removal": (
+            "Unlinks every file from the namespace, then flushes the removals."
+        ),
+        "directory-removal": (
+            "Removes the emptied child directories and benchmark root, then flushes the removals."
+        ),
+        "verify-empty-namespace": (
+            "Checks that the removed benchmark namespace no longer exists."
+        ),
+    },
+    "mixed": {
+        "create-tree": (
+            "Creates and writes a tree of mixed-size files, then flushes the complete tree."
+        ),
+        "cold-read-tree": (
+            "Reads the mixed-size files in randomized order after caches are dropped and validates their contents."
+        ),
+        "append-4k": "Appends 4 KiB to a selected fifth of the files.",
+        "overwrite-4k": "Overwrites 4 KiB in place in a different selected fifth of the files.",
+        "rename": "Renames a selected tenth of the files within the tree.",
+        "native-namespace-removal": "Unlinks a selected fifth of the files from the namespace.",
+        "edit-cycle-durable-total": (
+            "Combines the append, overwrite, rename, and unlink edit phases and their final flush."
+        ),
+        "verify-tree": (
+            "Checks every file's expected path, size, contents, and removal state after the edit cycle."
+        ),
+    },
+    "concurrency-seq": {
+        "sequential-write": (
+            "Concurrent workers each write a separate file sequentially in 1 MiB requests."
+        ),
+        "sequential-read-cold": (
+            "Concurrent workers each read and validate a separate file after caches are dropped."
+        ),
+    },
+    "concurrency-mixed": {
+        "mixed-create": (
+            "Concurrent workers each create and write a separate mixed-size file tree."
+        ),
+        "mixed-read": (
+            "Concurrent workers each read and validate their separate mixed-size "
+            "file tree after caches are dropped."
+        ),
+        "mixed-edit": (
+            "Concurrent workers append, overwrite, rename, or unlink selected files in their own trees."
+        ),
+        "mixed-verify": (
+            "Concurrent workers validate every expected path, size, content change, and removal in their own trees."
+        ),
+    },
+    "recovery-pressure": {
+        "seed-create": (
+            "Creates and writes the initial set of 64 KiB recovery-pressure files, then flushes them."
+        ),
+        "seed-native-namespace-removal": (
+            "Unlinks the initial seed files, records reclaim activity, then flushes the removals."
+        ),
+        "verify-survivors": (
+            "Enumerates the final refill's surviving files and validates every file's contents."
+        ),
+    },
+    "old-recovery": {
+        "create": (
+            "Creates and writes the 64 KiB files used by the old-BSFS recovery "
+            "test, then flushes them."
+        ),
+        "native-retention-logical-deletion": (
+            "Logically deletes the files while old-BSFS retains recovery entries, then flushes the deletions."
+        ),
+        "retention-verify": (
+            "Lists retained recovery entries and verifies that every deleted file is represented."
+        ),
+        "restore-fixed-subset": (
+            "Restores a fixed subset of retained files, validates their contents, then flushes the restores."
+        ),
+        "explicit-purge": (
+            "Explicitly purges retained recovery data, records reclaimed blocks, then flushes the purge."
+        ),
+    },
+}
+
+
+def _phase_description(scenario: str, phase: str) -> str:
+    """describe a workload phase, including the generated per-worker names."""
+    base_phase = phase
+    worker_suffix = ""
+    worker_match = re.fullmatch(r"(.+)-worker-(\d+)", phase)
+    if scenario in {"concurrency-seq", "concurrency-mixed"} and worker_match:
+        base_phase = worker_match.group(1)
+        worker_suffix = (
+            f" This chart isolates worker {worker_match.group(2)} within each "
+            "worker-count configuration."
+        )
+    elif scenario in {"concurrency-seq", "concurrency-mixed"}:
+        worker_suffix = (
+            " This chart aggregates all workers in each worker-count configuration."
+        )
+
+    description = PHASE_DESCRIPTIONS.get(scenario, {}).get(base_phase)
+    if description is None and scenario == "recovery-pressure":
+        refill_match = re.fullmatch(r"cycle-(\d+)-refill", phase)
+        removal_match = re.fullmatch(r"cycle-(\d+)-native-namespace-removal", phase)
+        if refill_match:
+            description = (
+                f"Recovery cycle {refill_match.group(1)} creates 64 KiB files "
+                "until the reclaim target or ENOSPC is reached, then flushes them."
+            )
+        elif removal_match:
+            description = (
+                f"Recovery cycle {removal_match.group(1)} unlinks the preceding "
+                "refill files, records reclaim activity, then flushes the removals."
+            )
+    if description is None:
+        description = f'Compares filesystems for benchmark phase "{phase}".'
+    return description + worker_suffix
+
+
+def _phase_descriptions(
+    summary: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    descriptions: dict[str, dict[str, str]] = {}
+    for row in summary:
+        scenario = row.get("scenario")
+        phase = row.get("phase")
+        if scenario is None or phase is None:
+            continue
+        scenario_name = str(scenario)
+        phase_name = str(phase)
+        descriptions.setdefault(scenario_name, {})[phase_name] = _phase_description(
+            scenario_name, phase_name
+        )
+    return descriptions
+
+
 def _json_for_html(value: Any) -> str:
-    """Serialize data without allowing it to terminate the script element."""
+    """Serialize data without allowing it to terminate the script element.
+
+    allow_nan is off because NaN/Infinity aren't valid JSON. one slipping
+    through would make JSON.parse throw and blank the whole report, and
+    failing loud here beats shipping an empty page.
+    """
     return (
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
     )
+
+
+def _failed_by_phase(
+    failures: list[dict[str, Any]],
+) -> dict[str, dict[str, list[str]]]:
+    """a filesystem missing from a chart because it failed shouldn't read as
+    "not run". failures with no phase apply to every phase in the scenario,
+    so they land under the empty key."""
+    collected: dict[str, dict[str, set[str]]] = {}
+    for failure in failures:
+        scenario = failure.get("scenario")
+        filesystem = failure.get("filesystem")
+        if not scenario or not filesystem:
+            continue
+        phase = failure.get("phase")
+        collected.setdefault(str(scenario), {}).setdefault(
+            str(phase) if phase else "", set()
+        ).add(str(filesystem))
+    return {
+        scenario: {phase: sorted(names) for phase, names in sorted(phases.items())}
+        for scenario, phases in sorted(collected.items())
+    }
 
 
 def _manifest_context(manifest: dict[str, Any]) -> tuple[str, str, str]:
@@ -88,7 +309,7 @@ def _manifest_context(manifest: dict[str, Any]) -> tuple[str, str, str]:
 def render_report(
     *,
     run_dir: Path,
-    records: list[dict[str, Any]],
+    record_count: int,
     summary: list[dict[str, Any]],
     scaling: list[dict[str, Any]],
     failures: list[dict[str, Any]],
@@ -108,9 +329,11 @@ def render_report(
             "summary": summary,
             "scaling": scaling,
             "failures": failures,
+            "failedByPhase": _failed_by_phase(failures),
             "skipped": skipped,
             "fields": fields,
             "metrics": REPORT_METRICS,
+            "phaseDescriptions": _phase_descriptions(summary),
         }
     )
 
@@ -132,7 +355,7 @@ def render_report(
         "__RUN_ID__": escape(run_id),
         "__STATUS__": escape(status),
         "__STATUS_CLASS__": status_class,
-        "__RECORD_COUNT__": str(len(records)),
+        "__RECORD_COUNT__": str(record_count),
         "__GROUP_COUNT__": str(len(summary)),
         "__FILESYSTEM_COUNT__": str(len(filesystems)),
         "__SCENARIO_COUNT__": str(len(scenarios)),
@@ -143,10 +366,15 @@ def render_report(
         "__OVERRIDES__": escape(overrides),
         "__REPORT_DATA__": payload,
     }
-    report = REPORT_TEMPLATE
-    for marker, value in replacements.items():
-        report = report.replace(marker, value)
-    return report
+    # single pass so a substituted value never gets rescanned for a later
+    # marker; longest first so no marker gets shadowed by a prefix of itself
+    pattern = "|".join(
+        re.escape(marker)
+        for marker in sorted(replacements, key=len, reverse=True)
+    )
+    return re.sub(
+        pattern, lambda match: replacements[match.group()], REPORT_TEMPLATE
+    )
 
 
 def write_report(path: Path, **kwargs: Any) -> None:
@@ -161,6 +389,30 @@ REPORT_TEMPLATE = """<!doctype html>
 <title>__TITLE__</title>
 <style>
 :root {
+  color-scheme: light;
+  --page: #f4f7f8;
+  --panel: #ffffff;
+  --panel-raised: #edf3f6;
+  --line: #c8d5db;
+  --ink: #14232d;
+  --muted: #5d707b;
+  --accent: #087f72;
+  --blue: #276dcc;
+  --warning: #8c5a08;
+  --danger: #b4232f;
+  --shadow: 0 18px 50px rgb(31 55 67 / 12%);
+  --glow-blue: #d8edf7;
+  --glow-green: #d8eee9;
+  --panel-alpha: rgb(255 255 255 / 92%);
+  --control: #ffffff;
+  --notice-warning: #fff3d6;
+  --notice-danger: #fde9ec;
+  --axis: #6b8190;
+  --range-cap: #516874;
+  --table-head: #dce9ee;
+  --table-hover: #e7f1f5;
+}
+html[data-theme="dark"] {
   color-scheme: dark;
   --page: #071018;
   --panel: #0e1a25;
@@ -173,14 +425,24 @@ REPORT_TEMPLATE = """<!doctype html>
   --warning: #ffc768;
   --danger: #ff8585;
   --shadow: 0 18px 50px rgb(0 0 0 / 22%);
+  --glow-blue: #1d4966;
+  --glow-green: #153f3d;
+  --panel-alpha: rgb(14 26 37 / 92%);
+  --control: #09141d;
+  --notice-warning: #322818;
+  --notice-danger: #341c22;
+  --axis: #6b8190;
+  --range-cap: #a9bbc5;
+  --table-head: #182c3a;
+  --table-hover: #173040;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 92% -5%, #1d4966 0, transparent 30rem),
-    radial-gradient(circle at -10% 22%, #153f3d 0, transparent 26rem),
+    radial-gradient(circle at 92% -5%, var(--glow-blue) 0, transparent 30rem),
+    radial-gradient(circle at -10% 22%, var(--glow-green) 0, transparent 26rem),
     var(--page);
   color: var(--ink);
   font: 15px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
@@ -193,12 +455,19 @@ h3 { margin-bottom: 10px; font-size: 1rem; }
 .eyebrow { color: var(--accent); font-size: .74rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .muted, .empty { color: var(--muted); }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
+.hero-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 .badge { display: inline-block; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .8rem; font-weight: 800; white-space: nowrap; }
 .badge.good { border-color: var(--accent); color: var(--accent); }
 .badge.warning { border-color: var(--warning); color: var(--warning); }
+.theme-switch { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.theme-switch:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.switch-track { position: relative; width: 32px; height: 18px; border-radius: 999px; background: var(--line); transition: background .15s ease; }
+.switch-knob { position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--panel); box-shadow: 0 1px 3px rgb(0 0 0 / 30%); transition: transform .15s ease; }
+.theme-switch[aria-checked="true"] .switch-track { background: var(--accent); }
+.theme-switch[aria-checked="true"] .switch-knob { transform: translateX(14px); }
 section { margin-top: 36px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 12px; margin-top: 18px; }
-.stat, .panel, details { border: 1px solid var(--line); border-radius: 13px; background: rgb(14 26 37 / 92%); box-shadow: var(--shadow); }
+.stat, .panel, details { border: 1px solid var(--line); border-radius: 13px; background: var(--panel-alpha); box-shadow: var(--shadow); }
 .stat { padding: 16px; }
 .stat span { display: block; color: var(--muted); font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .stat strong { display: block; margin-top: 4px; color: var(--accent); font-size: 1.8rem; line-height: 1.1; }
@@ -211,8 +480,8 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .schedule li { display: grid; grid-template-columns: 8rem 1fr; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .schedule li:last-child { border: 0; }
 .schedule span { color: var(--muted); }
-.notice { margin: 12px 0; padding: 14px; border-left: 3px solid var(--warning); border-radius: 5px; background: #322818; }
-.notice.failure { border-color: var(--danger); background: #341c22; }
+.notice { margin: 12px 0; padding: 14px; border-left: 3px solid var(--warning); border-radius: 5px; background: var(--notice-warning); }
+.notice.failure { border-color: var(--danger); background: var(--notice-danger); }
 details { margin-top: 12px; overflow: clip; }
 summary { padding: 15px 17px; cursor: pointer; font-weight: 800; }
 details[open] > summary { border-bottom: 1px solid var(--line); }
@@ -222,22 +491,24 @@ details[open] > summary { border-bottom: 1px solid var(--line); }
 .phase { margin: 0; background: var(--panel-raised); box-shadow: none; }
 select, input {
   width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
-  background: #09141d; color: var(--ink); font: inherit;
+  background: var(--control); color: var(--ink); font: inherit;
 }
 .chart { min-height: 300px; margin-top: 12px; overflow-x: auto; }
 .chart svg { display: block; width: 100%; height: 300px; }
-.axis, .range { stroke: #6b8190; stroke-width: 1; }
-.range-cap { stroke: #a9bbc5; stroke-width: 2; }
+.axis, .range { stroke: var(--axis); stroke-width: 1; }
+.range-cap { stroke: var(--range-cap); stroke-width: 2; }
 .bar { fill: var(--blue); transition: fill .15s ease; }
 .bar:hover { fill: var(--accent); }
+.chart-description { margin: 9px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+.chart-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--danger); border-radius: 4px; background: var(--notice-danger); font-size: .85rem; }
 .chart-label { fill: var(--muted); font-size: 11px; }
 .chart-value { fill: var(--ink); font-size: 11px; font-weight: 700; }
 .table-wrap { max-height: 72vh; margin-top: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
 table { width: max-content; min-width: 100%; border-collapse: collapse; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-th { position: sticky; top: 0; z-index: 1; background: #182c3a; color: var(--accent); font-size: .76rem; }
+th { position: sticky; top: 0; z-index: 1; background: var(--table-head); color: var(--accent); font-size: .76rem; }
 td { font-variant-numeric: tabular-nums; }
-tbody tr:hover td { background: #173040; }
+tbody tr:hover td { background: var(--table-hover); }
 th button { margin: -8px -10px; padding: 8px 10px; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 800; cursor: pointer; }
 .table-tools { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; }
 .row-count { color: var(--muted); white-space: nowrap; }
@@ -245,15 +516,16 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
 @media (max-width: 720px) {
   main { padding: 24px 14px 56px; }
   .hero { display: block; }
-  .hero .badge { margin-top: 12px; }
+  .hero-actions { align-items: flex-start; margin-top: 12px; }
   .context-grid { grid-template-columns: 1fr; }
   .table-tools { grid-template-columns: 1fr; }
 }
 @media print {
-  :root { color-scheme: light; --page: white; --panel: white; --panel-raised: white; --ink: #111; --muted: #555; --line: #bbb; }
+  :root, html[data-theme="dark"] { color-scheme: light; --page: white; --panel: white; --panel-raised: white; --panel-alpha: white; --ink: #111; --muted: #555; --line: #bbb; --control: white; --table-head: #eee; --table-hover: white; --notice-warning: white; --notice-danger: white; }
   body { background: white; }
   .stat, .panel, details { box-shadow: none; }
   .table-wrap { max-height: none; }
+  .theme-switch { display: none; }
 }
 </style>
 </head>
@@ -265,7 +537,13 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       <h1>__RUN_ID__</h1>
       <p class="muted">A self-contained view of the run’s derived results.</p>
     </div>
-    <div class="__STATUS_CLASS__">__STATUS__</div>
+    <div class="hero-actions">
+      <div class="__STATUS_CLASS__">__STATUS__</div>
+      <button id="theme-switch" class="theme-switch" type="button" role="switch" aria-checked="false" aria-label="Switch to dark mode">
+        <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+        <span id="theme-label">Light mode</span>
+      </button>
+    </div>
   </header>
 
   <section aria-labelledby="overview-title">
@@ -326,6 +604,21 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   const data = JSON.parse(document.querySelector("#report-data").textContent);
   const svgNamespace = "http://www.w3.org/2000/svg";
   const completeSort = { field: null, ascending: true };
+  const themeSwitch = document.querySelector("#theme-switch");
+  const themeLabel = document.querySelector("#theme-label");
+
+  function setTheme(theme) {
+    const dark = theme === "dark";
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    themeSwitch.setAttribute("aria-checked", String(dark));
+    themeSwitch.setAttribute("aria-label", `Switch to ${dark ? "light" : "dark"} mode`);
+    themeLabel.textContent = dark ? "Dark mode" : "Light mode";
+  }
+
+  themeSwitch.addEventListener("click", () => {
+    setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+  });
+  setTheme("light");
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -344,9 +637,10 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   function formatValue(value) {
     if (value === null || value === undefined || value === "") return "—";
     if (typeof value !== "number") return String(value);
+    // pinned to en-US so a decimal comma doesn't get misread as a thousands separator
     const magnitude = Math.abs(value);
-    if (magnitude >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+    if (magnitude >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+    return value.toLocaleString("en-US", { maximumFractionDigits: 3 });
   }
 
   function compareValues(left, right) {
@@ -442,10 +736,11 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     const height = 300;
     const top = 40;
     const baseline = 238;
-    const maximum = Math.max(
+    // scale to the data, not to 1, so sub-1 metrics don't render as slivers
+    const observed = Math.max(
       ...values.map((row) => Number.isFinite(row[maximumField]) ? row[maximumField] : row[medianField]),
-      1,
     );
+    const maximum = observed > 0 ? observed : 1;
     const y = (value) => baseline - (value / maximum) * (baseline - top);
     const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${title}, ${direction}` });
     if (values.length > 5) svg.style.minWidth = `${width}px`;
@@ -484,6 +779,17 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     return container;
   }
 
+  function failedFor(scenario, phase) {
+    const phases = data.failedByPhase[scenario];
+    if (!phases) return [];
+    return [...new Set([...(phases[phase] || []), ...(phases[""] || [])])].sort();
+  }
+
+  function descriptionFor(scenario, phase) {
+    return data.phaseDescriptions[scenario]?.[phase] ||
+      `Compares filesystems for benchmark phase "${phase}".`;
+  }
+
   function renderComparisons() {
     const grouped = new Map();
     data.summary.forEach((row) => {
@@ -492,13 +798,14 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       if (!phases.has(row.phase)) phases.set(row.phase, []);
       phases.get(row.phase).push(row);
     });
+    const byName = (left, right) => String(left[0]).localeCompare(String(right[0]));
     const target = document.querySelector("#scenario-groups");
-    [...grouped.entries()].forEach(([scenario, phases], scenarioIndex) => {
+    [...grouped.entries()].sort(byName).forEach(([scenario, phases], scenarioIndex) => {
       const scenarioDetails = element("details", "scenario");
       scenarioDetails.open = scenarioIndex === 0;
       scenarioDetails.append(element("summary", "", `${scenario} · ${phases.size} phases`));
       const scenarioBody = element("div", "details-body phase-grid");
-      [...phases.entries()].forEach(([phase, rows], phaseIndex) => {
+      [...phases.entries()].sort(byName).forEach(([phase, rows], phaseIndex) => {
         const phaseDetails = element("details", "phase");
         phaseDetails.open = scenarioIndex === 0 && phaseIndex === 0;
         phaseDetails.append(element("summary", "", phase));
@@ -516,10 +823,19 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
             selector.append(option);
           });
           const chartHolder = element("div");
-          const draw = () => chartHolder.replaceChildren(renderChart(rows, available[Number(selector.value)]));
+          const description = element("p", "chart-description");
+          const draw = () => {
+            const metric = available[Number(selector.value)];
+            chartHolder.replaceChildren(renderChart(rows, metric));
+            description.textContent = `${descriptionFor(scenario, phase)} ${metric[4]}`;
+          };
           selector.addEventListener("change", draw);
-          phaseBody.append(selector, chartHolder);
+          phaseBody.append(selector, chartHolder, description);
           draw();
+        }
+        const failed = failedFor(scenario, phase);
+        if (failed.length) {
+          phaseBody.append(element("p", "chart-note", `Failed here, absent from the chart: ${failed.join(", ")}`));
         }
         phaseDetails.append(phaseBody);
         scenarioBody.append(phaseDetails);

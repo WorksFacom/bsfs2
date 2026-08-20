@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+from typing import Any
 import unittest
 from unittest.mock import call, patch
 
@@ -18,11 +21,12 @@ from bench.orchestration.analyze import (
     load_records,
 )
 from bench.orchestration.report import render_report
-from bench.orchestration.command import CommandRunner
+from bench.orchestration.command import CommandResult, CommandRunner
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
     BsfsModuleError,
+    build_module_argv,
     validate_bsfs_module,
     validate_benchmark_binaries,
 )
@@ -32,11 +36,24 @@ from bench.orchestration.safety import (
     validate_loop_image,
 )
 from bench.orchestration.topology import physical_cores, sibling_conflicts
+from bench.orchestration.filesystems import FilesystemAdapter, FilesystemContext
+from bench.orchestration.plan import build_plan
+from bench.orchestration.progress import (
+    Level,
+    PhaseMetricsReader,
+    RunReporter,
+    describe_metrics,
+    format_duration,
+)
 from bench.orchestration.run import (
+    BenchmarkRun,
     main,
     sudo_invoker_owner,
     transfer_result_ownership,
 )
+
+BUILD_ARGV = build_module_argv(REPOSITORY)
+
 
 class ConfigTests(unittest.TestCase):
     def test_quick_profile_is_valid(self) -> None:
@@ -143,6 +160,53 @@ class ResultOwnershipTests(unittest.TestCase):
                 ],
             )
 
+    def test_transfer_result_ownership_skips_a_mounted_mountpoint(self) -> None:
+        """a failed umount leaves a live benchmark filesystem under run_dir,
+        and chowning through it would rewrite the device under test."""
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            mounted = run_dir / "mnt"
+            (mounted / "payload").mkdir(parents=True)
+            (mounted / "payload" / "big.bin").touch()
+            results = run_dir / "raw"
+            results.mkdir()
+            (results / "results.jsonl").touch()
+
+            with (
+                patch("bench.orchestration.run.os.chown") as chown,
+                patch(
+                    "bench.orchestration.run.os.path.ismount",
+                    side_effect=lambda path: Path(path) == mounted,
+                ),
+            ):
+                self.assertEqual(
+                    transfer_result_ownership(run_dir, (1000, 1001)), []
+                )
+
+            touched = {arguments[0] for arguments, _ in chown.call_args_list}
+            self.assertEqual(
+                touched, {run_dir, results, results / "results.jsonl"}
+            )
+            self.assertNotIn(mounted, touched)
+
+    def test_transfer_result_ownership_continues_past_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            stubborn = run_dir / "stubborn"
+            stubborn.touch()
+            (run_dir / "results.jsonl").touch()
+
+            def chown(path: Path, *_: object, **__: object) -> None:
+                if path == stubborn:
+                    raise PermissionError("read-only file system")
+
+            with patch("bench.orchestration.run.os.chown", side_effect=chown):
+                failed = transfer_result_ownership(run_dir, (1000, 1001))
+
+            self.assertEqual(len(failed), 1)
+            self.assertIn("stubborn", failed[0])
+
 
 class BenchmarkBinaryTests(unittest.TestCase):
     def create_binary(self, repository: Path, name: str) -> Path:
@@ -186,11 +250,15 @@ class BenchmarkBinaryTests(unittest.TestCase):
 class BsfsModulePreflightTests(unittest.TestCase):
     def test_loadable_module_is_built_loaded_and_unloaded(self) -> None:
         module = REPOSITORY / "bsfs2.ko"
-        with patch("bench.orchestration.preflight._run_capture") as capture:
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=False,
+            ),
+        ):
             capture.side_effect = [
-                subprocess.CompletedProcess(
-                    ["make", "-C", str(REPOSITORY)], 0, "", ""
-                ),
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
                 subprocess.CompletedProcess(["insmod", str(module)], 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 0, "", ""),
@@ -201,20 +269,30 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertEqual(
             capture.call_args_list,
             [
-                call(["make", "-C", str(REPOSITORY)]),
+                call(BUILD_ARGV),
                 call(["rmmod", "bsfs2"]),
                 call(["insmod", str(module)]),
                 call(["rmmod", "bsfs2"]),
             ],
         )
 
+    def test_build_pins_pwd_to_the_repository(self) -> None:
+        """make -C moves CURDIR but not PWD, and the kernel build uses
+        M=$(PWD), so a launcher started elsewhere would build the wrong tree."""
+        self.assertIn(f"PWD={REPOSITORY}", BUILD_ARGV)
+        self.assertEqual(BUILD_ARGV[:3], ["make", "-C", str(REPOSITORY)])
+
     def test_load_failure_reports_kernel_and_vermagic(self) -> None:
         module = REPOSITORY / "bsfs2.ko"
-        with patch("bench.orchestration.preflight._run_capture") as capture:
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=False,
+            ),
+        ):
             capture.side_effect = [
-                subprocess.CompletedProcess(
-                    ["make", "-C", str(REPOSITORY)], 0, "", ""
-                ),
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
                 subprocess.CompletedProcess(
                     ["insmod", str(module)], 1, "", "Invalid module format"
@@ -235,6 +313,64 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertIn("module vermagic: 6.18.15-dirty", message)
         self.assertIn("KDIR", message)
 
+    def test_busy_module_is_not_blamed_on_kdir(self) -> None:
+        module = REPOSITORY / "bsfs2.ko"
+        with (
+            patch("bench.orchestration.preflight._run_capture") as capture,
+            patch(
+                "bench.orchestration.preflight._module_loaded",
+                return_value=True,
+            ),
+        ):
+            capture.side_effect = [
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
+                subprocess.CompletedProcess(
+                    ["rmmod", "bsfs2"], 1, "", "rmmod: ERROR: Module bsfs2 is in use"
+                ),
+                subprocess.CompletedProcess(
+                    ["modinfo", "-F", "vermagic", str(module)], 0, "6.18.15\n", ""
+                ),
+            ]
+
+            with self.assertRaises(BsfsModuleError) as raised:
+                validate_bsfs_module(REPOSITORY)
+
+        message = str(raised.exception)
+        self.assertIn("still in use", message)
+        self.assertNotIn("KDIR", message)
+        # insmod must not run against a module that is already loaded and busy
+        self.assertNotIn(
+            call(["insmod", str(module)]), capture.call_args_list
+        )
+
+
+class AnalyzeEntryPointTests(unittest.TestCase):
+    def test_analyze_runs_as_a_script_from_an_unrelated_directory(self) -> None:
+        """analyze.py is executable and has a shebang, so it needs to work
+        without the repository root already on sys.path."""
+        script = REPOSITORY / "bench/orchestration/analyze.py"
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            raw = run_dir / "raw"
+            raw.mkdir(parents=True)
+            (raw / "results.jsonl").write_text(
+                json.dumps(result(workers=1, throughput=10.0)) + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(script), str(run_dir)],
+                cwd=directory,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = run_dir / "derived" / "report.html"
+            self.assertTrue(report.is_file())
+            self.assertIn("BSFS benchmark report", report.read_text("utf-8"))
+
 
 class BsfsSetupFailureTests(unittest.TestCase):
     def test_module_preflight_failure_creates_no_run_directory(self) -> None:
@@ -253,6 +389,9 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 filesystems=("bsfs",),
                 dry_run=False,
                 skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
             )
             with (
                 patch("bench.orchestration.run.parse_args", return_value=args),
@@ -284,6 +423,9 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 filesystems=("ext4",),
                 dry_run=False,
                 skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
             )
             with (
                 patch("bench.orchestration.run.parse_args", return_value=args),
@@ -324,13 +466,23 @@ def result(
     }
 
 
+def embedded_report_data(report: str) -> dict[str, Any]:
+    return json.loads(
+        report.split('id="report-data" type="application/json">')[1]
+        .split("</script>")[0]
+        .replace("\\u003c", "<")
+        .replace("\\u003e", ">")
+        .replace("\\u0026", "&")
+    )
+
+
 class AnalysisTests(unittest.TestCase):
     def test_report_is_self_contained_and_preserves_complete_data(self) -> None:
         row = derive_summary([result(workers=1, throughput=10.0)])[0]
         row["phase"] = "write </script><script>alert(1)</script>"
         report = render_report(
             run_dir=Path("/results/run-1"),
-            records=[result(workers=1, throughput=10.0)],
+            record_count=1,
             summary=[row],
             scaling=[
                 {
@@ -369,10 +521,28 @@ class AnalysisTests(unittest.TestCase):
         self.assertNotIn("<link ", report)
         self.assertNotIn("<img ", report)
 
+    def test_report_has_page_local_light_and_dark_theme_switch(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        self.assertIn('role="switch" aria-checked="false"', report)
+        self.assertIn('aria-label="Switch to dark mode"', report)
+        self.assertIn('html[data-theme="dark"]', report)
+        self.assertIn('setTheme("light");', report)
+        self.assertIn('themeSwitch.addEventListener("click"', report)
+        self.assertNotIn("localStorage", report)
+
     def test_empty_report_still_renders_without_manifest(self) -> None:
         report = render_report(
             run_dir=Path("/results/interrupted-run"),
-            records=[],
+            record_count=0,
             summary=[],
             scaling=[],
             failures=[],
@@ -383,6 +553,157 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("interrupted-run", report)
         self.assertIn("Eligibility not recorded", report)
         self.assertIn('"summary":[]', report)
+
+    def test_a_manifest_value_cannot_expand_into_another_marker(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={"run_id": "run-1", "hostname": "__REPORT_DATA__"},
+        )
+
+        self.assertIn("<dd>__REPORT_DATA__</dd>", report)
+        self.assertEqual(report.count('"summary":[]'), 1)
+
+    def test_a_non_finite_metric_fails_loudly_instead_of_blanking_the_page(
+        self,
+    ) -> None:
+        """a bare NaN token makes JSON.parse throw, which would leave the
+        reader an empty page instead of just a broken number."""
+        with self.assertRaises(ValueError):
+            render_report(
+                run_dir=Path("/results/run-1"),
+                record_count=1,
+                summary=[{"filesystem": "bsfs", "durable_iops_median": float("nan")}],
+                scaling=[],
+                failures=[],
+                skipped=[],
+                manifest={},
+            )
+
+    def test_failures_are_attributed_to_the_chart_they_are_missing_from(
+        self,
+    ) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[
+                {"filesystem": "btrfs", "scenario": "bulk", "phase": "verify"},
+                {"filesystem": "zfs", "scenario": "bulk", "error": "no zpool"},
+                {"error": "kernel log finding"},
+            ],
+            skipped=[],
+            manifest={},
+        )
+
+        payload = embedded_report_data(report)
+
+        # a scenario-wide failure has no phase, so it belongs to every phase
+        self.assertEqual(
+            payload["failedByPhase"],
+            {"bulk": {"": ["zfs"], "verify": ["btrfs"]}},
+        )
+
+    def test_report_describes_known_generated_and_unknown_chart_phases(
+        self,
+    ) -> None:
+        phases = (
+            ("bulk", "sequential-write", None),
+            ("metadata", "lookup-stat-warm", None),
+            ("mixed", "edit-cycle-durable-total", None),
+            ("concurrency-mixed", "mixed-create", None),
+            ("concurrency-mixed", "mixed-create-worker-1", 1),
+            ("recovery-pressure", "cycle-2-refill", None),
+            (
+                "recovery-pressure",
+                "cycle-1-native-namespace-removal",
+                None,
+            ),
+            ("old-recovery", "restore-fixed-subset", None),
+            ("future-workload", "novel-phase", None),
+        )
+        summary = [
+            {
+                "filesystem": "bsfs",
+                "scenario": scenario,
+                "phase": phase,
+                "worker_count": 4 if scenario.startswith("concurrency-") else 1,
+                "worker_id": worker_id,
+                "durable_throughput_mib_s_median": 1.0,
+            }
+            for scenario, phase, worker_id in phases
+        ]
+
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=len(summary),
+            summary=summary,
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+        descriptions = embedded_report_data(report)["phaseDescriptions"]
+
+        self.assertIn("1 MiB requests", descriptions["bulk"]["sequential-write"])
+        self.assertIn("dentries cached", descriptions["metadata"]["lookup-stat-warm"])
+        self.assertIn("final flush", descriptions["mixed"]["edit-cycle-durable-total"])
+        self.assertIn(
+            "aggregates all workers",
+            descriptions["concurrency-mixed"]["mixed-create"],
+        )
+        self.assertIn(
+            "isolates worker 1",
+            descriptions["concurrency-mixed"]["mixed-create-worker-1"],
+        )
+        self.assertIn(
+            "Recovery cycle 2",
+            descriptions["recovery-pressure"]["cycle-2-refill"],
+        )
+        self.assertIn(
+            "preceding refill files",
+            descriptions["recovery-pressure"]["cycle-1-native-namespace-removal"],
+        )
+        self.assertIn(
+            "fixed subset",
+            descriptions["old-recovery"]["restore-fixed-subset"],
+        )
+        self.assertEqual(
+            descriptions["future-workload"]["novel-phase"],
+            'Compares filesystems for benchmark phase "novel-phase".',
+        )
+
+    def test_chart_description_tracks_the_selected_metric(self) -> None:
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+        metrics = {
+            metric[0]: metric[4] for metric in embedded_report_data(report)["metrics"]
+        }
+
+        self.assertIn("recorded final flush", metrics["durable_throughput_mib_s"])
+        self.assertIn("recorded final flush", metrics["durable_iops"])
+        self.assertIn("Operation-path time", metrics["durable_total_ns"])
+        self.assertIn("excluding the final flush", metrics["latency_p99_ns"])
+        self.assertIn(
+            "only for phases with a final flush", metrics["write_amplification"]
+        )
+        self.assertIn('element("p", "chart-description")', report)
+        self.assertIn(
+            "description.textContent = `${descriptionFor(scenario, phase)} ${metric[4]}`;",
+            report,
+        )
 
     def test_null_device_stats_do_not_become_zero_amplification(self) -> None:
         summary = derive_summary([result(workers=1, throughput=10.0)])
@@ -450,6 +771,519 @@ class AnalysisTests(unittest.TestCase):
 
             self.assertEqual(len(records), 1)
             self.assertEqual(len(skipped), 1)
+
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class StubAdapter(FilesystemAdapter):
+    """stands in for a real filesystem so the matrices can be walked offline."""
+
+    mount_options = "stub"
+
+    def __init__(self, context: FilesystemContext, name: str):
+        super().__init__(context)
+        self.name = name
+
+    def format(self) -> None:
+        return
+
+    def mount(self) -> None:
+        return
+
+    def unmount(self) -> None:
+        return
+
+
+class PlanTests(unittest.TestCase):
+    def _executed_phases(self, config_name: str) -> tuple[list, Any]:
+        config = load_config(REPOSITORY / f"bench/config/{config_name}.toml")
+        executed: list[tuple[str, str, str, int]] = []
+
+        def record(
+            self, adapter, scenario, phase, repetition, seed, workers=1, **kwargs
+        ):
+            executed.append((adapter.name, scenario, phase, workers))
+
+        with tempfile.TemporaryDirectory() as directory:
+            reporter = RunReporter(stream=io.StringIO(), level=Level.QUIET)
+            runner = CommandRunner(
+                Path(directory), dry_run=True, reporter=reporter
+            )
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=Path(directory),
+                config=config,
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            with (
+                patch(
+                    "bench.orchestration.run.create_adapter",
+                    side_effect=lambda name, context: StubAdapter(context, name),
+                ),
+                patch.object(
+                    BenchmarkRun, "run_phase", autospec=True, side_effect=record
+                ),
+            ):
+                if config.publication:
+                    benchmark.validation_matrix(config.filesystems)
+                benchmark.common_matrix(config.filesystems)
+                benchmark.recovery_matrix(config.filesystems)
+                benchmark.concurrency_matrix(config.filesystems)
+        return executed, config
+
+    def test_quick_plan_matches_executed_phases(self) -> None:
+        executed, config = self._executed_phases("quick")
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(len(executed), plan.total_phases)
+        for filesystem in config.filesystems:
+            self.assertEqual(
+                sum(1 for row in executed if row[0] == filesystem),
+                plan.phases_for(filesystem),
+                filesystem,
+            )
+
+    def test_publication_plan_matches_executed_phases(self) -> None:
+        executed, config = self._executed_phases("publication")
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(len(executed), plan.total_phases)
+
+    def test_plan_names_the_phases_the_matrices_run(self) -> None:
+        executed, config = self._executed_phases("quick")
+        plan = build_plan(config, config.filesystems)
+        planned = sorted(
+            (unit.filesystem, unit.scenario, phase, unit.workers)
+            for unit in plan.units
+            for phase in unit.phases
+        )
+
+        self.assertEqual(sorted(executed), planned)
+
+    def test_a_filesystem_only_in_the_config_is_still_planned(self) -> None:
+        config = load_config(REPOSITORY / "bench/config/quick.toml")
+        plan = build_plan(config, ("ext4",))
+
+        self.assertEqual(plan.filesystems, ("ext4",))
+        # ext4 is a kernel filesystem, so it has no recovery units
+        self.assertEqual(
+            {unit.matrix for unit in plan.units}, {"common", "concurrency"}
+        )
+
+
+class PhaseReportingTests(unittest.TestCase):
+    def test_a_phase_reports_the_metric_its_runner_just_wrote(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            stream = io.StringIO()
+            reporter = RunReporter(
+                stream=stream, level=Level.NORMAL, color=False
+            )
+            runner = CommandRunner(run_dir, reporter=reporter)
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=run_dir,
+                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
+
+            def fake_run(argv, **kwargs):
+                with benchmark.results.open("a", encoding="utf-8") as results:
+                    results.write(
+                        json.dumps(result(workers=1, throughput=312.4)) + "\n"
+                    )
+                return CommandResult((), 0, "", "")
+
+            with patch.object(runner, "run", side_effect=fake_run):
+                benchmark.run_phase(adapter, "bulk", "prepare", 0, 1234)
+
+            text = stream.getvalue()
+            self.assertIn("bulk/prepare", text)
+            self.assertIn("312.4 MiB/s", text)
+
+    def test_a_phase_that_writes_nothing_still_reports_its_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            stream = io.StringIO()
+            reporter = RunReporter(
+                stream=stream, level=Level.NORMAL, color=False
+            )
+            runner = CommandRunner(run_dir, reporter=reporter)
+            benchmark = BenchmarkRun(
+                repository=REPOSITORY,
+                run_dir=run_dir,
+                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                runner=runner,
+                device="/dev/loop-test",
+                stable_device="/dev/loop-test",
+                device_info=None,
+                run_id="test",
+                publication_eligible=False,
+                reporter=reporter,
+            )
+            adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
+
+            with patch.object(
+                runner, "run", return_value=CommandResult((), 0, "", "")
+            ):
+                benchmark.run_phase(adapter, "bulk", "prepare", 0, 1234)
+
+            self.assertIn("bulk/prepare", stream.getvalue())
+            self.assertFalse(reporter.degraded)
+
+
+class ReporterTests(unittest.TestCase):
+    def _reporter(self, level: Level = Level.NORMAL) -> tuple[RunReporter, Any]:
+        stream = io.StringIO()
+        return RunReporter(stream=stream, level=level, color=False), stream
+
+    def test_output_has_no_escape_sequences_without_color(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        text = stream.getvalue()
+        self.assertNotIn("\x1b", text)
+        self.assertIn("bulk/prepare", text)
+        self.assertIn("FAILED", text)
+        self.assertTrue(text.endswith("\n"))
+
+    def test_every_line_puts_its_duration_in_one_column(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.timed("condition device", "no-discard"):
+            pass
+        reporter.cache_event("unmount + drop_caches + mount", 1.2)
+        for scenario, phase, workers in (
+            ("bulk", "prepare", 1),
+            ("concurrency-mixed", "create", 4),
+        ):
+            with reporter.phase(
+                filesystem="ext4",
+                scenario=scenario,
+                phase=phase,
+                workers=workers,
+            ):
+                pass
+        reporter.end_section()
+
+        columns = []
+        for line in stream.getvalue().splitlines():
+            if not line.startswith("  "):
+                continue
+            # the duration is the first thing on a line shaped like a time
+            match = re.search(r"\d+\.\ds", line)
+            if match:
+                columns.append(match.end())
+
+        self.assertGreaterEqual(len(columns), 5, stream.getvalue())
+        self.assertEqual(len(set(columns)), 1, stream.getvalue())
+
+    def test_color_only_adds_escapes_around_the_same_text(self) -> None:
+        plain, plain_stream = self._reporter()
+        stream = io.StringIO()
+        colored = RunReporter(stream=stream, level=Level.NORMAL, color=True)
+        for reporter in (plain, colored):
+            reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        self.assertIn("\x1b", stream.getvalue())
+        self.assertEqual(
+            ANSI.sub("", stream.getvalue()), plain_stream.getvalue()
+        )
+
+    def test_quiet_keeps_failures_and_drops_phase_lines(self) -> None:
+        reporter, stream = self._reporter(Level.QUIET)
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.failure("ext4", "bulk", 0, RuntimeError("boom"))
+
+        text = stream.getvalue()
+        self.assertNotIn("bulk/prepare", text)
+        self.assertIn("FAILED", text)
+
+    def test_commands_are_reported_only_when_verbose(self) -> None:
+        quiet, quiet_stream = self._reporter()
+        verbose, verbose_stream = self._reporter(Level.VERBOSE)
+        for reporter in (quiet, verbose):
+            reporter.command("ext4-format", ("mkfs.ext4", "/dev/loop0"), 0, 1.5)
+
+        self.assertEqual(quiet_stream.getvalue(), "")
+        self.assertIn("ext4-format", verbose_stream.getvalue())
+
+    def test_a_broken_stream_never_reaches_the_run(self) -> None:
+        class Exploding(io.StringIO):
+            def write(self, text: str) -> int:
+                raise OSError("no terminal")
+
+        reporter = RunReporter(stream=Exploding(), level=Level.NORMAL, color=False)
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp"),
+        )
+
+        self.assertTrue(reporter.degraded)
+        self.assertEqual(reporter.completed_phases, 1)
+
+    def test_a_failing_phase_is_counted_and_marked(self) -> None:
+        reporter, stream = self._reporter()
+        with self.assertRaises(RuntimeError):
+            with reporter.phase(
+                filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+            ):
+                raise RuntimeError("boom")
+
+        self.assertEqual(reporter.failed_phases, 1)
+        self.assertIn("FAILED", stream.getvalue())
+
+    def test_summary_reports_the_phases_that_were_reached(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.announce_plan(
+            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+        )
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="ext4", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=2,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertIn("1/30 planned phases were reached", text)
+        self.assertIn("kernel log: 2 relevant findings", text)
+        self.assertIn("analyze /tmp/run", text)
+
+    def test_each_unit_reports_its_own_elapsed_time(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        for phase in ("prepare", "cold-read"):
+            with reporter.phase(
+                filesystem="ext4", scenario="bulk", phase=phase, workers=1
+            ):
+                pass
+        reporter.unit_start(
+            matrix="common", filesystem="btrfs", scenario="bulk", repetition=0
+        )
+        with reporter.phase(
+            filesystem="btrfs", scenario="bulk", phase="prepare", workers=1
+        ):
+            pass
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertIn("unit total (2 phases)", text)
+        self.assertIn("unit total (1 phase)", text)
+        # the first unit closes above the second headline, the last one at summary
+        self.assertLess(text.index("unit total (2 phases)"), text.index("btrfs"))
+
+    def test_sections_report_their_elapsed_time_once(self) -> None:
+        reporter, stream = self._reporter()
+        reporter.section("preflight")
+        reporter.step("benchmark binaries ok")
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertEqual(text.count("preflight total"), 1)
+        self.assertEqual(text.count("matrix total"), 1)
+        self.assertEqual(text.count("unit total"), 1)
+        self.assertLess(text.index("preflight total"), text.index("matrix"))
+        self.assertLess(text.index("unit total"), text.index("matrix total"))
+
+    def test_quiet_drops_unit_and_section_totals(self) -> None:
+        reporter, stream = self._reporter(Level.QUIET)
+        reporter.section("matrix")
+        reporter.unit_start(
+            matrix="common", filesystem="ext4", scenario="bulk", repetition=0
+        )
+        reporter.end_section()
+        reporter.summary(
+            run_id="test",
+            failures=[],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=Path("/tmp/run"),
+        )
+
+        text = stream.getvalue()
+        self.assertNotIn("unit total", text)
+        self.assertNotIn("matrix total", text)
+        self.assertIn("summary  test", text)
+
+    def test_durations_read_as_time(self) -> None:
+        self.assertEqual(format_duration(3.14), "3.1s")
+        self.assertEqual(format_duration(305), "5m05s")
+        self.assertEqual(format_duration(7200), "2h00m")
+
+
+class PhaseMetricsTests(unittest.TestCase):
+    def test_only_rows_written_by_this_phase_are_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(
+                json.dumps(result(workers=1, throughput=10.0)) + "\n",
+                encoding="utf-8",
+            )
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(result(workers=1, throughput=99.0)) + "\n"
+                )
+
+            record = reader.collect(path)
+
+            self.assertIsNotNone(record)
+            self.assertEqual(record["durable_throughput_mib_s"], 99.0)
+
+    def test_the_aggregate_row_wins_over_worker_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            worker = dict(result(workers=4, throughput=10.0), worker_id=0)
+            aggregate = result(workers=4, throughput=40.0)
+            path.write_text(
+                json.dumps(worker) + "\n" + json.dumps(aggregate) + "\n"
+                + json.dumps(dict(worker, worker_id=1)) + "\n",
+                encoding="utf-8",
+            )
+
+            record = reader.collect(path)
+
+            self.assertEqual(record["durable_throughput_mib_s"], 40.0)
+
+    def test_a_truncated_line_is_left_for_the_next_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            reader = PhaseMetricsReader()
+            reader.start(path)
+            path.write_text('{"filesystem": "bsfs", "scen', encoding="utf-8")
+
+            self.assertIsNone(reader.collect(path))
+
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write('ario": "bulk"}\n')
+
+            self.assertEqual(
+                reader.collect(path),
+                {"filesystem": "bsfs", "scenario": "bulk"},
+            )
+
+    def test_a_missing_file_is_not_fatal(self) -> None:
+        reader = PhaseMetricsReader()
+        missing = Path("/nonexistent/results.jsonl")
+        reader.start(missing)
+
+        self.assertIsNone(reader.collect(missing))
+
+    def test_metadata_phases_are_summarized_as_operations(self) -> None:
+        record = {
+            "durable_throughput_mib_s": 0.02,
+            "durable_iops": 18200.0,
+            "latency_p99_ns": 1_400_000,
+            "validation_status": "passed",
+        }
+
+        self.assertEqual(describe_metrics(record), "18.2k ops/s  p99 1.40ms")
+
+    def test_a_failed_validation_is_shouted_about(self) -> None:
+        self.assertEqual(
+            describe_metrics({"validation_status": "failed"}),
+            "VALIDATION failed",
+        )
+
+
+class CommandDurationTests(unittest.TestCase):
+    def test_commands_record_their_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory))
+            runner.run(["true"], label="probe")
+
+            record = json.loads(
+                (Path(directory) / "commands.jsonl").read_text(encoding="utf-8")
+            )
+
+            self.assertGreaterEqual(record["duration_s"], 0.0)
+            self.assertEqual(record["returncode"], 0)
+
+    def test_a_failing_command_leaves_a_stderr_log_to_point_at(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory))
+            runner.run(["false"], check=False, label="probe")
+
+            self.assertIsNotNone(runner.last_error_log)
+            self.assertTrue(runner.last_error_log.exists())
 
 
 if __name__ == "__main__":

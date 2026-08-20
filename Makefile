@@ -47,17 +47,21 @@ ccflags-y += $(if $(BSFS_ALLOC_STATS),-DBSFS_ALLOC_STATS)
 SRC_FILES = $(shell find src -type f -name '*.c')
 
 MKFS = mkfs.bsfs
+RECOVERY = recovery.bsfs
 
-all: $(MKFS)
+all: $(MKFS) $(RECOVERY)
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 $(MKFS): tools/mkfs.c
 	$(CC) -Wall -o $@ $<
 
+$(RECOVERY): tools/recovery.c include/bsfs_shared.h
+	$(CC) -Wall -o $@ $<
+
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	$(MAKE) -C bench clean
-	rm -f $(MKFS)
+	rm -f $(MKFS) $(RECOVERY)
 
 bench:
 	$(MAKE) -C bench

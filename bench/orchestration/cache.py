@@ -1,9 +1,24 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+import time
+from typing import Iterator
 
 from .command import CommandRunner
 from .filesystems import FilesystemAdapter, OldBsfsAdapter, ZfsAdapter
+
+
+@contextmanager
+def _reported(adapter: FilesystemAdapter, description: str) -> Iterator[None]:
+    """times the transition and reports it once the device is quiesced again."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        reporter = getattr(adapter.context, "reporter", None)
+        if reporter is not None:
+            reporter.cache_event(description, time.monotonic() - started)
 
 
 def drop_linux_caches(runner: CommandRunner, device: str) -> None:
@@ -16,30 +31,35 @@ def drop_linux_caches(runner: CommandRunner, device: str) -> None:
 def cold_reset(adapter: FilesystemAdapter) -> None:
     context = adapter.context
     if isinstance(adapter, OldBsfsAdapter):
-        drop_linux_caches(context.runner, context.device)
+        with _reported(adapter, "flush device"):
+            drop_linux_caches(context.runner, context.device)
         return
     if isinstance(adapter, ZfsAdapter):
+        with _reported(adapter, "export + drop_caches + import"):
+            adapter.unmount()
+            drop_linux_caches(context.runner, context.device)
+            adapter.import_pool()
+        return
+    with _reported(adapter, "unmount + drop_caches + mount"):
         adapter.unmount()
         drop_linux_caches(context.runner, context.device)
-        adapter.import_pool()
-        return
-    adapter.unmount()
-    drop_linux_caches(context.runner, context.device)
-    adapter.mount()
+        adapter.mount()
 
 
 def reopen(adapter: FilesystemAdapter) -> None:
     context = adapter.context
     if isinstance(adapter, OldBsfsAdapter):
-        context.runner.run(
-            ["blockdev", "--flushbufs", context.device],
-            label="old-bsfs-reopen-flush",
-        )
+        with _reported(adapter, "reopen (flush)"):
+            context.runner.run(
+                ["blockdev", "--flushbufs", context.device],
+                label="old-bsfs-reopen-flush",
+            )
         return
     if isinstance(adapter, ZfsAdapter):
-        adapter.unmount()
-        adapter.import_pool()
+        with _reported(adapter, "reopen (export + import)"):
+            adapter.unmount()
+            adapter.import_pool()
         return
-    adapter.unmount()
-    adapter.mount()
-
+    with _reported(adapter, "reopen (unmount + mount)"):
+        adapter.unmount()
+        adapter.mount()

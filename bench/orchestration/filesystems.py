@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
+from typing import Any
 
 from .command import CommandRunner
 
@@ -19,6 +20,9 @@ class FilesystemContext:
     stable_device: str
     mountpoint: Path
     run_id: str
+    # carried here so cache.py can report through adapter.context without every
+    # adapter method growing an argument
+    reporter: Any | None = None
 
 
 class FilesystemAdapter:

@@ -6,7 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Iterable, Mapping
+import time
+from typing import Any, Iterable, Mapping
 
 
 @dataclass
@@ -25,10 +26,18 @@ class CommandError(RuntimeError):
 
 
 class CommandRunner:
-    def __init__(self, run_dir: Path, dry_run: bool = False):
+    def __init__(
+        self,
+        run_dir: Path,
+        dry_run: bool = False,
+        reporter: Any | None = None,
+    ):
         self.run_dir = run_dir
         self.dry_run = dry_run
+        self.reporter = reporter
         self.command_log = run_dir / "commands.jsonl"
+        # where a failing command's stderr landed, for the progress reporter
+        self.last_error_log: Path | None = None
         self._counter = 0
         if not dry_run:
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -39,6 +48,7 @@ class CommandRunner:
         cwd: Path | None,
         result: CommandResult | None,
         label: str,
+        duration: float | None = None,
     ) -> None:
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -47,9 +57,13 @@ class CommandRunner:
             "cwd": str(cwd) if cwd else None,
             "dry_run": self.dry_run,
             "returncode": result.returncode if result else None,
+            "duration_s": duration,
         }
         if self.dry_run:
-            print("+", " ".join(argv))
+            if self.reporter is not None:
+                self.reporter.dry_command(argv)
+            else:
+                print("+", " ".join(argv))
             return
         with self.command_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
@@ -70,6 +84,7 @@ class CommandRunner:
             return CommandResult(normalized, 0, "", "")
 
         self._counter += 1
+        started = time.monotonic()
         completed = subprocess.run(
             normalized,
             cwd=cwd,
@@ -79,6 +94,7 @@ class CommandRunner:
             capture_output=True,
             check=False,
         )
+        duration = time.monotonic() - started
         result = CommandResult(
             normalized, completed.returncode, completed.stdout, completed.stderr
         )
@@ -94,7 +110,12 @@ class CommandRunner:
         (log_path / f"{stem}.stderr").write_text(
             completed.stderr, encoding="utf-8"
         )
-        self._record(normalized, cwd, result, label)
+        self.last_error_log = log_path / f"{stem}.stderr"
+        self._record(normalized, cwd, result, label, duration)
+        if self.reporter is not None:
+            self.reporter.command(
+                label, normalized, completed.returncode, duration
+            )
         if check and completed.returncode != 0:
             raise CommandError(result)
         return result

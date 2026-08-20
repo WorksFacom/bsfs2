@@ -7,9 +7,14 @@ import csv
 import json
 from pathlib import Path
 import statistics
+import sys
 from typing import Any, Iterable
 
-from bench.orchestration.report import write_report
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from bench.orchestration.report import write_report
+else:
+    from .report import write_report
 
 
 GROUP_FIELDS = ("filesystem", "scenario", "phase", "worker_count", "worker_id")
@@ -190,7 +195,7 @@ def main() -> int:
     write_report(
         output / "report.html",
         run_dir=run_dir,
-        records=records,
+        record_count=len(records),
         summary=summary,
         scaling=scaling,
         failures=failures,

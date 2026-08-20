@@ -25,14 +25,22 @@ if __package__ in {None, ""}:
     )
     from bench.orchestration.governor import PerformanceGovernor
     from bench.orchestration.manifest import collect_manifest, write_manifest
+    from bench.orchestration.plan import (
+        COMMON_FILESYSTEMS,
+        CONCURRENCY_WORKERS,
+        KERNEL_FILESYSTEMS,
+        build_plan,
+    )
     from bench.orchestration.preflight import (
         BenchmarkBinaryError,
         BsfsModuleError,
         CorrectnessGateError,
+        build_module_argv,
         run_correctness_gates,
         validate_bsfs_module,
         validate_benchmark_binaries,
     )
+    from bench.orchestration.progress import Level, RunReporter
     from bench.orchestration.safety import (
         DeviceInfo,
         SafetyError,
@@ -53,14 +61,22 @@ else:
     )
     from .governor import PerformanceGovernor
     from .manifest import collect_manifest, write_manifest
+    from .plan import (
+        COMMON_FILESYSTEMS,
+        CONCURRENCY_WORKERS,
+        KERNEL_FILESYSTEMS,
+        build_plan,
+    )
     from .preflight import (
         BenchmarkBinaryError,
         BsfsModuleError,
         CorrectnessGateError,
+        build_module_argv,
         run_correctness_gates,
         validate_bsfs_module,
         validate_benchmark_binaries,
     )
+    from .progress import Level, RunReporter
     from .safety import (
         DeviceInfo,
         SafetyError,
@@ -68,10 +84,6 @@ else:
         inspect_physical_device,
         validate_loop_image,
     )
-
-
-COMMON_FILESYSTEMS = ("bsfs", "old-bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
-KERNEL_FILESYSTEMS = ("bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
 
 
 def sudo_invoker_owner(
@@ -93,17 +105,37 @@ def sudo_invoker_owner(
     return uid, gid
 
 
-def transfer_result_ownership(run_dir: Path, owner: tuple[int, int]) -> None:
+def transfer_result_ownership(
+    run_dir: Path, owner: tuple[int, int]
+) -> list[str]:
     """Give a completed result tree to the user who invoked sudo.
 
-    Symlinks are deliberately not followed: benchmark artifacts must not be
-    able to change ownership outside the run directory.
+    returns the paths that couldn't be transferred, so one unwritable entry
+    doesn't strand the rest of the tree under root. symlinks aren't followed,
+    and mounted directories are skipped outright, since the benchmark
+    mountpoint lives under run_dir and a failed umount would otherwise send
+    this chown recursively across the device under test.
     """
     if not run_dir.exists():
-        return
+        return []
     uid, gid = owner
-    for path in (run_dir, *run_dir.rglob("*")):
-        os.chown(path, uid, gid, follow_symlinks=False)
+    failed: list[str] = []
+
+    def transfer(path: Path) -> None:
+        try:
+            os.chown(path, uid, gid, follow_symlinks=False)
+        except OSError as error:
+            failed.append(f"{path}: {error}")
+
+    transfer(run_dir)
+    for parent, directories, files in os.walk(run_dir):
+        base = Path(parent)
+        directories[:] = [
+            name for name in directories if not os.path.ismount(base / name)
+        ]
+        for name in (*directories, *files):
+            transfer(base / name)
+    return failed
 
 
 class BenchmarkRun:
@@ -119,7 +151,11 @@ class BenchmarkRun:
         device_info: DeviceInfo | None,
         run_id: str,
         publication_eligible: bool,
+        reporter: RunReporter | None = None,
     ):
+        self.reporter = reporter if reporter is not None else RunReporter(
+            level=Level.QUIET
+        )
         self.repository = repository
         self.run_dir = run_dir
         self.config = config
@@ -147,6 +183,7 @@ class BenchmarkRun:
             stable_device=self.stable_device,
             mountpoint=self.mountpoint,
             run_id=f"{self.run_id}_{filesystem}",
+            reporter=self.reporter,
         )
 
     def filesystem_version(self, adapter: FilesystemAdapter) -> str:
@@ -159,7 +196,8 @@ class BenchmarkRun:
         if self.current_adapter is None:
             return
         try:
-            self.current_adapter.unmount()
+            with self.reporter.timed("unmount"):
+                self.current_adapter.unmount()
         finally:
             self.current_adapter = None
 
@@ -175,9 +213,16 @@ class BenchmarkRun:
             self.config.discard,
         )
         try:
-            conditioner.condition()
-            adapter.format()
-            adapter.mount()
+            with self.reporter.timed(
+                "condition device", conditioner.discard_mode
+            ):
+                conditioner.condition()
+            with self.reporter.timed(f"mkfs {adapter.name}"):
+                adapter.format()
+            with self.reporter.timed(
+                "mount", adapter.mount_options or None
+            ):
+                adapter.mount()
             yield adapter
             adapter.validate_health()
         finally:
@@ -265,21 +310,29 @@ class BenchmarkRun:
         workers: int = 1,
         **kwargs: object,
     ) -> None:
-        self.runner.run(
-            self._runner_argv(
-                adapter,
-                scenario,
-                phase,
-                repetition,
-                seed,
-                workers,
-                **kwargs,
-            ),
-            cwd=self.repository,
-            label=(
-                f"{adapter.name}-{scenario}-{phase}-r{repetition}-w{workers}"
-            ),
-        )
+        results = kwargs.get("results") or self.results
+        with self.reporter.phase(
+            filesystem=adapter.name,
+            scenario=scenario,
+            phase=phase,
+            workers=workers,
+            results=None if self.runner.dry_run else results,
+        ):
+            self.runner.run(
+                self._runner_argv(
+                    adapter,
+                    scenario,
+                    phase,
+                    repetition,
+                    seed,
+                    workers,
+                    **kwargs,
+                ),
+                cwd=self.repository,
+                label=(
+                    f"{adapter.name}-{scenario}-{phase}-r{repetition}-w{workers}"
+                ),
+            )
 
     def execute_common_scenario(
         self,
@@ -368,10 +421,23 @@ class BenchmarkRun:
                 "error": str(error),
             }
         )
+        log_hint = (
+            str(self.runner.last_error_log)
+            if isinstance(error, CommandError)
+            and self.runner.last_error_log is not None
+            else None
+        )
+        self.reporter.failure(filesystem, scenario, repetition, error, log_hint)
 
     def validation_matrix(self, filesystems: tuple[str, ...]) -> None:
         validation_results = self.run_dir / "validation.jsonl"
         for filesystem in filesystems:
+            self.reporter.unit_start(
+                matrix="validation",
+                filesystem=filesystem,
+                scenario="bulk",
+                repetition=0,
+            )
             try:
                 with self.fresh_filesystem(filesystem) as adapter:
                     self.execute_common_scenario(
@@ -393,6 +459,12 @@ class BenchmarkRun:
             seed = self.config.seeds[repetition]
             for filesystem in cyclic_schedule(filesystems, repetition):
                 for scenario in self.config.common_scenarios:
+                    self.reporter.unit_start(
+                        matrix="common",
+                        filesystem=filesystem,
+                        scenario=scenario,
+                        repetition=repetition,
+                    )
                     try:
                         with self.fresh_filesystem(filesystem) as adapter:
                             self.execute_common_scenario(
@@ -411,6 +483,12 @@ class BenchmarkRun:
         for repetition in range(self.config.repetitions):
             seed = self.config.seeds[repetition]
             if "bsfs" in filesystems:
+                self.reporter.unit_start(
+                    matrix="recovery",
+                    filesystem="bsfs",
+                    scenario="recovery-pressure",
+                    repetition=repetition,
+                )
                 try:
                     with self.fresh_filesystem("bsfs") as adapter:
                         self.run_phase(
@@ -437,6 +515,12 @@ class BenchmarkRun:
                         "bsfs", "recovery-pressure", repetition, error
                     )
             if "old-bsfs" in filesystems:
+                self.reporter.unit_start(
+                    matrix="recovery",
+                    filesystem="old-bsfs",
+                    scenario="old-recovery",
+                    repetition=repetition,
+                )
                 try:
                     with self.fresh_filesystem("old-bsfs") as adapter:
                         self.run_phase(
@@ -450,6 +534,12 @@ class BenchmarkRun:
                             repetition,
                             seed,
                         )
+                    self.reporter.unit_start(
+                        matrix="recovery",
+                        filesystem="old-bsfs",
+                        scenario="old-recovery",
+                        repetition=repetition,
+                    )
                     with self.fresh_filesystem("old-bsfs") as adapter:
                         self.run_phase(
                             adapter, "old-recovery", "prepare", repetition, seed
@@ -479,7 +569,7 @@ class BenchmarkRun:
             seed = self.config.seeds[repetition]
             for filesystem in cyclic_schedule(kernel_filesystems, repetition):
                 for scenario in self.config.concurrency_scenarios:
-                    for workers in (1, 4):
+                    for workers in CONCURRENCY_WORKERS:
                         if len(self.config.concurrency_cpus) < workers:
                             self.record_failure(
                                 filesystem,
@@ -490,6 +580,13 @@ class BenchmarkRun:
                                 ),
                             )
                             continue
+                        self.reporter.unit_start(
+                            matrix="concurrency",
+                            filesystem=filesystem,
+                            scenario=scenario,
+                            repetition=repetition,
+                            workers=workers,
+                        )
                         try:
                             with self.fresh_filesystem(filesystem) as adapter:
                                 if scenario == "concurrency-seq":
@@ -572,6 +669,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--filesystems", nargs="+")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-correctness-gates", action="store_true")
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="also report every subprocess with its duration",
+    )
+    verbosity.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="only report failures and the closing summary",
+    )
+    parser.add_argument(
+        "--no-color", action="store_true", help="never colourise progress output"
+    )
     return parser.parse_args()
 
 
@@ -579,11 +692,21 @@ def main() -> int:
     args = parse_args()
     repository = Path(__file__).resolve().parents[2]
     old_repository = repository.parent / "bsfs_old"
+    build_bsfs_argv = build_module_argv(repository)
     config = load_config(args.config.resolve())
     selected = tuple(args.filesystems or config.filesystems)
     unknown = set(selected) - set(COMMON_FILESYSTEMS)
     if unknown:
         raise SystemExit(f"unknown filesystems: {', '.join(sorted(unknown))}")
+    if args.quiet:
+        level = Level.QUIET
+    elif args.verbose:
+        level = Level.VERBOSE
+    else:
+        level = Level.NORMAL
+    reporter = RunReporter(
+        level=level, color=False if args.no_color else None
+    )
     if not args.dry_run:
         try:
             validate_benchmark_binaries(repository, selected)
@@ -600,16 +723,33 @@ def main() -> int:
         raise SystemExit(f"run directory is not empty: {run_dir}")
     if not args.dry_run and os.geteuid() != 0:
         raise SystemExit("actual loop or physical runs require root")
+    reporter.header(
+        run_id=run_id,
+        config_path=args.config.resolve(),
+        profile=config.profile,
+        repetitions=config.repetitions,
+        seeds=config.seeds,
+        common_cpu=config.common_cpu,
+        concurrency_cpus=config.concurrency_cpus,
+        run_dir=run_dir,
+        dry_run=args.dry_run,
+    )
+    reporter.announce_plan(build_plan(config, selected))
+    reporter.section("preflight")
+    if not args.dry_run:
+        reporter.step("benchmark binaries ok")
     if not args.dry_run and "bsfs" in selected:
         try:
-            validate_bsfs_module(repository)
+            with reporter.timed("build and probe-load the bsfs module"):
+                validate_bsfs_module(repository)
         except BsfsModuleError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
-    runner = CommandRunner(run_dir, dry_run=args.dry_run)
+    runner = CommandRunner(run_dir, dry_run=args.dry_run, reporter=reporter)
     result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
     loop_device: str | None = None
+    benchmark: BenchmarkRun | None = None
     publication_eligible = config.publication and args.device is not None
 
     try:
@@ -625,12 +765,11 @@ def main() -> int:
             )
             device = device_info.resolved
             stable_device = device_info.requested
-            print(
-                "benchmark target: "
-                f"path={device_info.requested} resolved={device_info.resolved} "
-                f"parent={device_info.parent} model={device_info.model!r} "
-                f"serial={device_info.serial!r} "
-                f"size_bytes={device_info.size_bytes}"
+            reporter.target(
+                f"device {device_info.requested} -> {device_info.resolved} "
+                f"(parent={device_info.parent}, model={device_info.model!r}, "
+                f"serial={device_info.serial!r}, "
+                f"{device_info.size_bytes / 1024**3:.1f} GiB)"
             )
         else:
             assert args.loop_image is not None
@@ -651,37 +790,44 @@ def main() -> int:
                     raise RuntimeError("losetup did not return a loop device")
                 loop_device = device
             stable_device = device
-            print(
-                "benchmark target: "
-                f"loop_image={args.loop_image} size_bytes="
-                f"{config.loop_size_mib * 1024**2}"
+            reporter.target(
+                f"loop {args.loop_image} -> {device} "
+                f"({config.loop_size_mib} MiB)"
             )
 
+        # a dry run skips the preflight, so show the build it would have done
         if args.dry_run and "bsfs" in selected:
-            runner.run(
-                ["make", "-C", str(repository)],
-                label="build-current-bsfs",
-            )
+            runner.run(build_bsfs_argv, label="build-current-bsfs")
         debugfs = runner.run(
             ["mountpoint", "--quiet", "/sys/kernel/debug"],
             check=False,
             label="check-debugfs",
         )
         if debugfs.returncode != 0:
-            runner.run(
-                ["mount", "-t", "debugfs", "debugfs", "/sys/kernel/debug"],
-                label="mount-debugfs",
-            )
+            with reporter.timed("mount debugfs"):
+                runner.run(
+                    ["mount", "-t", "debugfs", "debugfs", "/sys/kernel/debug"],
+                    label="mount-debugfs",
+                )
+        else:
+            reporter.step("debugfs already mounted")
         kernel_before = runner.run(
             ["dmesg", "--color=never"],
             check=config.publication,
             label="kernel-log-before",
         )
+        reporter.step("kernel log captured (before)")
 
         correctness: list[dict[str, object]] = []
         if config.publication and not args.skip_correctness_gates:
+            # the gates boot a VM against $REPO/bsfs2.ko and $REPO/mkfs.bsfs, so
+            # they need a build even when bsfs is not a measured filesystem
+            if "bsfs" not in selected:
+                with reporter.timed("build gate artifacts"):
+                    runner.run(build_bsfs_argv, label="build-gate-artifacts")
             try:
-                correctness = run_correctness_gates(runner, repository)
+                with reporter.timed("correctness gates"):
+                    correctness = run_correctness_gates(runner, repository)
             except CorrectnessGateError as error:
                 gate_failure = run_dir / "correctness-gates.json"
                 if not args.dry_run:
@@ -714,6 +860,7 @@ def main() -> int:
             device_info=device_info,
             run_id=run_id,
             publication_eligible=publication_eligible,
+            reporter=reporter,
         )
         manifest = collect_manifest(
             repository=repository,
@@ -754,6 +901,11 @@ def main() -> int:
                 "version": benchmark.filesystem_version(adapter),
             }
         manifest["filesystem_configuration"] = filesystem_configuration
+        for filesystem, entry in filesystem_configuration.items():
+            if isinstance(entry, dict) and "unavailable" in entry:
+                reporter.warning(
+                    f"{filesystem} is unavailable: {entry['unavailable']}"
+                )
         manifest["kernel_log"] = {
             "path": "raw/kernel.log",
             "capture_before_returncode": kernel_before.returncode,
@@ -775,6 +927,7 @@ def main() -> int:
                     (config.common_cpu, *config.concurrency_cpus)
                 )
             )
+            reporter.section("matrix")
             with PerformanceGovernor(runner, cpus):
                 if config.publication:
                     benchmark.validation_matrix(selected)
@@ -785,6 +938,7 @@ def main() -> int:
             benchmark.cleanup_current()
             for sig, previous in previous_handlers.items():
                 signal.signal(sig, previous)
+        reporter.end_section()
 
         manifest["failures"] = benchmark.failures
         manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -846,6 +1000,15 @@ def main() -> int:
             kernel_log.parent.mkdir(parents=True, exist_ok=True)
             kernel_log.write_text(excerpt, encoding="utf-8")
             write_manifest(run_dir, manifest)
+        reporter.summary(
+            run_id=run_id,
+            failures=benchmark.failures,
+            kernel_findings=len(findings),
+            publication_eligible=bool(
+                manifest.get("publication_eligible", publication_eligible)
+            ),
+            run_dir=run_dir,
+        )
         return 1 if benchmark.failures else 0
     except (
         SafetyError,
@@ -858,6 +1021,14 @@ def main() -> int:
         return 2
     except KeyboardInterrupt:
         print("benchmark interrupted; cleanup completed", file=sys.stderr)
+        reporter.summary(
+            run_id=run_id,
+            failures=benchmark.failures if benchmark else [],
+            kernel_findings=0,
+            publication_eligible=False,
+            run_dir=run_dir,
+            interrupted=True,
+        )
         return 130
     finally:
         if loop_device:
@@ -867,11 +1038,11 @@ def main() -> int:
                 label="detach-loop-device",
             )
         if result_owner:
-            try:
-                transfer_result_ownership(run_dir, result_owner)
-            except OSError as error:
+            unowned = transfer_result_ownership(run_dir, result_owner)
+            if unowned:
                 print(
-                    f"benchmark result ownership transfer failed: {error}",
+                    f"benchmark result ownership transfer failed for "
+                    f"{len(unowned)} paths, first: {unowned[0]}",
                     file=sys.stderr,
                 )
 
