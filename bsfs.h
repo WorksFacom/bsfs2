@@ -38,6 +38,26 @@ struct bsfs_reclaim_stats {
   struct dentry *debugfs_dir;
 };
 
+#ifdef BSFS_ALLOC_STATS
+/*
+ * What the allocation strategy actually did, for the tests and the benchmarks.
+ *
+ * Compiled in only with BSFS_ALLOC_STATS=y - see include/alloc_strategy.h. The
+ * index/cursor split is the interesting one: every strategy so far is some
+ * structure of recycled blocks plus a cursor over the never-yet-handed-out ones,
+ * and the ratio between them is what says whether the structure is earning its
+ * memory.
+ */
+struct bsfs_alloc_stats {
+  __u64 allocs;         // blocks handed out
+  __u64 frees;          // blocks returned (real 1->0 transitions only)
+  __u64 from_index;     // ... of the allocs, how many came from the strategy's structure
+  __u64 from_cursor;    // ... and how many from the sequential cursor
+  __u64 fallback_scans; // times the strategy had to fall back to a full scan
+  __u64 index_peak;     // most entries the structure ever held at once
+};
+#endif
+
 struct bsfs_super_info {
   bsfs_super_block    *super;
   struct buffer_head  *bh;
@@ -58,6 +78,15 @@ struct bsfs_super_info {
   // allocations stop at the reserve while metadata ones may spend it.
   __u32 free_blocks;
   __u32 reserved_blocks;
+
+  // Whatever index the compiled-in allocation strategy keeps over the bitmap.
+  // Owned entirely by src/alloc_<strategy>.c, built at mount, dropped at
+  // unmount, never written to disk. Also under bitmap_lock.
+  void *alloc_private;
+
+#ifdef BSFS_ALLOC_STATS
+  struct bsfs_alloc_stats alloc_stats;
+#endif
 
   // Set when ->write_inode could not persist an inode, which means some
   // per-inode root is still only in memory. While it is set no deferred block

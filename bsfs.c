@@ -1,4 +1,5 @@
 #include "bsfs.h"
+#include "include/alloc_strategy.h"
 #include "include/bitmap.h"
 #include "include/btree.h"
 #include "include/dir.h"
@@ -26,6 +27,10 @@ static void bsfs_put_super(struct super_block *sb) {
   // syncing it here first would push the roots out ahead of their trees.
   mark_buffer_dirty(sbi->bh);
   (void)bsfs_commit_deferred_frees(sb);
+
+  bsfs_alloc_log_unmount(sb);
+  bsfs_alloc_strategy_destroy(sb);
+
   release_bitmap(sb);
   brelse(sbi->bh);
   kfree(sbi);
@@ -140,6 +145,13 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   bsfs_init_block_counts(s);
 
+  ret = bsfs_alloc_strategy_init(s);
+
+  if (ret)
+    goto out_freemap;
+
+  bsfs_alloc_log_mount(s);
+
   bsfs_rec_tree_mount_init(s);
 
   // TODO
@@ -173,6 +185,7 @@ out_freemap:
   // load_bitmap() pins one buffer head per bitmap block and can fail halfway
   // through; release_bitmap() copes with a partial load. Without this every
   // failed mount leaked all of them.
+  bsfs_alloc_strategy_destroy(s);
   release_bitmap(s);
   goto out_release;
 

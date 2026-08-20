@@ -28,6 +28,7 @@
 #define BITMAP_OPERATIONS
 
 #include "../bsfs.h"
+#include <linux/bitops.h>
 #include <linux/fs.h>
 #include <linux/types.h>
 
@@ -164,5 +165,51 @@ static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
 
   mark_buffer_dirty(sbi->bitmap_map[block]);
   return true;
+}
+
+/**
+ * @brief Finds the first free block in [from, to), or returns @to if there is
+ *        none.
+ *
+ * The bit-at-a-time alternative is a loop over bsfs_is_bit_free(), which redoes
+ * the block/byte division on every bit. This walks a machine word at a time
+ * through find_next_zero_bit_le(), so a full bucket or a long run of allocated
+ * blocks is skipped 64 bits per operation instead of one.
+ *
+ * The `_le` variant is the correct one: bsfs packs bits LSB-first inside a byte
+ * (`1U << (index & 7)`, see above), which is the little-endian on-disk bitmap
+ * convention the kernel provides these accessors for. On x86 it compiles to the
+ * same thing as the native version; on big-endian it would not.
+ *
+ * The search is split at bitmap-block boundaries because the bits of each one
+ * live in a separate buffer head and are not contiguous in memory. Callers whose
+ * range never straddles a boundary get a single iteration.
+ *
+ * @param from first block to consider (must be < the total block count)
+ * @param to   one past the last block to consider
+ * @return the block index, or @to if every block in the range is allocated.
+ */
+static inline __u32 bsfs_find_free_bit(struct super_block *sb, __u32 from, __u32 to) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  const __u32             per = (__u32)BITS_PER_BLOCK;
+
+  while (from < to) {
+    __u32         block = from / per;
+    __u32         base  = block * per;
+    __u32         limit = (to - base < per) ? to - base : per;
+    unsigned long hit;
+
+    // Bits past `limit` are masked off by the search itself, so the tail of the
+    // last word - which overlaps bitmap_block_t.next_block - can never be
+    // returned as a free block. Reading it stays inside the 4096-byte buffer.
+    hit = find_next_zero_bit_le(sbi->bitmap[block], limit, from - base);
+
+    if (hit < limit)
+      return base + (__u32)hit;
+
+    from = base + per;
+  }
+
+  return to;
 }
 #endif // BITMAP_OPERATIONS

@@ -3,6 +3,7 @@
  * @brief Functions for allocating blocks in the BSFS file system.
  */
 #include "../include/alloc.h"
+#include "../include/alloc_strategy.h"
 #include "../include/rec_entry.h"
 #include "../include/rec_gc.h"
 #include "../include/reclaim_stats.h"
@@ -278,74 +279,118 @@ int bsfs_reclaim_space(struct super_block *sb) {
   return ret;
 }
 
+// defined below, next to the other single-block paths
+static __u32 __allocate_single_block(struct super_block *sb, __u32 floor);
+
 // caller must hold sbi->bitmap_lock
-static int __allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
+static void __release_run(struct super_block *sb, __u32 start, __u32 length) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
-  if (blocks_needed == 0 || offset >= sbi->super->total_blocks) {
-    return (blocks_needed == 0) ? 0 : -1;
-  }
-
-  __u32 run_start  = INVALID_BLOCK;
-  __u32 run_length = 0;
-
-  if (offset < sbi->super->data_block_start)
-    offset = sbi->super->data_block_start;
-  for (__u32 i = offset; i < sbi->super->total_blocks; i++) {
-    if (bsfs_is_bit_free(sb, i)) {
-      if (run_start == INVALID_BLOCK) {
-        run_start  = i;
-        run_length = 1;
-      } else {
-        run_length++;
-      }
-
-      if (run_length == blocks_needed) {
-        for (__u32 j = run_start; j < run_start + run_length; j++) {
-          if (bsfs_set_bit(sb, j))
-            sbi->free_blocks--;
-        }
-        enqueue_bspan(queue, 0, run_start, run_length);
-        return 0;
-      }
-    } else if (run_length > 0) {
-      for (__u32 j = run_start; j < run_start + run_length; j++) {
-        if (bsfs_set_bit(sb, j))
-          sbi->free_blocks--;
-      }
-      enqueue_bspan(queue, 0, run_start, run_length);
-      int result = __allocate_bspan_queue(sb, queue, blocks_needed - run_length, i + 1);
-      return result;
+  for (__u32 i = 0; i < length; i++) {
+    if (bsfs_clear_bit(sb, start + i)) {
+      sbi->free_blocks++;
+      BSFS_STAT_INC(sb, frees);
+      bsfs_alloc_strategy_freed(sb, start + i);
     }
   }
-
-  // Final run if reached end of bitmap with a partial span
-  if (run_length > 0) {
-    for (__u32 j = run_start; j < run_start + run_length; j++) {
-      if (bsfs_set_bit(sb, j))
-        sbi->free_blocks--;
-    }
-    enqueue_bspan(queue, 0, run_start, run_length);
-    int result = __allocate_bspan_queue(sb, queue, blocks_needed - run_length, sbi->super->total_blocks);
-    return result;
-  }
-
-  return -1;
-
-  // TODO: reenable
-  // On-demand GC: try to free enough blocks and retry once
-  // (void)rec_gc_purge_until(sb, blocks_needed, (__u64)ktime_get_real_seconds());
-
-  // Retry
-  // return allocate_bspan_queue(sb, queue, blocks_needed, offset);
 }
 
+// releases every span this call appended to the queue, and unlinks them
+// caller must hold sbi->bitmap_lock
+static void __rollback_bspan_queue(struct super_block *sb, bspan_queue_t *queue, bspan_node_t *saved_rear) {
+  bspan_node_t *node = saved_rear ? saved_rear->next : queue->front;
+
+  while (node) {
+    bspan_node_t *next = node->next;
+
+    __release_run(sb, node->bspan.disk_blk, node->bspan.length);
+    kfree(node);
+    node = next;
+  }
+
+  if (saved_rear) {
+    saved_rear->next = NULL;
+    queue->rear      = saved_rear;
+  } else {
+    queue->front = NULL;
+    queue->rear  = NULL;
+  }
+}
+
+/*
+ * Fills a queue with blocks_needed blocks, coalesced into as few spans as they
+ * happen to form.
+ *
+ * This used to be a first-fit run scanner that walked the bitmap and set the
+ * bits itself, which meant it allocated behind the allocator's back. That is
+ * harmless with a linear scan - it re-reads the bitmap every time - but fatal
+ * with any strategy that keeps an index: blocks taken here would never be
+ * recorded as taken, and the index would hand them out a second time. So it goes
+ * through __allocate_single_block() like everything else now.
+ *
+ * Contiguity is best-effort as a result, rather than first-fit guaranteed. No
+ * caller depends on it: there is none in the module today, and a bspan *queue*
+ * is a list of spans precisely because one span may not be enough.
+ *
+ * Runs are closed at U16_MAX because bspan_t.length is a __u16. An open run has
+ * not been enqueued yet, so it is released directly rather than by the rollback,
+ * which only walks the queue.
+ *
+ * `offset` is accepted for source compatibility and ignored - where blocks come
+ * from is the strategy's decision now.
+ */
 int allocate_bspan_queue(struct super_block *sb, bspan_queue_t *queue, __u32 blocks_needed, __u32 offset) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
-  int                     ret;
+  bspan_node_t           *saved_rear;
+  __u32                   run_start  = INVALID_BLOCK;
+  __u32                   run_length = 0;
+  int                     ret        = 0;
+
+  (void)offset;
+
+  if (blocks_needed == 0)
+    return 0;
 
   mutex_lock(&sbi->bitmap_lock);
-  ret = __allocate_bspan_queue(sb, queue, blocks_needed, offset);
+  saved_rear = queue->rear;
+
+  for (__u32 done = 0; done < blocks_needed; done++) {
+    __u32 block = __allocate_single_block(sb, sbi->reserved_blocks);
+
+    if (block == INVALID_BLOCK) {
+      ret = -1;
+      break;
+    }
+
+    if (run_start != INVALID_BLOCK && block == run_start + run_length && run_length < U16_MAX) {
+      run_length++;
+      continue;
+    }
+
+    if (run_start != INVALID_BLOCK && enqueue_bspan(queue, 0, run_start, (__u16)run_length) != 0) {
+      __release_run(sb, run_start, run_length);
+      __release_run(sb, block, 1);
+      run_start = INVALID_BLOCK;
+      ret       = -ENOMEM;
+      break;
+    }
+
+    run_start  = block;
+    run_length = 1;
+  }
+
+  if (run_start != INVALID_BLOCK) {
+    if (ret != 0 || enqueue_bspan(queue, 0, run_start, (__u16)run_length) != 0) {
+      __release_run(sb, run_start, run_length);
+
+      if (ret == 0)
+        ret = -ENOMEM;
+    }
+  }
+
+  if (ret != 0)
+    __rollback_bspan_queue(sb, queue, saved_rear);
+
   mutex_unlock(&sbi->bitmap_lock);
 
   return ret;
@@ -386,26 +431,38 @@ void bsfs_init_block_counts(struct super_block *sb) {
   mutex_unlock(&sbi->bitmap_lock);
 }
 
+/*
+ * The one place a block is chosen.
+ *
+ * The floor is the reserve check and stays here, above the strategy: how deep
+ * into the metadata reserve an allocation may dig is a policy question about the
+ * caller (see bsfs_alloc_prio_t), not about how free blocks are indexed. The
+ * strategy below only answers "which free block", and src/alloc_linear.c still
+ * answers it exactly the way this function used to.
+ *
+ * A strategy that finds nothing while free_blocks says otherwise has drifted out
+ * of sync with the bitmap. The strategy is believed: handing out a block it does
+ * not know about is what corrupts data.
+ */
 // caller must hold sbi->bitmap_lock
 static __u32 __allocate_single_block(struct super_block *sb, __u32 floor) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
-
-  __u32 i;
-  __u32 start        = sbi->super->data_block_start;
-  __u32 total_blocks = sbi->super->total_blocks;
+  __u32                   block;
 
   if (sbi->free_blocks <= floor)
     return INVALID_BLOCK;
 
-  for (i = start; i < total_blocks; i++) {
-    if (bsfs_is_bit_free(sb, i)) {
-      if (bsfs_set_bit(sb, i))
-        sbi->free_blocks--;
-      return i;
-    }
+  block = bsfs_alloc_strategy_alloc(sb);
+
+  if (block == INVALID_BLOCK) {
+    pr_warn_ratelimited("allocator found nothing with %u blocks free (index out of sync?)\n", sbi->free_blocks);
+    return INVALID_BLOCK;
   }
 
-  return INVALID_BLOCK;
+  sbi->free_blocks--;
+  BSFS_STAT_INC(sb, allocs);
+
+  return block;
 }
 
 /*
@@ -482,10 +539,48 @@ int deallocate_single_block(struct super_block *sb, __u32 block_index) {
 
   mutex_lock(&sbi->bitmap_lock);
   // rollback paths can reach the same block twice; only a real transition counts
-  if (bsfs_clear_bit(sb, block_index))
+  if (bsfs_clear_bit(sb, block_index)) {
     sbi->free_blocks++;
+    BSFS_STAT_INC(sb, frees);
+    bsfs_alloc_strategy_freed(sb, block_index);
+  }
   mutex_unlock(&sbi->bitmap_lock);
   return 0;
+}
+
+/*
+ * Which allocator this module was built with.
+ *
+ * One line per mount, unconditionally: with the strategy chosen at build time
+ * there is otherwise no way to tell from a running system - or from a test log -
+ * which .ko is loaded, and "the benchmark ran against the wrong build" is a
+ * mistake that does not announce itself.
+ *
+ * The counter keys in the unmount summary are stable and space-separated so
+ * tests/alloc_guest.sh can pull them out of dmesg with sed.
+ */
+void bsfs_alloc_log_mount(struct super_block *sb) {
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+
+  pr_info("allocator '%s' on %s: %u blocks free, %u reserved\n", BSFS_ALLOC_STRATEGY_NAME, sb->s_id, sbi->free_blocks,
+          sbi->reserved_blocks);
+}
+
+void bsfs_alloc_log_unmount(struct super_block *sb) {
+#ifdef BSFS_ALLOC_STATS
+  struct bsfs_super_info *sbi = bsfs_sb(sb);
+  char                    detail[96];
+
+  mutex_lock(&sbi->bitmap_lock);
+  bsfs_alloc_strategy_stats(sb, detail, sizeof(detail));
+
+  pr_info("alloc[%s] allocs=%llu frees=%llu from_index=%llu from_cursor=%llu index_peak=%llu fallback_scans=%llu %s\n",
+          BSFS_ALLOC_STRATEGY_NAME, sbi->alloc_stats.allocs, sbi->alloc_stats.frees, sbi->alloc_stats.from_index,
+          sbi->alloc_stats.from_cursor, sbi->alloc_stats.index_peak, sbi->alloc_stats.fallback_scans, detail);
+  mutex_unlock(&sbi->bitmap_lock);
+#else
+  (void)sb;
+#endif
 }
 
 int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
@@ -494,8 +589,11 @@ int deallocate_bspan(struct super_block *sb, const bspan_t *bspan) {
   // Clear bits corresponding to the span
   mutex_lock(&sbi->bitmap_lock);
   for (__u32 i = 0; i < bspan->length; i++) {
-    if (bsfs_clear_bit(sb, bspan->disk_blk + i))
+    if (bsfs_clear_bit(sb, bspan->disk_blk + i)) {
       sbi->free_blocks++;
+      BSFS_STAT_INC(sb, frees);
+      bsfs_alloc_strategy_freed(sb, bspan->disk_blk + i);
+    }
   }
   mutex_unlock(&sbi->bitmap_lock);
 
