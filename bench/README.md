@@ -75,12 +75,49 @@ editing anything under `bench/src/`. Every run records the size, mtime, and
 SHA-256 of each built artifact under `built_artifacts` in `manifest.json`, so a
 stale binary is detectable after the fact.
 
-When `bsfs` is selected, the launcher does build `bsfs2.ko`, removes any
+When a `bsfs` target is selected, the launcher builds `bsfs2.ko`, removes any
 stale `bsfs2` module, and verifies the new module can load on the running
 kernel before it creates a result directory or touches the benchmark target.
 If this fails (for example, `.env` points `KDIR` at a different kernel), the
 launcher exits with setup status 2 and reports the running kernel and module
 vermagic. Set `KDIR` to the running kernel's build tree, rebuild, and retry.
+
+## Allocation strategies
+
+The block allocator is selected at compile time. `BSFS_ALLOC` in the top-level
+Makefile chooses the `src/alloc_<name>.c` file to link. Every choice produces
+`bsfs2.ko`, which registers the `bsfs` filesystem type. The benchmark discovers
+targets from those source files. Add `src/alloc_foo.c` and `bsfs-foo` becomes
+selectable:
+
+```sh
+sudo python3 -m bench.orchestration.run \
+  --config bench/config/alloc.toml \
+  --loop-image /tmp/bsfs-bench.img
+```
+
+`bench/config/alloc.toml` selects `bsfs-linear`, `bsfs-heap`, and
+`bsfs-twolevel`. You can include them in a run with `ext4`, `btrfs`, and the
+other filesystems. They run the full matrix, including recovery pressure and
+concurrency. Plain `bsfs` still selects the default build, the same module as
+`bsfs-linear`. Selecting both benchmarks one build under two labels, and the
+launcher warns about it.
+
+Preflight builds every selected strategy once, copies each `.ko` to
+`bench/build/modules/`, then loads and unloads it. No compilation runs between
+measured phases. A strategy that cannot build or load fails before the runner
+touches a device. Preflight sets `BSFS_ALLOC_STATS=` to disable the allocation
+counters, which run on the allocation fast path. It restores the default build
+afterward because the correctness gates and QEMU scripts boot
+`$REPO/bsfs2.ko`.
+
+`manifest.json` records each copied module under `built_artifacts` with its
+SHA-256. `filesystem_configuration` records the strategy for each target. The
+mount-time `bsfs2: allocator '<name>' on <device>` message in `dmesg` identifies
+the module used for a phase.
+
+`tests/alloc_matrix.sh` runs the QEMU suite for every strategy with allocation
+counters compiled in.
 
 The quick profile runs reduced versions of every common, recovery, and
 one-/four-worker scenario. Specify only installed filesystems; `zfs` and
@@ -111,13 +148,12 @@ phase prints a counter, its wall time, and the headline metric read back from
   unit total (6 phases)                          38.1s
 ```
 
-Every line shares one column grid, so the durations of the mkfs cycle's own
-steps line up with the measured phases', and the throughput and p99 cells stack
-whatever unit they end up in.
+The output uses fixed columns. mkfs and phase durations stay aligned, as do
+throughput and p99 values with different units.
 
-Each mkfs cycle closes with `unit total`, the real time it took including its
-conditioning, mkfs, mount and unmount, and each section closes with its own
-total, so the ETA can be read against what actually happened:
+Each mkfs cycle ends with `unit total`, which includes conditioning, mkfs,
+mount, and unmount. Each section also ends with a total, so the ETA reflects
+elapsed work:
 
 ```
 preflight
@@ -129,22 +165,21 @@ matrix
   matrix total                                  42m11s
 ```
 
-Failures are printed as they happen, with the path to the failing command's
-captured stderr, instead of only surfacing in `manifest.json`. A closing
-summary gives the total wall time, per-filesystem phase and failure counts,
-the kernel-log finding count, and the `analyze` command to run next.
+On failure, the runner prints the path to the command's captured stderr instead
+of leaving it only in `manifest.json`. The closing summary lists total wall
+time, phase and failure counts for each filesystem, kernel-log findings, and
+the `analyze` command.
 
 | flag | effect |
 | --- | --- |
 | *(default)* | phase-level progress, device steps, cache transitions, unit and section totals, failures |
-| `-v`, `--verbose` | additionally every subprocess with its duration, and the per-filesystem plan breakdown |
+| `-v`, `--verbose` | every subprocess with its duration, plus the per-filesystem plan breakdown |
 | `-q`, `--quiet` | only the run title, failures, and the closing summary |
 | `--no-color` | never emit ANSI colour (also honoured via `NO_COLOR`, and colour is off automatically when stderr is not a terminal) |
 
-Reporting cannot perturb a measurement: it writes only from the main thread
-between subprocess calls, uses no background threads or timers, and reads
-results back only after the measured process has exited. Each command's wall
-time is also recorded as `duration_s` in `commands.jsonl`.
+The reporter writes from the main thread between subprocess calls. It has no
+background threads or timers, and reads results only after the measured process
+exits. `commands.jsonl` records each command's wall time as `duration_s`.
 
 ## Physical publication run
 
@@ -163,12 +198,12 @@ sudo python3 -m bench.orchestration.run \
 
 The safety layer rejects whole disks, mounted targets, targets with holders,
 device-mapper members, active swap, and any target whose parent disk also
-backs a mounted filesystem. That last rule is deliberately broad rather than a
-list of protected paths: a list cannot know where a given host keeps `/efi`,
-`/var` or `/usr`, and the cost of guessing wrong is a wiped partition. Use a
-disk with nothing else mounted on it, or pass `--allow-shared-disk`.
+backs a mounted filesystem. The last rule is deliberately broad. A list of
+protected paths cannot know where a host keeps `/efi`, `/var`, or `/usr`, and a
+wrong guess can wipe a partition. Use a disk with nothing else mounted on it,
+or pass `--allow-shared-disk`.
 
-Publication partitions must be 4–16 GiB unless `--allow-size-outside-range` is
+Publication partitions must be 4 to 16 GiB unless `--allow-size-outside-range` is
 supplied. Both overrides are recorded in the manifest.
 
 Before measured publication work, the runner:
@@ -245,7 +280,11 @@ whatever writeback happened to land during the phase.
   re-conditions the device. There is no aging and no fragmentation.
 - `old-bsfs` is a userspace filesystem driving a raw block device through its
   own API, with no VFS, no dentry cache, and no page-cache-backed lookups. It
-  does not take part in the concurrency matrix.
+  does not take part in the concurrency matrix. Despite the name it is not a
+  `bsfs-*` allocator variant; it is a different source tree.
+- The `bsfs-*` targets differ only in the compiled block allocator. Workloads
+  with plenty of free blocks may show little difference. Recovery pressure and
+  write-heavy phases are the most likely places to show one.
 
 ## CPU selection
 

@@ -18,13 +18,20 @@ if __package__ in {None, ""}:
     from bench.orchestration.conditioning import DeviceConditioner
     from bench.orchestration.config import RunConfig, load_config
     from bench.orchestration.filesystems import (
+        BSFS_FILESYSTEMS,
         FilesystemAdapter,
         FilesystemContext,
         FilesystemUnavailable,
+        bsfs_targets_by_strategy,
         create_adapter,
     )
     from bench.orchestration.governor import PerformanceGovernor
     from bench.orchestration.manifest import collect_manifest, write_manifest
+    from bench.orchestration.modules import (
+        BsfsModuleError,
+        build_module_argv,
+        build_modules,
+    )
     from bench.orchestration.plan import (
         COMMON_FILESYSTEMS,
         CONCURRENCY_WORKERS,
@@ -33,11 +40,8 @@ if __package__ in {None, ""}:
     )
     from bench.orchestration.preflight import (
         BenchmarkBinaryError,
-        BsfsModuleError,
         CorrectnessGateError,
-        build_module_argv,
         run_correctness_gates,
-        validate_bsfs_module,
         validate_benchmark_binaries,
     )
     from bench.orchestration.progress import Level, RunReporter
@@ -54,13 +58,16 @@ else:
     from .conditioning import DeviceConditioner
     from .config import RunConfig, load_config
     from .filesystems import (
+        BSFS_FILESYSTEMS,
         FilesystemAdapter,
         FilesystemContext,
         FilesystemUnavailable,
+        bsfs_targets_by_strategy,
         create_adapter,
     )
     from .governor import PerformanceGovernor
     from .manifest import collect_manifest, write_manifest
+    from .modules import BsfsModuleError, build_module_argv, build_modules
     from .plan import (
         COMMON_FILESYSTEMS,
         CONCURRENCY_WORKERS,
@@ -69,11 +76,8 @@ else:
     )
     from .preflight import (
         BenchmarkBinaryError,
-        BsfsModuleError,
         CorrectnessGateError,
-        build_module_argv,
         run_correctness_gates,
-        validate_bsfs_module,
         validate_benchmark_binaries,
     )
     from .progress import Level, RunReporter
@@ -482,15 +486,17 @@ class BenchmarkRun:
     def recovery_matrix(self, filesystems: tuple[str, ...]) -> None:
         for repetition in range(self.config.repetitions):
             seed = self.config.seeds[repetition]
-            if "bsfs" in filesystems:
+            for filesystem in BSFS_FILESYSTEMS:
+                if filesystem not in filesystems:
+                    continue
                 self.reporter.unit_start(
                     matrix="recovery",
-                    filesystem="bsfs",
+                    filesystem=filesystem,
                     scenario="recovery-pressure",
                     repetition=repetition,
                 )
                 try:
-                    with self.fresh_filesystem("bsfs") as adapter:
+                    with self.fresh_filesystem(filesystem) as adapter:
                         self.run_phase(
                             adapter,
                             "recovery-pressure",
@@ -512,7 +518,7 @@ class BenchmarkRun:
                     RuntimeError,
                 ) as error:
                     self.record_failure(
-                        "bsfs", "recovery-pressure", repetition, error
+                        filesystem, "recovery-pressure", repetition, error
                     )
             if "old-bsfs" in filesystems:
                 self.reporter.unit_start(
@@ -698,6 +704,8 @@ def main() -> int:
     unknown = set(selected) - set(COMMON_FILESYSTEMS)
     if unknown:
         raise SystemExit(f"unknown filesystems: {', '.join(sorted(unknown))}")
+    bsfs_targets = bsfs_targets_by_strategy(selected)
+    bsfs_strategies = tuple(bsfs_targets)
     if args.quiet:
         level = Level.QUIET
     elif args.verbose:
@@ -738,10 +746,19 @@ def main() -> int:
     reporter.section("preflight")
     if not args.dry_run:
         reporter.step("benchmark binaries ok")
-    if not args.dry_run and "bsfs" in selected:
+    for strategy, targets in bsfs_targets.items():
+        if len(targets) > 1:
+            reporter.warning(
+                f"{' and '.join(targets)} use the same {strategy} build; the "
+                "runner measures it under each label"
+            )
+    if not args.dry_run and bsfs_strategies:
         try:
-            with reporter.timed("build and probe-load the bsfs module"):
-                validate_bsfs_module(repository)
+            with reporter.timed(
+                "build and probe-load the bsfs modules",
+                ", ".join(bsfs_strategies),
+            ):
+                build_modules(repository, bsfs_strategies)
         except BsfsModuleError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
@@ -795,9 +812,13 @@ def main() -> int:
                 f"({config.loop_size_mib} MiB)"
             )
 
-        # a dry run skips the preflight, so show the build it would have done
-        if args.dry_run and "bsfs" in selected:
-            runner.run(build_bsfs_argv, label="build-current-bsfs")
+        # A dry run skips preflight, so print the builds it would run.
+        if args.dry_run:
+            for strategy in bsfs_strategies:
+                runner.run(
+                    build_module_argv(repository, strategy),
+                    label=f"build-current-bsfs-{strategy}",
+                )
         debugfs = runner.run(
             ["mountpoint", "--quiet", "/sys/kernel/debug"],
             check=False,
@@ -820,9 +841,9 @@ def main() -> int:
 
         correctness: list[dict[str, object]] = []
         if config.publication and not args.skip_correctness_gates:
-            # the gates boot a VM against $REPO/bsfs2.ko and $REPO/mkfs.bsfs, so
-            # they need a build even when bsfs is not a measured filesystem
-            if "bsfs" not in selected:
+            # The gates boot a VM with $REPO/bsfs2.ko and $REPO/mkfs.bsfs. They
+            # need a build even when the benchmark measures no BSFS variant.
+            if not bsfs_strategies:
                 with reporter.timed("build gate artifacts"):
                     runner.run(build_bsfs_argv, label="build-gate-artifacts")
             try:

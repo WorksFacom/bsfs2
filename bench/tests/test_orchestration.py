@@ -25,10 +25,14 @@ from bench.orchestration.command import CommandResult, CommandRunner
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
-    BsfsModuleError,
-    build_module_argv,
-    validate_bsfs_module,
     validate_benchmark_binaries,
+)
+from bench.orchestration.modules import (
+    BsfsModuleError,
+    alloc_strategies,
+    build_module_argv,
+    build_modules,
+    module_path,
 )
 from bench.orchestration.safety import (
     SafetyError,
@@ -36,7 +40,14 @@ from bench.orchestration.safety import (
     validate_loop_image,
 )
 from bench.orchestration.topology import physical_cores, sibling_conflicts
-from bench.orchestration.filesystems import FilesystemAdapter, FilesystemContext
+from bench.orchestration.filesystems import (
+    ADAPTERS,
+    BSFS_FILESYSTEMS,
+    FilesystemAdapter,
+    FilesystemContext,
+    bsfs_targets_by_strategy,
+    create_adapter,
+)
 from bench.orchestration.plan import build_plan
 from bench.orchestration.progress import (
     Level,
@@ -248,33 +259,65 @@ class BenchmarkBinaryTests(unittest.TestCase):
 
 
 class BsfsModulePreflightTests(unittest.TestCase):
-    def test_loadable_module_is_built_loaded_and_unloaded(self) -> None:
-        module = REPOSITORY / "bsfs2.ko"
-        with (
-            patch("bench.orchestration.preflight._run_capture") as capture,
+    def build_argv(self, strategy: str) -> list[str]:
+        return build_module_argv(REPOSITORY, strategy)
+
+    def patched(self, *, loaded: bool = False, built_as_ok: bool = True):
+        """Patch writes to bench/build and strategy verification."""
+        assertion = (
+            patch("bench.orchestration.modules._assert_built_as")
+            if built_as_ok
+            else patch(
+                "bench.orchestration.modules._assert_built_as",
+                side_effect=BsfsModuleError("wrong strategy"),
+            )
+        )
+        return (
+            patch("bench.orchestration.modules._run_capture"),
+            patch("bench.orchestration.modules.shutil.copy2"),
             patch(
-                "bench.orchestration.preflight._module_loaded",
-                return_value=False,
+                "bench.orchestration.modules._module_loaded", return_value=loaded
             ),
-        ):
-            capture.side_effect = [
-                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
+            assertion,
+        )
+
+    def test_each_strategy_is_built_stashed_loaded_and_unloaded(self) -> None:
+        stash = module_path(REPOSITORY, "heap")
+        capture, copy, _loaded, _built = self.patched()
+        with capture as run, copy as copied, _loaded, _built:
+            run.side_effect = [
+                subprocess.CompletedProcess(self.build_argv("heap"), 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
-                subprocess.CompletedProcess(["insmod", str(module)], 0, "", ""),
+                subprocess.CompletedProcess(["insmod", str(stash)], 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 0, "", ""),
+                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
             ]
 
-            validate_bsfs_module(REPOSITORY)
+            stashed = build_modules(REPOSITORY, ("heap",))
 
+        self.assertEqual(stashed, (stash,))
         self.assertEqual(
-            capture.call_args_list,
+            run.call_args_list,
             [
+                call(self.build_argv("heap")),
+                call(["rmmod", "bsfs2"]),
+                call(["insmod", str(stash)]),
+                call(["rmmod", "bsfs2"]),
+                # Correctness gates and QEMU scripts boot the default build.
                 call(BUILD_ARGV),
-                call(["rmmod", "bsfs2"]),
-                call(["insmod", str(module)]),
-                call(["rmmod", "bsfs2"]),
             ],
         )
+        copied.assert_called_once_with(REPOSITORY / "bsfs2.ko", stash)
+
+    def test_strategy_build_pins_the_allocator_and_clears_the_counters(
+        self,
+    ) -> None:
+        argv = self.build_argv("twolevel")
+
+        self.assertIn("BSFS_ALLOC=twolevel", argv)
+        # Allocation counters change the measured fast path. A .env setting
+        # must not affect a benchmark build.
+        self.assertIn("BSFS_ALLOC_STATS=", argv)
 
     def test_build_pins_pwd_to_the_repository(self) -> None:
         """make -C moves CURDIR but not PWD, and the kernel build uses
@@ -282,23 +325,66 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertIn(f"PWD={REPOSITORY}", BUILD_ARGV)
         self.assertEqual(BUILD_ARGV[:3], ["make", "-C", str(REPOSITORY)])
 
+    def test_unknown_strategy_is_refused_before_anything_is_built(self) -> None:
+        capture, copy, _loaded, _built = self.patched()
+        with capture as run, copy, _loaded, _built:
+            with self.assertRaisesRegex(BsfsModuleError, "unknown allocation"):
+                build_modules(REPOSITORY, ("nonesuch",))
+
+        run.assert_not_called()
+
+    def test_a_build_that_did_not_take_is_not_stashed(self) -> None:
+        capture, copy, _loaded, _built = self.patched(built_as_ok=False)
+        with capture as run, copy as copied, _loaded, _built:
+            run.side_effect = [
+                subprocess.CompletedProcess(self.build_argv("heap"), 0, "", "")
+            ]
+
+            with self.assertRaises(BsfsModuleError):
+                build_modules(REPOSITORY, ("heap",))
+
+        copied.assert_not_called()
+
+    def test_recorded_defines_must_match_the_requested_strategy(self) -> None:
+        from bench.orchestration.modules import _assert_built_as
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            command_file = repository / ".bsfs.o.cmd"
+
+            command_file.write_text(
+                'cmd_bsfs.o := gcc -DBSFS_ALLOC_STRATEGY_NAME=\\"linear\\" -c\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(BsfsModuleError, "not the requested build"):
+                _assert_built_as(repository, "heap")
+
+            command_file.write_text(
+                'cmd_bsfs.o := gcc -DBSFS_ALLOC_STRATEGY_NAME=\\"heap\\" '
+                "-DBSFS_ALLOC_STATS -c\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(BsfsModuleError, "BSFS_ALLOC_STATS"):
+                _assert_built_as(repository, "heap")
+
+            command_file.write_text(
+                'cmd_bsfs.o := gcc -DBSFS_ALLOC_STRATEGY_NAME=\\"heap\\" -c\n',
+                encoding="utf-8",
+            )
+            _assert_built_as(repository, "heap")
+
     def test_load_failure_reports_kernel_and_vermagic(self) -> None:
-        module = REPOSITORY / "bsfs2.ko"
-        with (
-            patch("bench.orchestration.preflight._run_capture") as capture,
-            patch(
-                "bench.orchestration.preflight._module_loaded",
-                return_value=False,
-            ),
-        ):
-            capture.side_effect = [
-                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
+        stash = module_path(REPOSITORY, "linear")
+        capture, copy, _loaded, _built = self.patched()
+        with capture as run, copy, _loaded, _built:
+            run.side_effect = [
+                subprocess.CompletedProcess(self.build_argv("linear"), 0, "", ""),
                 subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
                 subprocess.CompletedProcess(
-                    ["insmod", str(module)], 1, "", "Invalid module format"
+                    ["insmod", str(stash)], 1, "", "Invalid module format"
                 ),
                 subprocess.CompletedProcess(
-                    ["modinfo", "-F", "vermagic", str(module)],
+                    ["modinfo", "-F", "vermagic", str(stash)],
                     0,
                     "6.18.15-dirty SMP preempt mod_unload\n",
                     "",
@@ -306,7 +392,7 @@ class BsfsModulePreflightTests(unittest.TestCase):
             ]
 
             with self.assertRaises(BsfsModuleError) as raised:
-                validate_bsfs_module(REPOSITORY)
+                build_modules(REPOSITORY, ("linear",))
 
         message = str(raised.exception)
         self.assertIn("Invalid module format", message)
@@ -314,33 +400,85 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertIn("KDIR", message)
 
     def test_busy_module_is_not_blamed_on_kdir(self) -> None:
-        module = REPOSITORY / "bsfs2.ko"
-        with (
-            patch("bench.orchestration.preflight._run_capture") as capture,
-            patch(
-                "bench.orchestration.preflight._module_loaded",
-                return_value=True,
-            ),
-        ):
-            capture.side_effect = [
-                subprocess.CompletedProcess(BUILD_ARGV, 0, "", ""),
+        stash = module_path(REPOSITORY, "linear")
+        capture, copy, _loaded, _built = self.patched(loaded=True)
+        with capture as run, copy, _loaded, _built:
+            run.side_effect = [
+                subprocess.CompletedProcess(self.build_argv("linear"), 0, "", ""),
                 subprocess.CompletedProcess(
                     ["rmmod", "bsfs2"], 1, "", "rmmod: ERROR: Module bsfs2 is in use"
                 ),
                 subprocess.CompletedProcess(
-                    ["modinfo", "-F", "vermagic", str(module)], 0, "6.18.15\n", ""
+                    ["modinfo", "-F", "vermagic", str(stash)], 0, "6.18.15\n", ""
                 ),
             ]
 
             with self.assertRaises(BsfsModuleError) as raised:
-                validate_bsfs_module(REPOSITORY)
+                build_modules(REPOSITORY, ("linear",))
 
         message = str(raised.exception)
         self.assertIn("still in use", message)
         self.assertNotIn("KDIR", message)
         # insmod must not run against a module that is already loaded and busy
-        self.assertNotIn(
-            call(["insmod", str(module)]), capture.call_args_list
+        self.assertNotIn(call(["insmod", str(stash)]), run.call_args_list)
+
+
+class AllocStrategyTargetTests(unittest.TestCase):
+    def test_every_strategy_source_has_a_benchmark_target(self) -> None:
+        for strategy in alloc_strategies(REPOSITORY):
+            self.assertIn(f"bsfs-{strategy}", ADAPTERS)
+            self.assertEqual(
+                ADAPTERS[f"bsfs-{strategy}"].alloc_strategy, strategy
+            )
+        self.assertEqual(
+            BSFS_FILESYSTEMS,
+            ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY))),
+        )
+        # old-bsfs is separate from the BSFS allocator variants.
+        self.assertNotIn("old-bsfs", BSFS_FILESYSTEMS)
+
+    def test_plain_bsfs_still_means_the_default_build(self) -> None:
+        self.assertEqual(ADAPTERS["bsfs"].alloc_strategy, "linear")
+
+    def test_a_variant_loads_its_own_stashed_module(self) -> None:
+        recorded: list[tuple[str, ...]] = []
+
+        class Recorder:
+            def dry_command(self, argv: tuple[str, ...]) -> None:
+                recorded.append(argv)
+
+        runner = CommandRunner(
+            REPOSITORY / "bench/results/unused",
+            dry_run=True,
+            reporter=Recorder(),
+        )
+        adapter = create_adapter(
+            "bsfs-heap",
+            FilesystemContext(
+                runner=runner,
+                repository=REPOSITORY,
+                device="/dev/loop-dry-run",
+                stable_device="/dev/loop-dry-run",
+                mountpoint=Path("/mnt/bsfs-bench"),
+                run_id="test",
+            ),
+        )
+
+        adapter.mount()
+
+        insmod = [argv for argv in recorded if argv[0] == "insmod"]
+        self.assertEqual(
+            insmod, [("insmod", str(module_path(REPOSITORY, "heap")))]
+        )
+        self.assertEqual(adapter.configuration()["alloc_strategy"], "heap")
+
+    def test_shared_builds_are_collapsed_into_one_compile(self) -> None:
+        # "bsfs" and "bsfs-linear" name the same module.
+        self.assertEqual(
+            bsfs_targets_by_strategy(
+                ("bsfs", "bsfs-linear", "bsfs-heap", "ext4", "old-bsfs")
+            ),
+            {"linear": ("bsfs", "bsfs-linear"), "heap": ("bsfs-heap",)},
         )
 
 
@@ -398,7 +536,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 patch("bench.orchestration.run.os.geteuid", return_value=0),
                 patch("bench.orchestration.run.validate_benchmark_binaries"),
                 patch(
-                    "bench.orchestration.run.validate_bsfs_module",
+                    "bench.orchestration.run.build_modules",
                     side_effect=BsfsModuleError("invalid module format"),
                 ),
                 patch("bench.orchestration.run.CommandRunner") as runner,
@@ -431,7 +569,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 patch("bench.orchestration.run.parse_args", return_value=args),
                 patch("bench.orchestration.run.os.geteuid", return_value=0),
                 patch("bench.orchestration.run.validate_benchmark_binaries"),
-                patch("bench.orchestration.run.validate_bsfs_module") as module,
+                patch("bench.orchestration.run.build_modules") as module,
                 patch("bench.orchestration.run.CommandRunner"),
                 patch(
                     "bench.orchestration.run.inspect_physical_device",
@@ -866,6 +1004,31 @@ class PlanTests(unittest.TestCase):
         )
 
         self.assertEqual(sorted(executed), planned)
+
+    def test_alloc_plan_matches_executed_phases(self) -> None:
+        """Each allocator variant runs the BSFS recovery path."""
+        executed, config = self._executed_phases("alloc")
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(sorted(executed), sorted(
+            (unit.filesystem, unit.scenario, phase, unit.workers)
+            for unit in plan.units
+            for phase in unit.phases
+        ))
+        for filesystem in config.filesystems:
+            self.assertIn(
+                (filesystem, "recovery-pressure", "run", 1), executed, filesystem
+            )
+
+    def test_every_allocator_variant_gets_a_recovery_unit(self) -> None:
+        config = load_config(REPOSITORY / "bench/config/alloc.toml")
+        plan = build_plan(config, ("bsfs-heap", "ext4"))
+
+        recovery = [unit for unit in plan.units if unit.matrix == "recovery"]
+        self.assertEqual(
+            [(unit.filesystem, unit.scenario) for unit in recovery],
+            [("bsfs-heap", "recovery-pressure")],
+        )
 
     def test_a_filesystem_only_in_the_config_is_still_planned(self) -> None:
         config = load_config(REPOSITORY / "bench/config/quick.toml")

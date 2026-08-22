@@ -10,11 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import RunConfig
+from .filesystems import BSFS_FILESYSTEMS
 from .safety import cyclic_schedule
 
 
-COMMON_FILESYSTEMS = ("bsfs", "old-bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
-KERNEL_FILESYSTEMS = ("bsfs", "ext4", "btrfs", "zfs", "zfs-4k")
+COMMON_FILESYSTEMS = (
+    *BSFS_FILESYSTEMS, "old-bsfs", "ext4", "btrfs", "zfs", "zfs-4k"
+)
+KERNEL_FILESYSTEMS = (*BSFS_FILESYSTEMS, "ext4", "btrfs", "zfs", "zfs-4k")
 
 COMMON_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
     "bulk": (
@@ -41,12 +44,17 @@ COMMON_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
 # one tuple per fresh filesystem: old-bsfs retention and restore cannot share a
 # device image, so they are two separate mkfs cycles
 RECOVERY_PHASES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
-    "bsfs": (("recovery-pressure", ("run", "verify")),),
+    **{
+        filesystem: (("recovery-pressure", ("run", "verify")),)
+        for filesystem in BSFS_FILESYSTEMS
+    },
     "old-bsfs": (
         ("old-recovery", ("prepare", "retention")),
         ("old-recovery", ("prepare", "restore", "purge")),
     ),
 }
+
+RECOVERY_FILESYSTEMS = (*BSFS_FILESYSTEMS, "old-bsfs")
 
 CONCURRENCY_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
     "concurrency-seq": ("write", "read"),
@@ -127,7 +135,7 @@ def build_plan(config: RunConfig, filesystems: tuple[str, ...]) -> RunPlan:
                 )
 
     for repetition in range(config.repetitions):
-        for filesystem in ("bsfs", "old-bsfs"):
+        for filesystem in RECOVERY_FILESYSTEMS:
             if filesystem not in filesystems:
                 continue
             for scenario, phases in RECOVERY_PHASES[filesystem]:

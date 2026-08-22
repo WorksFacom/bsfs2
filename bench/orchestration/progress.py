@@ -301,7 +301,7 @@ class RunReporter:
         )
         for filesystem in plan.filesystems:
             self._line(
-                f"              {filesystem:<10} "
+                f"              {filesystem:<14} "
                 f"{plan.units_for(filesystem):>3} cycles, "
                 f"{plan.phases_for(filesystem):>4} phases",
                 Level.VERBOSE,
@@ -621,7 +621,7 @@ class RunReporter:
                 else "0 failed"
             )
             self._line(
-                f"  {filesystem:<10} {tally.phases:>4} phases, {failed}, "
+                f"  {filesystem:<14} {tally.phases:>4} phases, {failed}, "
                 f"{format_duration(tally.elapsed)}",
                 Level.QUIET,
             )

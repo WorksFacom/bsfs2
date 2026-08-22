@@ -2,8 +2,8 @@
 # falling back to the running kernel's build tree. BSFS_ALLOC can be pinned
 # there too, so the QEMU flow does not have to repeat it on every build.
 -include .env
-export KDIR
 KDIR ?= /lib/modules/$(shell uname -r)/build
+export KDIR
 
 # Which block-allocation strategy to compile in. Exactly one src/alloc_<name>.c
 # is linked; see include/alloc_strategy.h for the interface they implement.

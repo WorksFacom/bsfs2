@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Iterable
 
 from .command import CommandRunner
+from .modules import DEFAULT_STRATEGY, alloc_strategies, module_path
+
+REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 class FilesystemUnavailable(RuntimeError):
@@ -104,6 +107,13 @@ class BsfsAdapter(FilesystemAdapter):
     name = "bsfs"
     required_tools = ("mount", "umount", "insmod", "rmmod")
     mount_options = "noatime"
+    # The source file that selected this allocator. Every strategy registers
+    # the same "bsfs" type. Only the loaded .ko differs.
+    alloc_strategy = DEFAULT_STRATEGY
+
+    @property
+    def module(self) -> Path:
+        return module_path(self.context.repository, self.alloc_strategy)
 
     def format_argv(self) -> list[str]:
         return [str(self.context.repository / "mkfs.bsfs"), self.context.device]
@@ -113,17 +123,27 @@ class BsfsAdapter(FilesystemAdapter):
             ["git", "-C", str(self.context.repository), "describe",
              "--always", "--dirty"],
             check=False,
-            label="bsfs-version",
+            label=f"{self.name}-version",
         )
-        return described.stdout.strip() or "unknown"
+        described_text = described.stdout.strip() or "unknown"
+        return f"{described_text} alloc={self.alloc_strategy}"
+
+    def configuration(self) -> dict[str, str]:
+        return {
+            **super().configuration(),
+            "alloc_strategy": self.alloc_strategy,
+            "module": str(self.module),
+        }
 
     def mount(self) -> None:
         self.context.runner.run(
-            ["rmmod", "bsfs2"], check=False, label="bsfs-remove-stale-module"
+            ["rmmod", "bsfs2"],
+            check=False,
+            label=f"{self.name}-remove-stale-module",
         )
         self.context.runner.run(
-            ["insmod", str(self.context.repository / "bsfs2.ko")],
-            label="bsfs-load-module",
+            ["insmod", str(self.module)],
+            label=f"{self.name}-load-module",
         )
         if not self.context.runner.dry_run:
             self.context.mountpoint.mkdir(parents=True, exist_ok=True)
@@ -137,13 +157,13 @@ class BsfsAdapter(FilesystemAdapter):
                 self.context.device,
                 str(self.context.mountpoint),
             ],
-            label="bsfs-mount",
+            label=f"{self.name}-mount",
         )
 
     def unmount(self) -> None:
         super().unmount()
         self.context.runner.run(
-            ["rmmod", "bsfs2"], check=False, label="bsfs-unload-module"
+            ["rmmod", "bsfs2"], check=False, label=f"{self.name}-unload-module"
         )
 
 
@@ -361,7 +381,7 @@ class Zfs4KAdapter(ZfsAdapter):
     recordsize = "4K"
 
 
-ADAPTERS = {
+ADAPTERS: dict[str, type[FilesystemAdapter]] = {
     "bsfs": BsfsAdapter,
     "old-bsfs": OldBsfsAdapter,
     "ext4": Ext4Adapter,
@@ -369,6 +389,37 @@ ADAPTERS = {
     "zfs": ZfsAdapter,
     "zfs-4k": Zfs4KAdapter,
 }
+
+# Generate one target per allocation strategy. Adding src/alloc_<name>.c makes
+# it benchmarkable without an orchestrator change. Plain "bsfs" remains the
+# default-strategy target.
+for _strategy in alloc_strategies(REPOSITORY):
+    ADAPTERS[f"bsfs-{_strategy}"] = type(
+        f"Bsfs{_strategy.capitalize()}Adapter",
+        (BsfsAdapter,),
+        {"name": f"bsfs-{_strategy}", "alloc_strategy": _strategy},
+    )
+
+# Code that handles BSFS targets specially must use this membership list, not a
+# "bsfs" prefix test. old-bsfs is a separate filesystem.
+BSFS_FILESYSTEMS = ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY)))
+
+
+def bsfs_targets_by_strategy(
+    filesystems: Iterable[str],
+) -> dict[str, tuple[str, ...]]:
+    """Return required builds in first-use order.
+
+    Each value lists the targets that share its module. "bsfs" and
+    "bsfs-linear" use the same module.
+    """
+    grouped: dict[str, tuple[str, ...]] = {}
+    for name in filesystems:
+        if name not in BSFS_FILESYSTEMS:
+            continue
+        strategy = ADAPTERS[name].alloc_strategy  # type: ignore[attr-defined]
+        grouped[strategy] = (*grouped.get(strategy, ()), name)
+    return grouped
 
 
 def create_adapter(name: str, context: FilesystemContext) -> FilesystemAdapter:

@@ -56,8 +56,14 @@ def _git(repository: Path) -> dict[str, Any]:
 def _artifacts(repository: Path) -> dict[str, Any]:
     """the launcher never rebuilds the C runners, so the recorded commit alone
     can't prove which binaries made these numbers. hash them instead."""
+    # Include copied modules. Otherwise the manifest has no hash for the
+    # allocator build that produced these results.
+    stashed = sorted(
+        str(path.relative_to(repository))
+        for path in (repository / "bench/build/modules").glob("bsfs2-*.ko")
+    )
     described: dict[str, Any] = {}
-    for relative in BUILT_ARTIFACTS:
+    for relative in (*BUILT_ARTIFACTS, *stashed):
         path = repository / relative
         try:
             stat = path.stat()

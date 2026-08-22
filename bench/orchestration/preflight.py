@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import platform
-import subprocess
 from typing import Any, Iterable
 
 from .command import CommandError, CommandRunner
@@ -22,99 +20,6 @@ GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 class BenchmarkBinaryError(RuntimeError):
     pass
-
-
-class BsfsModuleError(RuntimeError):
-    """The benchmark's BSFS module cannot safely run on this host."""
-
-
-def _run_capture(
-    argv: list[str], *, cwd: Path | None = None
-) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            argv,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    except OSError as error:
-        return subprocess.CompletedProcess(argv, 127, "", str(error))
-
-
-def build_module_argv(repository: Path) -> list[str]:
-    """make -C moves CURDIR but leaves PWD pointing at the caller's directory,
-    and the kernel build uses M=$(PWD). pass PWD explicitly so the build lands
-    in the repo no matter where this got invoked from."""
-    return ["make", "-C", str(repository), f"PWD={repository}"]
-
-
-def _module_loaded() -> bool:
-    return Path("/sys/module/bsfs2").exists()
-
-
-def _module_vermagic(module: Path) -> str:
-    result = _run_capture(["modinfo", "-F", "vermagic", str(module)])
-    value = result.stdout.strip()
-    if value:
-        return value
-    return "unavailable"
-
-
-def _module_failure(
-    step: str,
-    result: subprocess.CompletedProcess[str],
-    module: Path,
-    remedy: str = (
-        "Set KDIR to the running kernel's build tree, rebuild bsfs2.ko, "
-        "and retry."
-    ),
-) -> BsfsModuleError:
-    output = (result.stderr.strip() or result.stdout.strip() or "no output")
-    return BsfsModuleError(
-        f"BSFS module preflight failed while {step} "
-        f"(exit {result.returncode}): {' '.join(result.args)}\n"
-        f"running kernel: {platform.release()}\n"
-        f"module vermagic: {_module_vermagic(module)}\n"
-        f"command output: {output}\n"
-        f"{remedy}"
-    )
-
-
-def validate_bsfs_module(repository: Path) -> None:
-    """Build and probe BSFS before a benchmark can touch its target.
-
-    ``insmod`` is deliberately the compatibility check: vermagic alone cannot
-    prove that a module can load on this kernel.  This function does not use a
-    CommandRunner, so a failure cannot create a benchmark result directory.
-    """
-    module = repository / "bsfs2.ko"
-    build = _run_capture(build_module_argv(repository))
-    if build.returncode != 0:
-        raise _module_failure("building bsfs2.ko", build, module)
-
-    # Match the adapter's behavior: an already-loaded stale module cannot be
-    # the module being benchmarked. rmmod also fails when nothing's loaded,
-    # so /sys/module tells that harmless case apart from one still in use.
-    removal = _run_capture(["rmmod", "bsfs2"])
-    if removal.returncode != 0 and _module_loaded():
-        raise _module_failure(
-            "removing the stale bsfs2 module",
-            removal,
-            module,
-            "bsfs2 is loaded and still in use; unmount every bsfs filesystem "
-            "and close anything holding one open, then retry.",
-        )
-    load = _run_capture(["insmod", str(module)])
-    if load.returncode != 0:
-        raise _module_failure("loading bsfs2.ko", load, module)
-
-    unload = _run_capture(["rmmod", "bsfs2"])
-    if unload.returncode != 0:
-        raise _module_failure(
-            "unloading the BSFS preflight module", unload, module
-        )
 
 
 def validate_benchmark_binaries(
