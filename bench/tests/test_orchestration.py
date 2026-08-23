@@ -29,11 +29,16 @@ from bench.orchestration.preflight import (
 )
 from bench.orchestration.modules import (
     BsfsModuleError,
+    CustomBsfsArtifacts,
     alloc_strategies,
     build_module_argv,
     build_modules,
+    custom_artifact_paths,
+    define_custom_artifacts,
     module_path,
+    stage_custom_artifacts,
 )
+from bench.orchestration.manifest import _artifacts, _custom_artifacts
 from bench.orchestration.safety import (
     SafetyError,
     cyclic_schedule,
@@ -58,6 +63,7 @@ from bench.orchestration.progress import (
 )
 from bench.orchestration.run import (
     BenchmarkRun,
+    custom_bsfs_definitions,
     main,
     sudo_invoker_owner,
     transfer_result_ownership,
@@ -423,6 +429,324 @@ class BsfsModulePreflightTests(unittest.TestCase):
         self.assertNotIn(call(["insmod", str(stash)]), run.call_args_list)
 
 
+def custom_artifacts_stub(name: str) -> CustomBsfsArtifacts:
+    return CustomBsfsArtifacts(
+        name=name,
+        source_module=Path(f"/source/{name}/bsfs2.ko"),
+        source_formatter=Path(f"/source/{name}/mkfs.bsfs"),
+        module=REPOSITORY / f"bench/build/custom/{name}/bsfs2.ko",
+        formatter=REPOSITORY / f"bench/build/custom/{name}/mkfs.bsfs",
+        module_sha256="a" * 64,
+        formatter_sha256="b" * 64,
+        module_name="bsfs2",
+        vermagic="6.18.15 SMP mod_unload",
+    )
+
+
+class CustomBsfsArtifactTests(unittest.TestCase):
+    def sources(self, directory: Path) -> tuple[Path, Path]:
+        module = directory / "source" / "bsfs2.ko"
+        formatter = directory / "source" / "mkfs.bsfs"
+        module.parent.mkdir(parents=True)
+        module.write_bytes(b"custom module")
+        formatter.write_bytes(b"custom formatter")
+        formatter.chmod(0o755)
+        return module, formatter
+
+    def definition(
+        self, repository: Path, module: Path, formatter: Path
+    ) -> CustomBsfsArtifacts:
+        with (
+            patch(
+                "bench.orchestration.modules._module_name",
+                return_value="bsfs2",
+            ),
+            patch(
+                "bench.orchestration.modules._module_vermagic",
+                return_value="6.18.15 SMP mod_unload",
+            ),
+        ):
+            return define_custom_artifacts(
+                repository, "bsfs-maple", module, formatter
+            )
+
+    def test_definition_requires_a_matching_named_executable_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            module, formatter = self.sources(root)
+
+            artifacts = self.definition(repository, module, formatter)
+
+            self.assertEqual(artifacts.source_module, module.resolve())
+            self.assertEqual(artifacts.source_formatter, formatter.resolve())
+            self.assertEqual(
+                (artifacts.module, artifacts.formatter),
+                custom_artifact_paths(repository, "bsfs-maple"),
+            )
+            self.assertEqual(artifacts.module_name, "bsfs2")
+            self.assertEqual(len(artifacts.module_sha256), 64)
+            self.assertEqual(len(artifacts.formatter_sha256), 64)
+
+    def test_definition_rejects_bad_names_and_non_executable_formatters(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module, formatter = self.sources(root)
+            with self.assertRaisesRegex(BsfsModuleError, "invalid custom"):
+                define_custom_artifacts(
+                    root / "repository", "maple", module, formatter
+                )
+
+            formatter.chmod(0o644)
+            with patch(
+                "bench.orchestration.modules._module_name",
+                return_value="bsfs2",
+            ):
+                with self.assertRaisesRegex(BsfsModuleError, "not executable"):
+                    define_custom_artifacts(
+                        root / "repository",
+                        "bsfs-maple",
+                        module,
+                        formatter,
+                    )
+
+    def test_cli_definitions_reject_collisions_and_duplicate_names(self) -> None:
+        with self.assertRaisesRegex(BsfsModuleError, "built-in"):
+            custom_bsfs_definitions(
+                REPOSITORY,
+                [["bsfs-heap", "/module", "/formatter"]],
+            )
+
+        sentinel = object()
+        with patch(
+            "bench.orchestration.run.define_custom_artifacts",
+            return_value=sentinel,
+        ):
+            with self.assertRaisesRegex(BsfsModuleError, "more than once"):
+                custom_bsfs_definitions(
+                    REPOSITORY,
+                    [
+                        ["bsfs-maple", "/one.ko", "/one.mkfs"],
+                        ["bsfs-maple", "/two.ko", "/two.mkfs"],
+                    ],
+                )
+
+    def test_staging_copies_hashes_and_probes_the_frozen_module(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            module, formatter = self.sources(root)
+            artifacts = self.definition(repository, module, formatter)
+
+            with (
+                patch(
+                    "bench.orchestration.modules._module_name",
+                    return_value="bsfs2",
+                ),
+                patch(
+                    "bench.orchestration.modules._module_vermagic",
+                    return_value="6.18.15 SMP mod_unload",
+                ),
+                patch("bench.orchestration.modules._probe_load") as probe,
+            ):
+                staged = stage_custom_artifacts(artifacts)
+
+            self.assertEqual(staged.module.read_bytes(), module.read_bytes())
+            self.assertEqual(
+                staged.formatter.read_bytes(), formatter.read_bytes()
+            )
+            self.assertTrue(staged.formatter.stat().st_mode & 0o111)
+            probe.assert_called_once_with(
+                staged.module,
+                expected_filesystem="bsfs",
+                remedy=(
+                    "Rebuild the custom bsfs-maple module against the running "
+                    "kernel, then pass the rebuilt artifact and retry."
+                ),
+            )
+
+    def test_staging_rejects_a_source_changed_since_it_was_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            module, formatter = self.sources(root)
+            artifacts = self.definition(repository, module, formatter)
+
+            module.write_bytes(b"rebuilt between definition and staging")
+
+            with (
+                patch(
+                    "bench.orchestration.modules._module_name",
+                    return_value="bsfs2",
+                ),
+                patch("bench.orchestration.modules._probe_load") as probe,
+            ):
+                with self.assertRaisesRegex(
+                    BsfsModuleError, "changed since it was supplied"
+                ):
+                    stage_custom_artifacts(artifacts)
+
+            probe.assert_not_called()
+
+    def test_staging_reports_an_unusable_destination_as_a_module_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            module, formatter = self.sources(root)
+            artifacts = self.definition(repository, module, formatter)
+            artifacts.module.parent.parent.mkdir(parents=True)
+            artifacts.module.parent.write_bytes(b"not a directory")
+
+            with self.assertRaisesRegex(BsfsModuleError, "cannot stage artifacts"):
+                stage_custom_artifacts(artifacts)
+
+    def test_a_failed_modinfo_is_not_reported_as_a_wrong_module_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module, formatter = self.sources(root)
+            with patch(
+                "bench.orchestration.modules._run_capture",
+                return_value=subprocess.CompletedProcess(
+                    ["modinfo"], 1, "", "ERROR: could not get modinfo"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    BsfsModuleError,
+                    "custom BSFS bsfs-maple: modinfo could not read",
+                ):
+                    define_custom_artifacts(
+                        root / "repository", "bsfs-maple", module, formatter
+                    )
+
+    def test_a_custom_definition_cannot_shadow_a_built_in_target(self) -> None:
+        context = FilesystemContext(
+            runner=CommandRunner(
+                REPOSITORY / "bench/results/unused", dry_run=True
+            ),
+            repository=REPOSITORY,
+            device="/dev/loop-dry-run",
+            stable_device="/dev/loop-dry-run",
+            mountpoint=Path("/mnt/bsfs-bench"),
+            run_id="test",
+        )
+        with self.assertRaisesRegex(ValueError, "shadows a built-in"):
+            create_adapter("ext4", context, {"ext4": custom_artifacts_stub("ext4")})
+
+    def test_probe_unloads_a_module_that_does_not_register_bsfs(self) -> None:
+        from bench.orchestration.modules import _probe_load
+
+        module = Path("/tmp/custom-bsfs2.ko")
+        with (
+            patch("bench.orchestration.modules._run_capture") as run,
+            patch(
+                "bench.orchestration.modules._module_loaded", return_value=False
+            ),
+            patch(
+                "bench.orchestration.modules._filesystem_registered",
+                return_value=False,
+            ),
+        ):
+            run.side_effect = [
+                subprocess.CompletedProcess(["rmmod", "bsfs2"], 1, "", ""),
+                subprocess.CompletedProcess(
+                    ["insmod", str(module)], 0, "", ""
+                ),
+                subprocess.CompletedProcess(["rmmod", "bsfs2"], 0, "", ""),
+            ]
+
+            with self.assertRaisesRegex(BsfsModuleError, "did not register"):
+                _probe_load(module, expected_filesystem="bsfs")
+
+        self.assertEqual(run.call_args_list[-1], call(["rmmod", "bsfs2"]))
+
+    def test_custom_adapter_uses_the_staged_pair_and_hash_version(self) -> None:
+        recorded: list[tuple[str, ...]] = []
+
+        class Recorder:
+            def dry_command(self, argv: tuple[str, ...]) -> None:
+                recorded.append(argv)
+
+        artifacts = CustomBsfsArtifacts(
+            name="bsfs-maple",
+            source_module=Path("/source/bsfs2.ko"),
+            source_formatter=Path("/source/mkfs.bsfs"),
+            module=Path("/staged/bsfs2.ko"),
+            formatter=Path("/staged/mkfs.bsfs"),
+            module_sha256="a" * 64,
+            formatter_sha256="b" * 64,
+            module_name="bsfs2",
+            vermagic="6.18.15 SMP mod_unload",
+        )
+        runner = CommandRunner(
+            REPOSITORY / "bench/results/unused",
+            dry_run=True,
+            reporter=Recorder(),
+        )
+        adapter = create_adapter(
+            "bsfs-maple",
+            FilesystemContext(
+                runner=runner,
+                repository=REPOSITORY,
+                device="/dev/loop-dry-run",
+                stable_device="/dev/loop-dry-run",
+                mountpoint=Path("/mnt/bsfs-bench"),
+                run_id="test",
+            ),
+            {"bsfs-maple": artifacts},
+        )
+
+        adapter.format()
+        adapter.mount()
+
+        self.assertIn(
+            ("/staged/mkfs.bsfs", "/dev/loop-dry-run"), recorded
+        )
+        self.assertIn(("insmod", "/staged/bsfs2.ko"), recorded)
+        self.assertEqual(
+            adapter.version(), f"custom module={'a' * 16} mkfs={'b' * 16}"
+        )
+        self.assertEqual(
+            adapter.configuration()["correctness_gate_coverage"],
+            "publication-validation-only",
+        )
+
+    def test_manifest_records_custom_sources_and_only_requested_extras(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            module, formatter = self.sources(root)
+            artifacts = self.definition(repository, module, formatter)
+            artifacts.module.parent.mkdir(parents=True)
+            artifacts.module.write_bytes(module.read_bytes())
+            artifacts.formatter.write_bytes(formatter.read_bytes())
+
+            custom = _custom_artifacts({"bsfs-maple": artifacts})
+            built = _artifacts(
+                repository, (artifacts.module, artifacts.formatter)
+            )
+
+            self.assertEqual(
+                custom["bsfs-maple"]["source_module"]["sha256"],
+                artifacts.module_sha256,
+            )
+            self.assertEqual(
+                custom["bsfs-maple"]["correctness_gate_coverage"],
+                "publication-validation-only",
+            )
+            self.assertTrue(
+                built["bench/build/custom/bsfs-maple/bsfs2.ko"]["present"]
+            )
+            self.assertTrue(
+                built["bench/build/custom/bsfs-maple/mkfs.bsfs"]["present"]
+            )
+
+
 class AllocStrategyTargetTests(unittest.TestCase):
     def test_every_strategy_source_has_a_benchmark_target(self) -> None:
         for strategy in alloc_strategies(REPOSITORY):
@@ -511,6 +835,9 @@ class AnalyzeEntryPointTests(unittest.TestCase):
 
 
 class BsfsSetupFailureTests(unittest.TestCase):
+    def custom_artifacts(self) -> CustomBsfsArtifacts:
+        return custom_artifacts_stub("bsfs-maple")
+
     def test_module_preflight_failure_creates_no_run_directory(self) -> None:
         config = REPOSITORY / "bench/config/quick.toml"
         with tempfile.TemporaryDirectory() as directory:
@@ -547,6 +874,27 @@ class BsfsSetupFailureTests(unittest.TestCase):
             self.assertFalse(loop_image.exists())
             runner.assert_not_called()
 
+    def test_selected_custom_name_requires_a_cli_definition(self) -> None:
+        args = argparse.Namespace(
+            config=REPOSITORY / "bench/config/quick.toml",
+            device=None,
+            loop_image=Path("/tmp/unused-custom-bench.img"),
+            confirm=None,
+            allow_size_outside_range=False,
+            allow_shared_disk=False,
+            run_dir=None,
+            filesystems=("bsfs-maple",),
+            custom_bsfs=None,
+            dry_run=True,
+            skip_correctness_gates=False,
+            verbose=False,
+            quiet=True,
+            no_color=True,
+        )
+        with patch("bench.orchestration.run.parse_args", return_value=args):
+            with self.assertRaisesRegex(SystemExit, "--custom-bsfs"):
+                main()
+
     def test_non_bsfs_selection_skips_module_preflight(self) -> None:
         config = REPOSITORY / "bench/config/quick.toml"
         with tempfile.TemporaryDirectory() as directory:
@@ -579,6 +927,93 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 self.assertEqual(main(), 2)
 
             module.assert_not_called()
+
+    def test_custom_preflight_failure_creates_no_run_directory(self) -> None:
+        config = REPOSITORY / "bench/config/quick.toml"
+        artifacts = self.custom_artifacts()
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "results"
+            loop_image = Path(directory) / "bench.img"
+            args = argparse.Namespace(
+                config=config,
+                device=None,
+                loop_image=loop_image,
+                confirm=None,
+                allow_size_outside_range=False,
+                allow_shared_disk=False,
+                run_dir=run_dir,
+                filesystems=("bsfs-maple",),
+                custom_bsfs=[
+                    ["bsfs-maple", "/source/bsfs2.ko", "/source/mkfs.bsfs"]
+                ],
+                dry_run=False,
+                skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
+            )
+            with (
+                patch("bench.orchestration.run.parse_args", return_value=args),
+                patch(
+                    "bench.orchestration.run.custom_bsfs_definitions",
+                    return_value={"bsfs-maple": artifacts},
+                ),
+                patch("bench.orchestration.run.os.geteuid", return_value=0),
+                patch("bench.orchestration.run.validate_benchmark_binaries"),
+                patch(
+                    "bench.orchestration.run.stage_custom_artifacts",
+                    side_effect=BsfsModuleError("invalid custom module format"),
+                ),
+                patch("bench.orchestration.run.CommandRunner") as runner,
+            ):
+                self.assertEqual(main(), 2)
+
+            self.assertFalse(run_dir.exists())
+            self.assertFalse(loop_image.exists())
+            runner.assert_not_called()
+
+    def test_unselected_custom_definition_is_not_staged(self) -> None:
+        config = REPOSITORY / "bench/config/quick.toml"
+        artifacts = self.custom_artifacts()
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(
+                config=config,
+                device="/dev/benchmark-test",
+                loop_image=None,
+                confirm="/dev/benchmark-test",
+                allow_size_outside_range=False,
+                allow_shared_disk=False,
+                run_dir=Path(directory) / "results",
+                filesystems=("ext4",),
+                custom_bsfs=[
+                    ["bsfs-maple", "/source/bsfs2.ko", "/source/mkfs.bsfs"]
+                ],
+                dry_run=False,
+                skip_correctness_gates=False,
+                verbose=False,
+                quiet=True,
+                no_color=True,
+            )
+            with (
+                patch("bench.orchestration.run.parse_args", return_value=args),
+                patch(
+                    "bench.orchestration.run.custom_bsfs_definitions",
+                    return_value={"bsfs-maple": artifacts},
+                ),
+                patch("bench.orchestration.run.os.geteuid", return_value=0),
+                patch("bench.orchestration.run.validate_benchmark_binaries"),
+                patch(
+                    "bench.orchestration.run.stage_custom_artifacts"
+                ) as stage,
+                patch("bench.orchestration.run.CommandRunner"),
+                patch(
+                    "bench.orchestration.run.inspect_physical_device",
+                    side_effect=SafetyError("stop after preflight"),
+                ),
+            ):
+                self.assertEqual(main(), 2)
+
+            stage.assert_not_called()
 
 
 def result(
@@ -934,8 +1369,15 @@ class StubAdapter(FilesystemAdapter):
 
 
 class PlanTests(unittest.TestCase):
-    def _executed_phases(self, config_name: str) -> tuple[list, Any]:
+    def _executed_phases(
+        self,
+        config_name: str,
+        *,
+        filesystems: tuple[str, ...] | None = None,
+        custom_bsfs: tuple[str, ...] = (),
+    ) -> tuple[list, Any]:
         config = load_config(REPOSITORY / f"bench/config/{config_name}.toml")
+        selected = config.filesystems if filesystems is None else filesystems
         executed: list[tuple[str, str, str, int]] = []
 
         def record(
@@ -959,21 +1401,26 @@ class PlanTests(unittest.TestCase):
                 run_id="test",
                 publication_eligible=False,
                 reporter=reporter,
+                custom_bsfs={
+                    name: custom_artifacts_stub(name) for name in custom_bsfs
+                },
             )
             with (
                 patch(
                     "bench.orchestration.run.create_adapter",
-                    side_effect=lambda name, context: StubAdapter(context, name),
+                    side_effect=lambda name, context, custom=None: StubAdapter(
+                        context, name
+                    ),
                 ),
                 patch.object(
                     BenchmarkRun, "run_phase", autospec=True, side_effect=record
                 ),
             ):
                 if config.publication:
-                    benchmark.validation_matrix(config.filesystems)
-                benchmark.common_matrix(config.filesystems)
-                benchmark.recovery_matrix(config.filesystems)
-                benchmark.concurrency_matrix(config.filesystems)
+                    benchmark.validation_matrix(selected)
+                benchmark.common_matrix(selected)
+                benchmark.recovery_matrix(selected)
+                benchmark.concurrency_matrix(selected)
         return executed, config
 
     def test_quick_plan_matches_executed_phases(self) -> None:
@@ -1038,6 +1485,64 @@ class PlanTests(unittest.TestCase):
         # ext4 is a kernel filesystem, so it has no recovery units
         self.assertEqual(
             {unit.matrix for unit in plan.units}, {"common", "concurrency"}
+        )
+
+    def test_custom_bsfs_gets_common_recovery_and_concurrency_units(self) -> None:
+        config = load_config(REPOSITORY / "bench/config/quick.toml")
+        plan = build_plan(
+            config,
+            ("bsfs-maple", "ext4"),
+            custom_bsfs=("bsfs-maple",),
+        )
+
+        custom_units = [
+            unit for unit in plan.units if unit.filesystem == "bsfs-maple"
+        ]
+        self.assertEqual(
+            {unit.matrix for unit in custom_units},
+            {"common", "recovery", "concurrency"},
+        )
+        self.assertEqual(
+            [
+                (unit.scenario, unit.phases)
+                for unit in custom_units
+                if unit.matrix == "recovery"
+            ],
+            [("recovery-pressure", ("run", "verify"))],
+        )
+        self.assertEqual(
+            {unit.workers for unit in custom_units if unit.matrix == "concurrency"},
+            {1, 4},
+        )
+
+    def test_custom_bsfs_plan_matches_executed_phases(self) -> None:
+        selected = ("bsfs-maple", "bsfs", "old-bsfs", "ext4")
+        executed, config = self._executed_phases(
+            "quick", filesystems=selected, custom_bsfs=("bsfs-maple",)
+        )
+        plan = build_plan(config, selected, custom_bsfs=("bsfs-maple",))
+
+        self.assertEqual(
+            sorted(executed),
+            sorted(
+                (unit.filesystem, unit.scenario, phase, unit.workers)
+                for unit in plan.units
+                for phase in unit.phases
+            ),
+        )
+        # the recovery order is the one place the two disagreed
+        self.assertEqual(
+            [
+                row[0]
+                for row in executed
+                if row[1] in {"recovery-pressure", "old-recovery"}
+            ],
+            [
+                unit.filesystem
+                for unit in plan.units
+                if unit.matrix == "recovery"
+                for _ in unit.phases
+            ],
         )
 
 

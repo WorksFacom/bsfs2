@@ -3,10 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .command import CommandRunner
-from .modules import DEFAULT_STRATEGY, alloc_strategies, module_path
+from .modules import (
+    DEFAULT_STRATEGY,
+    CustomBsfsArtifacts,
+    alloc_strategies,
+    module_path,
+)
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -109,7 +114,7 @@ class BsfsAdapter(FilesystemAdapter):
     mount_options = "noatime"
     # The source file that selected this allocator. Every strategy registers
     # the same "bsfs" type. Only the loaded .ko differs.
-    alloc_strategy = DEFAULT_STRATEGY
+    alloc_strategy: str | None = DEFAULT_STRATEGY
 
     @property
     def module(self) -> Path:
@@ -165,6 +170,48 @@ class BsfsAdapter(FilesystemAdapter):
         self.context.runner.run(
             ["rmmod", "bsfs2"], check=False, label=f"{self.name}-unload-module"
         )
+
+
+class CustomBsfsAdapter(BsfsAdapter):
+    """BSFS implementation supplied as an already-built artifact pair."""
+
+    # an out-of-tree build is not one of this checkout's allocators
+    alloc_strategy = None
+
+    def __init__(
+        self, context: FilesystemContext, artifacts: CustomBsfsArtifacts
+    ) -> None:
+        super().__init__(context)
+        self.name = artifacts.name
+        self.artifacts = artifacts
+
+    @property
+    def module(self) -> Path:
+        return self.artifacts.module
+
+    def format_argv(self) -> list[str]:
+        return [str(self.artifacts.formatter), self.context.device]
+
+    def version(self) -> str:
+        return (
+            f"custom module={self.artifacts.module_sha256[:16]} "
+            f"mkfs={self.artifacts.formatter_sha256[:16]}"
+        )
+
+    def configuration(self) -> dict[str, str]:
+        return {
+            **FilesystemAdapter.configuration(self),
+            "artifact_kind": "custom-bsfs",
+            "module": str(self.artifacts.module),
+            "formatter": str(self.artifacts.formatter),
+            "source_module": str(self.artifacts.source_module),
+            "source_formatter": str(self.artifacts.source_formatter),
+            "module_sha256": self.artifacts.module_sha256,
+            "formatter_sha256": self.artifacts.formatter_sha256,
+            "module_name": self.artifacts.module_name,
+            "vermagic": self.artifacts.vermagic,
+            "correctness_gate_coverage": "publication-validation-only",
+        }
 
 
 class OldBsfsAdapter(FilesystemAdapter):
@@ -422,7 +469,17 @@ def bsfs_targets_by_strategy(
     return grouped
 
 
-def create_adapter(name: str, context: FilesystemContext) -> FilesystemAdapter:
+def create_adapter(
+    name: str,
+    context: FilesystemContext,
+    custom_bsfs: Mapping[str, CustomBsfsArtifacts] | None = None,
+) -> FilesystemAdapter:
+    if custom_bsfs is not None and name in custom_bsfs:
+        if name in ADAPTERS:
+            raise ValueError(f"custom filesystem shadows a built-in target: {name}")
+        adapter = CustomBsfsAdapter(context, custom_bsfs[name])
+        adapter.check_available()
+        return adapter
     try:
         adapter = ADAPTERS[name](context)
     except KeyError as error:

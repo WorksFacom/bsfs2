@@ -54,8 +54,6 @@ RECOVERY_PHASES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     ),
 }
 
-RECOVERY_FILESYSTEMS = (*BSFS_FILESYSTEMS, "old-bsfs")
-
 CONCURRENCY_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
     "concurrency-seq": ("write", "read"),
     "concurrency-mixed": ("create", "read", "edit", "verify"),
@@ -104,8 +102,23 @@ class RunPlan:
         return sum(1 for unit in self.units if unit.filesystem == filesystem)
 
 
-def build_plan(config: RunConfig, filesystems: tuple[str, ...]) -> RunPlan:
+def build_plan(
+    config: RunConfig,
+    filesystems: tuple[str, ...],
+    *,
+    custom_bsfs: tuple[str, ...] = (),
+) -> RunPlan:
     units: list[PlannedUnit] = []
+    kernel_filesystems = (*KERNEL_FILESYSTEMS, *custom_bsfs)
+    # order mirrors recovery_matrix: every bsfs variant, then old-bsfs
+    recovery_filesystems = (*BSFS_FILESYSTEMS, *custom_bsfs, "old-bsfs")
+    recovery_phases = {
+        **RECOVERY_PHASES,
+        **{
+            filesystem: (("recovery-pressure", ("run", "verify")),)
+            for filesystem in custom_bsfs
+        },
+    }
 
     if config.publication:
         for filesystem in filesystems:
@@ -135,10 +148,10 @@ def build_plan(config: RunConfig, filesystems: tuple[str, ...]) -> RunPlan:
                 )
 
     for repetition in range(config.repetitions):
-        for filesystem in RECOVERY_FILESYSTEMS:
+        for filesystem in recovery_filesystems:
             if filesystem not in filesystems:
                 continue
-            for scenario, phases in RECOVERY_PHASES[filesystem]:
+            for scenario, phases in recovery_phases[filesystem]:
                 units.append(
                     PlannedUnit(
                         "recovery", filesystem, scenario, repetition, 1, phases
@@ -148,7 +161,7 @@ def build_plan(config: RunConfig, filesystems: tuple[str, ...]) -> RunPlan:
     kernel = tuple(
         filesystem
         for filesystem in filesystems
-        if filesystem in KERNEL_FILESYSTEMS
+        if filesystem in kernel_filesystems
     )
     for repetition in range(config.repetitions):
         for filesystem in cyclic_schedule(kernel, repetition):

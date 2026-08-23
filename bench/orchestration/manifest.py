@@ -8,7 +8,7 @@ from pathlib import Path
 import platform
 import socket
 import subprocess
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 BUILT_ARTIFACTS = (
     "bench/bin/bench-posix",
@@ -19,6 +19,7 @@ BUILT_ARTIFACTS = (
 )
 
 from .config import RunConfig
+from .modules import CustomBsfsArtifacts
 from .safety import DeviceInfo
 from .topology import describe as describe_topology
 
@@ -53,17 +54,20 @@ def _git(repository: Path) -> dict[str, Any]:
     }
 
 
-def _artifacts(repository: Path) -> dict[str, Any]:
+def _artifacts(
+    repository: Path, extra_artifacts: Iterable[Path] = ()
+) -> dict[str, Any]:
     """the launcher never rebuilds the C runners, so the recorded commit alone
     can't prove which binaries made these numbers. hash them instead."""
-    # Include copied modules. Otherwise the manifest has no hash for the
-    # allocator build that produced these results.
-    stashed = sorted(
-        str(path.relative_to(repository))
-        for path in (repository / "bench/build/modules").glob("bsfs2-*.ko")
-    )
+    extras: list[str] = []
+    for path in extra_artifacts:
+        try:
+            relative = path.relative_to(repository)
+        except ValueError:
+            continue
+        extras.append(str(relative))
     described: dict[str, Any] = {}
-    for relative in (*BUILT_ARTIFACTS, *stashed):
+    for relative in dict.fromkeys((*BUILT_ARTIFACTS, *extras)):
         path = repository / relative
         try:
             stat = path.stat()
@@ -78,6 +82,55 @@ def _artifacts(repository: Path) -> dict[str, Any]:
                 stat.st_mtime, timezone.utc
             ).isoformat(),
             "sha256": digest,
+        }
+    return described
+
+
+def _stat(path: Path) -> os.stat_result | None:
+    try:
+        return path.stat()
+    except OSError:
+        return None
+
+
+def _custom_artifacts(
+    artifacts: Mapping[str, CustomBsfsArtifacts],
+) -> dict[str, Any]:
+    described: dict[str, Any] = {}
+    for name, item in artifacts.items():
+        module_stat = _stat(item.source_module)
+        formatter_stat = _stat(item.source_formatter)
+        described[name] = {
+            "source_module": {
+                "path": str(item.source_module),
+                "size_bytes": module_stat.st_size if module_stat else None,
+                "modified_at": (
+                    datetime.fromtimestamp(
+                        module_stat.st_mtime, timezone.utc
+                    ).isoformat()
+                    if module_stat
+                    else None
+                ),
+                "sha256": item.module_sha256,
+            },
+            "source_formatter": {
+                "path": str(item.source_formatter),
+                "size_bytes": formatter_stat.st_size if formatter_stat else None,
+                "modified_at": (
+                    datetime.fromtimestamp(
+                        formatter_stat.st_mtime, timezone.utc
+                    ).isoformat()
+                    if formatter_stat
+                    else None
+                ),
+                "sha256": item.formatter_sha256,
+            },
+            "staged_module": str(item.module),
+            "staged_formatter": str(item.formatter),
+            "module_name": item.module_name,
+            "vermagic": item.vermagic,
+            "source_repository": _git(item.source_module.parent),
+            "correctness_gate_coverage": "publication-validation-only",
         }
     return described
 
@@ -105,6 +158,8 @@ def collect_manifest(
     device: DeviceInfo | dict[str, Any],
     affinity: tuple[int, ...],
     publication_eligible: bool,
+    extra_artifacts: Iterable[Path] = (),
+    custom_bsfs: Mapping[str, CustomBsfsArtifacts] | None = None,
 ) -> dict[str, Any]:
     cpu_model = ""
     for line in _read(Path("/proc/cpuinfo")).splitlines():
@@ -154,7 +209,8 @@ def collect_manifest(
             "current": _git(repository),
             "old": _git(old_repository),
         },
-        "built_artifacts": _artifacts(repository),
+        "built_artifacts": _artifacts(repository, extra_artifacts),
+        "custom_bsfs_artifacts": _custom_artifacts(custom_bsfs or {}),
         "config": {
             "path": str(config_path),
             "profile": config.profile,

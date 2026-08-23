@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import signal
 import sys
-from typing import Iterator, Mapping
+from typing import Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -29,8 +29,11 @@ if __package__ in {None, ""}:
     from bench.orchestration.manifest import collect_manifest, write_manifest
     from bench.orchestration.modules import (
         BsfsModuleError,
+        CustomBsfsArtifacts,
         build_module_argv,
         build_modules,
+        define_custom_artifacts,
+        stage_custom_artifacts,
     )
     from bench.orchestration.plan import (
         COMMON_FILESYSTEMS,
@@ -67,7 +70,14 @@ else:
     )
     from .governor import PerformanceGovernor
     from .manifest import collect_manifest, write_manifest
-    from .modules import BsfsModuleError, build_module_argv, build_modules
+    from .modules import (
+        BsfsModuleError,
+        CustomBsfsArtifacts,
+        build_module_argv,
+        build_modules,
+        define_custom_artifacts,
+        stage_custom_artifacts,
+    )
     from .plan import (
         COMMON_FILESYSTEMS,
         CONCURRENCY_WORKERS,
@@ -142,6 +152,30 @@ def transfer_result_ownership(
     return failed
 
 
+def custom_bsfs_definitions(
+    repository: Path,
+    values: Sequence[Sequence[str]] | None,
+) -> dict[str, CustomBsfsArtifacts]:
+    """Parse and validate repeatable ``--custom-bsfs`` triples."""
+    definitions: dict[str, CustomBsfsArtifacts] = {}
+    for name, module, formatter in values or ():
+        if name in COMMON_FILESYSTEMS:
+            raise BsfsModuleError(
+                f"custom BSFS name {name!r} collides with a built-in target"
+            )
+        if name in definitions:
+            raise BsfsModuleError(
+                f"custom BSFS name {name!r} was supplied more than once"
+            )
+        definitions[name] = define_custom_artifacts(
+            repository,
+            name,
+            Path(module),
+            Path(formatter),
+        )
+    return definitions
+
+
 class BenchmarkRun:
     def __init__(
         self,
@@ -156,6 +190,7 @@ class BenchmarkRun:
         run_id: str,
         publication_eligible: bool,
         reporter: RunReporter | None = None,
+        custom_bsfs: Mapping[str, CustomBsfsArtifacts] | None = None,
     ):
         self.reporter = reporter if reporter is not None else RunReporter(
             level=Level.QUIET
@@ -169,6 +204,9 @@ class BenchmarkRun:
         self.device_info = device_info
         self.run_id = run_id
         self.publication_eligible = publication_eligible
+        self.custom_bsfs = dict(custom_bsfs or {})
+        self.bsfs_filesystems = (*BSFS_FILESYSTEMS, *self.custom_bsfs)
+        self.kernel_filesystems = (*KERNEL_FILESYSTEMS, *self.custom_bsfs)
         self.mountpoint = run_dir / "mnt"
         self.results = run_dir / "raw" / "results.jsonl"
         self.artifacts = run_dir / "raw" / "artifacts"
@@ -208,7 +246,9 @@ class BenchmarkRun:
     @contextmanager
     def fresh_filesystem(self, filesystem: str) -> Iterator[FilesystemAdapter]:
         self.cleanup_current()
-        adapter = create_adapter(filesystem, self.context_for(filesystem))
+        adapter = create_adapter(
+            filesystem, self.context_for(filesystem), self.custom_bsfs
+        )
         self.current_adapter = adapter
         conditioner = DeviceConditioner(
             self.runner,
@@ -486,7 +526,7 @@ class BenchmarkRun:
     def recovery_matrix(self, filesystems: tuple[str, ...]) -> None:
         for repetition in range(self.config.repetitions):
             seed = self.config.seeds[repetition]
-            for filesystem in BSFS_FILESYSTEMS:
+            for filesystem in self.bsfs_filesystems:
                 if filesystem not in filesystems:
                     continue
                 self.reporter.unit_start(
@@ -569,7 +609,7 @@ class BenchmarkRun:
         kernel_filesystems = tuple(
             filesystem
             for filesystem in filesystems
-            if filesystem in KERNEL_FILESYSTEMS
+            if filesystem in self.kernel_filesystems
         )
         for repetition in range(self.config.repetitions):
             seed = self.config.seeds[repetition]
@@ -673,6 +713,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-shared-disk", action="store_true")
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--filesystems", nargs="+")
+    parser.add_argument(
+        "--custom-bsfs",
+        action="append",
+        nargs=3,
+        metavar=("NAME", "MODULE", "MKFS"),
+        help=(
+            "register a named BSFS target backed by a matching prebuilt "
+            "bsfs2.ko and mkfs.bsfs pair; repeat for multiple targets"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-correctness-gates", action="store_true")
     verbosity = parser.add_mutually_exclusive_group()
@@ -700,10 +750,26 @@ def main() -> int:
     old_repository = repository.parent / "bsfs_old"
     build_bsfs_argv = build_module_argv(repository)
     config = load_config(args.config.resolve())
+    try:
+        custom_bsfs = custom_bsfs_definitions(
+            repository, getattr(args, "custom_bsfs", None)
+        )
+    except BsfsModuleError as error:
+        print(f"benchmark setup failed: {error}", file=sys.stderr)
+        return 2
     selected = tuple(args.filesystems or config.filesystems)
-    unknown = set(selected) - set(COMMON_FILESYSTEMS)
+    unknown = set(selected) - {*COMMON_FILESYSTEMS, *custom_bsfs}
     if unknown:
-        raise SystemExit(f"unknown filesystems: {', '.join(sorted(unknown))}")
+        message = f"unknown filesystems: {', '.join(sorted(unknown))}"
+        if any(name.startswith("bsfs-") for name in unknown):
+            message += (
+                "; custom BSFS targets must also be defined with "
+                "--custom-bsfs NAME MODULE MKFS"
+            )
+        raise SystemExit(message)
+    selected_custom_bsfs = {
+        name: custom_bsfs[name] for name in selected if name in custom_bsfs
+    }
     bsfs_targets = bsfs_targets_by_strategy(selected)
     bsfs_strategies = tuple(bsfs_targets)
     if args.quiet:
@@ -742,7 +808,9 @@ def main() -> int:
         run_dir=run_dir,
         dry_run=args.dry_run,
     )
-    reporter.announce_plan(build_plan(config, selected))
+    reporter.announce_plan(
+        build_plan(config, selected, custom_bsfs=tuple(selected_custom_bsfs))
+    )
     reporter.section("preflight")
     if not args.dry_run:
         reporter.step("benchmark binaries ok")
@@ -752,16 +820,35 @@ def main() -> int:
                 f"{' and '.join(targets)} use the same {strategy} build; the "
                 "runner measures it under each label"
             )
+    stashed_bsfs_modules: tuple[Path, ...] = ()
     if not args.dry_run and bsfs_strategies:
         try:
             with reporter.timed(
                 "build and probe-load the bsfs modules",
                 ", ".join(bsfs_strategies),
             ):
-                build_modules(repository, bsfs_strategies)
+                stashed_bsfs_modules = build_modules(repository, bsfs_strategies)
         except BsfsModuleError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
+    if not args.dry_run and selected_custom_bsfs:
+        try:
+            staged: dict[str, CustomBsfsArtifacts] = {}
+            with reporter.timed(
+                "stage and probe-load custom bsfs artifacts",
+                ", ".join(selected_custom_bsfs),
+            ):
+                for name, artifacts in selected_custom_bsfs.items():
+                    staged[name] = stage_custom_artifacts(artifacts)
+            selected_custom_bsfs = staged
+        except BsfsModuleError as error:
+            print(f"benchmark setup failed: {error}", file=sys.stderr)
+            return 2
+    if config.publication and selected_custom_bsfs:
+        reporter.warning(
+            "custom BSFS artifacts are covered by the publication validation "
+            "matrix, not by this checkout's correctness gates"
+        )
     runner = CommandRunner(run_dir, dry_run=args.dry_run, reporter=reporter)
     result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
@@ -882,6 +969,12 @@ def main() -> int:
             run_id=run_id,
             publication_eligible=publication_eligible,
             reporter=reporter,
+            custom_bsfs=selected_custom_bsfs,
+        )
+        custom_staged_paths = tuple(
+            path
+            for artifacts in selected_custom_bsfs.values()
+            for path in (artifacts.module, artifacts.formatter)
         )
         manifest = collect_manifest(
             repository=repository,
@@ -892,6 +985,8 @@ def main() -> int:
             device=manifest_device,
             affinity=(config.common_cpu, *config.concurrency_cpus),
             publication_eligible=publication_eligible,
+            extra_artifacts=(*stashed_bsfs_modules, *custom_staged_paths),
+            custom_bsfs=selected_custom_bsfs,
         )
         manifest["correctness_gates"] = correctness
         manifest["size_range_override_used"] = bool(
@@ -912,7 +1007,9 @@ def main() -> int:
         for filesystem in selected:
             try:
                 adapter = create_adapter(
-                    filesystem, benchmark.context_for(filesystem)
+                    filesystem,
+                    benchmark.context_for(filesystem),
+                    selected_custom_bsfs,
                 )
             except (FilesystemUnavailable, ValueError) as error:
                 filesystem_configuration[filesystem] = {"unavailable": str(error)}

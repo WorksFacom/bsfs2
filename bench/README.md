@@ -75,12 +75,13 @@ editing anything under `bench/src/`. Every run records the size, mtime, and
 SHA-256 of each built artifact under `built_artifacts` in `manifest.json`, so a
 stale binary is detectable after the fact.
 
-When a `bsfs` target is selected, the launcher builds `bsfs2.ko`, removes any
-stale `bsfs2` module, and verifies the new module can load on the running
-kernel before it creates a result directory or touches the benchmark target.
-If this fails (for example, `.env` points `KDIR` at a different kernel), the
-launcher exits with setup status 2 and reports the running kernel and module
-vermagic. Set `KDIR` to the running kernel's build tree, rebuild, and retry.
+When a repository-built `bsfs` target is selected, the launcher builds
+`bsfs2.ko`, removes any stale `bsfs2` module, and verifies the new module can
+load on the running kernel before it creates a result directory or touches the
+benchmark target. If this fails (for example, `.env` points `KDIR` at a
+different kernel), the launcher exits with setup status 2 and reports the
+running kernel and module vermagic. Set `KDIR` to the running kernel's build
+tree, rebuild, and retry.
 
 ## Allocation strategies
 
@@ -118,6 +119,44 @@ the module used for a phase.
 
 `tests/alloc_matrix.sh` runs the QEMU suite for every strategy with allocation
 counters compiled in.
+
+## Custom BSFS builds
+
+An independently built BSFS implementation can run beside the allocator
+variants and the other filesystems. Supply a unique target name, its module,
+and the matching formatter:
+
+```sh
+sudo python3 -m bench.orchestration.run \
+  --config bench/config/alloc.toml \
+  --loop-image /tmp/bsfs-bench.img \
+  --custom-bsfs bsfs-maple /absolute/vfs_maple/bsfs2.ko \
+    /absolute/vfs_maple/mkfs.bsfs \
+  --filesystems bsfs-maple bsfs-linear bsfs-heap bsfs-twolevel ext4 btrfs
+```
+
+`--custom-bsfs NAME MODULE MKFS` is repeatable. `NAME` must be a lowercase
+`bsfs-*` slug and must not collide with a built-in target. Registering a target
+does not select it: include the same name in `--filesystems` or in the TOML
+`filesystems` list. Only selected custom targets are staged and probe-loaded.
+
+The formatter is mandatory. A module from another branch is not assumed to
+share this checkout's on-disk format; for example, `vfs_maple` changes the
+superblock and B-tree layouts. Pairing its module with this checkout's
+`mkfs.bsfs` would not be a valid comparison.
+
+Preflight copies each selected pair to `bench/build/custom/NAME/`, checks that
+the module is named `bsfs2`, probe-loads it, verifies that it registers the
+`bsfs` filesystem type, and unloads it before the benchmark target is touched.
+The custom target then runs the same common, recovery, concurrency, and
+publication-validation matrices as the repository-built BSFS targets.
+
+Custom artifacts remain publication eligible when every normal publication
+check succeeds. The manifest explicitly records that the checkout's QEMU
+correctness gates cover its default module, while a custom module is covered by
+the publication validation matrix only. It also records both artifact hashes,
+their original and staged paths, module vermagic, and discoverable source Git
+state.
 
 The quick profile runs reduced versions of every common, recovery, and
 one-/four-worker scenario. Specify only installed filesystems; `zfs` and
