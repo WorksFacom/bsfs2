@@ -281,9 +281,13 @@ python3 -m bench.orchestration.analyze bench/results/RUN_ID
 The analyzer uses Python's standard library. It writes median/min/max, mean,
 standard deviation, device write amplification, failed phases, and concurrency
 scaling as CSV files under `derived/`. It also writes `derived/report.html`, a
-single self-contained, locally viewable report with inline styling,
-interactive SVG comparisons, run provenance, failures, scaling, and the
-complete summary table. It never creates a combined filesystem score.
+single self-contained, locally viewable report with inline styling, run
+provenance, failures, scaling, and the complete summary table. It never creates
+a combined filesystem score. The metric comparisons are horizontal bar charts,
+one bar per filesystem, so every compared filesystem stays on screen however
+many the run covered; a toolbar orders the bars by value (best first for the
+selected metric) or alphabetically, and expands or collapses every scenario and
+phase at once.
 
 ## How throughput is reported
 

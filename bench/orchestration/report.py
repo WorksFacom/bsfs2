@@ -7,6 +7,9 @@ import re
 from typing import Any
 
 
+# (field, title, unit, direction, description, lower_is_better). the trailing
+# flag is what value-ordered charts sort on; the chart script must not have to
+# parse the human-facing direction text to learn which end is better.
 REPORT_METRICS = (
     (
         "durable_throughput_mib_s",
@@ -14,6 +17,7 @@ REPORT_METRICS = (
         "MiB/s",
         "Higher is better",
         "Logical data divided by operation time plus any recorded final flush; higher is better.",
+        False,
     ),
     (
         "durable_iops",
@@ -21,6 +25,7 @@ REPORT_METRICS = (
         "ops/s",
         "Higher is better",
         "Completed operations divided by operation time plus any recorded final flush; higher is better.",
+        False,
     ),
     (
         "durable_total_ns",
@@ -28,6 +33,7 @@ REPORT_METRICS = (
         "ns",
         "Lower is better",
         "Operation-path time plus any recorded final flush; lower is better.",
+        True,
     ),
     (
         "latency_p99_ns",
@@ -35,6 +41,7 @@ REPORT_METRICS = (
         "ns",
         "Lower is better",
         "Nearest-rank p99 of individual operation latencies, excluding the final flush; lower is better.",
+        True,
     ),
     (
         "write_amplification",
@@ -42,6 +49,7 @@ REPORT_METRICS = (
         "device bytes / logical bytes",
         "Lower is better",
         "Device bytes written per logical byte, shown only for phases with a final flush; lower is better.",
+        True,
     ),
 )
 
@@ -487,22 +495,42 @@ summary { padding: 15px 17px; cursor: pointer; font-weight: 800; }
 details[open] > summary { border-bottom: 1px solid var(--line); }
 .details-body { padding: 16px; }
 .scenario > summary { font-size: 1.05rem; }
-.phase-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: 12px; }
+.phase-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); align-items: start; gap: 12px; }
 .phase { margin: 0; background: var(--panel-raised); box-shadow: none; }
 select, input {
   width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--control); color: var(--ink); font: inherit;
 }
-.chart { min-height: 300px; margin-top: 12px; overflow-x: auto; }
-.chart svg { display: block; width: 100%; height: 300px; }
-.axis, .range { stroke: var(--axis); stroke-width: 1; }
-.range-cap { stroke: var(--range-cap); stroke-width: 2; }
-.bar { fill: var(--blue); transition: fill .15s ease; }
-.bar:hover { fill: var(--accent); }
+.chart-tools { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-alpha); backdrop-filter: blur(7px); box-shadow: var(--shadow); }
+.tool-actions { display: flex; gap: 8px; }
+.chart-tools button { padding: 7px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--control); color: var(--ink); font: inherit; font-size: .82rem; font-weight: 700; cursor: pointer; }
+.chart-tools button:hover { border-color: var(--accent); }
+.chart-tools button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.segmented { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .82rem; font-weight: 700; }
+.segmented-track { display: flex; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-raised); }
+.segmented-track button { border: 0; border-radius: 7px; background: transparent; }
+.segmented-track button:hover { border-color: transparent; color: var(--accent); }
+.segmented-track button[aria-pressed="true"] { background: var(--control); border: 1px solid var(--line); color: var(--accent); }
+/* the chart grows downward with its bar count and never sideways, so every
+   filesystem stays on screen no matter how many the run compared */
+.chart { margin-top: 12px; }
+.chart-caption { margin: 0 0 9px; color: var(--muted); font-size: .8rem; font-weight: 700; }
+.bars { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.bar-row { display: grid; grid-template-columns: clamp(4.5rem, 26%, 11rem) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.bar-name { min-width: 0; font-size: .82rem; line-height: 1.25; overflow-wrap: anywhere; }
+.bar-name small { display: block; color: var(--muted); font-size: .74rem; }
+.bar-track { position: relative; height: 20px; border-radius: 5px; background: color-mix(in srgb, var(--line) 34%, transparent); }
+.bar-fill { display: block; height: 100%; min-width: 2px; border-radius: 5px; background: var(--blue); transition: background .15s ease; }
+.bar-row:hover .bar-fill { background: var(--accent); }
+.bar-range { position: absolute; top: 9px; height: 2px; min-width: 1px; background: var(--axis); }
+.bar-range::before, .bar-range::after { position: absolute; top: -4px; width: 2px; height: 10px; background: var(--range-cap); content: ""; }
+.bar-range::before { left: 0; }
+.bar-range::after { right: 0; }
+.bar-number { font-size: .82rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bar-scale { display: grid; grid-template-columns: clamp(4.5rem, 26%, 11rem) minmax(0, 1fr) auto; gap: 10px; margin: 7px 0 0; color: var(--muted); font-size: .74rem; font-variant-numeric: tabular-nums; }
+.bar-scale span:nth-child(2) { display: flex; justify-content: space-between; }
 .chart-description { margin: 9px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
 .chart-note { margin: 10px 0 0; padding: 8px 10px; border-left: 3px solid var(--danger); border-radius: 4px; background: var(--notice-danger); font-size: .85rem; }
-.chart-label { fill: var(--muted); font-size: 11px; }
-.chart-value { fill: var(--ink); font-size: 11px; font-weight: 700; }
 .table-wrap { max-height: 72vh; margin-top: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; }
 table { width: max-content; min-width: 100%; border-collapse: collapse; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
@@ -519,13 +547,16 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   .hero-actions { align-items: flex-start; margin-top: 12px; }
   .context-grid { grid-template-columns: 1fr; }
   .table-tools { grid-template-columns: 1fr; }
+  .chart-tools { position: static; flex-direction: column; align-items: stretch; }
 }
 @media print {
   :root, html[data-theme="dark"] { color-scheme: light; --page: white; --panel: white; --panel-raised: white; --panel-alpha: white; --ink: #111; --muted: #555; --line: #bbb; --control: white; --table-head: #eee; --table-hover: white; --notice-warning: white; --notice-danger: white; }
   body { background: white; }
   .stat, .panel, details { box-shadow: none; }
   .table-wrap { max-height: none; }
-  .theme-switch { display: none; }
+  .theme-switch, .chart-tools { display: none; }
+  .bar-track { background: #eee; }
+  .bar-fill { background: #777; }
 }
 </style>
 </head>
@@ -571,6 +602,19 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   <section aria-labelledby="comparisons-title">
     <h2 id="comparisons-title">Metric comparisons</h2>
     <p class="muted">Bars show medians and whiskers show the observed minimum–maximum range. Durable measurements include the final flush. No combined filesystem score is calculated.</p>
+    <div class="chart-tools">
+      <div class="segmented">
+        <span id="sort-label">Bar order</span>
+        <span class="segmented-track" role="group" aria-labelledby="sort-label">
+          <button id="sort-value" type="button" aria-pressed="true">By value</button>
+          <button id="sort-name" type="button" aria-pressed="false">A–Z</button>
+        </span>
+      </div>
+      <div class="tool-actions">
+        <button id="expand-all" type="button">Expand all</button>
+        <button id="collapse-all" type="button">Collapse all</button>
+      </div>
+    </div>
     <div id="scenario-groups"></div>
   </section>
 
@@ -602,8 +646,10 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
 (() => {
   "use strict";
   const data = JSON.parse(document.querySelector("#report-data").textContent);
-  const svgNamespace = "http://www.w3.org/2000/svg";
   const completeSort = { field: null, ascending: true };
+  // every chart shares one bar order, and every chart redraws when it changes
+  let chartSort = "value";
+  const redraws = [];
   const themeSwitch = document.querySelector("#theme-switch");
   const themeLabel = document.querySelector("#theme-label");
 
@@ -623,13 +669,6 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   function element(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
-  }
-
-  function svgElement(tag, attributes = {}, text) {
-    const node = document.createElementNS(svgNamespace, tag);
-    Object.entries(attributes).forEach(([name, value]) => node.setAttribute(name, String(value)));
     if (text !== undefined) node.textContent = text;
     return node;
   }
@@ -715,67 +754,83 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     return `worker ${row.worker_id}`;
   }
 
+  const alphabetical = (left, right) =>
+    String(left.filesystem).localeCompare(String(right.filesystem)) ||
+    Number(left.worker_count) - Number(right.worker_count) ||
+    (left.worker_id ?? -1) - (right.worker_id ?? -1);
+
+  function orderRows(rows, metric) {
+    const medianField = `${metric[0]}_median`;
+    const measured = rows.filter((row) => Number.isFinite(row[medianField]));
+    if (chartSort === "name") return measured.sort(alphabetical);
+    // metric[5] is lower_is_better, so best-first flips with the metric
+    const sign = metric[5] ? 1 : -1;
+    // ties fall back to the name so the order stays stable between redraws
+    return measured.sort((left, right) =>
+      sign * (left[medianField] - right[medianField]) || alphabetical(left, right));
+  }
+
   function renderChart(rows, metric) {
     const [name, title, unit, direction] = metric;
     const medianField = `${name}_median`;
     const minimumField = `${name}_minimum`;
     const maximumField = `${name}_maximum`;
-    const values = rows
-      .filter((row) => Number.isFinite(row[medianField]))
-      .sort((left, right) =>
-        String(left.filesystem).localeCompare(String(right.filesystem)) ||
-        Number(left.worker_count) - Number(right.worker_count) ||
-        (left.worker_id ?? -1) - (right.worker_id ?? -1));
+    const values = orderRows(rows, metric);
     const container = element("div", "chart");
     if (!values.length) {
       container.append(element("p", "empty", "No measurement for this metric."));
       return container;
     }
 
-    const width = Math.max(560, values.length * 94 + 65);
-    const height = 300;
-    const top = 40;
-    const baseline = 238;
     // scale to the data, not to 1, so sub-1 metrics don't render as slivers
     const observed = Math.max(
       ...values.map((row) => Number.isFinite(row[maximumField]) ? row[maximumField] : row[medianField]),
     );
     const maximum = observed > 0 ? observed : 1;
-    const y = (value) => baseline - (value / maximum) * (baseline - top);
-    const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${title}, ${direction}` });
-    if (values.length > 5) svg.style.minWidth = `${width}px`;
-    svg.append(
-      svgElement("line", { x1: 48, x2: width - 12, y1: baseline, y2: baseline, class: "axis" }),
-      svgElement("text", { x: 48, y: 17, class: "chart-label" }, `${title} (${unit}) · ${direction}`),
-      svgElement("text", { x: 8, y: baseline + 4, class: "chart-label" }, "0"),
-      svgElement("text", { x: 8, y: top + 4, class: "chart-label" }, formatValue(maximum)),
-    );
+    const percent = (value) => `${Math.min(100, Math.max(0, (value / maximum) * 100))}%`;
+    // w1 · aggregate on every row of a non-concurrency chart is pure noise, so
+    // the qualifier only appears when it actually distinguishes the bars
+    const qualified = new Set(values.map((row) => `${row.worker_count}/${row.worker_id}`)).size > 1;
 
-    values.forEach((row, index) => {
-      const x = 58 + index * 94;
+    const list = element("ol", "bars");
+    values.forEach((row) => {
       const median = row[medianField];
       const minimum = Number.isFinite(row[minimumField]) ? row[minimumField] : median;
       const observedMaximum = Number.isFinite(row[maximumField]) ? row[maximumField] : median;
-      const center = x + 28;
-      const medianY = y(median);
-      const minimumY = y(minimum);
-      const maximumY = y(observedMaximum);
-      const tooltip = `${row.filesystem} · workers=${row.worker_count} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)}–${formatValue(observedMaximum)} ${unit}`;
-      const bar = svgElement("rect", {
-        x, y: medianY, width: 56, height: Math.max(0, baseline - medianY), rx: 4, class: "bar",
-      });
-      bar.append(svgElement("title", {}, tooltip));
-      svg.append(
-        svgElement("line", { x1: center, x2: center, y1: maximumY, y2: minimumY, class: "range" }),
-        svgElement("line", { x1: center - 6, x2: center + 6, y1: maximumY, y2: maximumY, class: "range-cap" }),
-        svgElement("line", { x1: center - 6, x2: center + 6, y1: minimumY, y2: minimumY, class: "range-cap" }),
-        bar,
-        svgElement("text", { x, y: Math.max(31, medianY - 7), class: "chart-value" }, formatValue(median)),
-        svgElement("text", { x, y: 257, class: "chart-label" }, `${row.filesystem} · w${row.worker_count}`),
-        svgElement("text", { x, y: 274, class: "chart-label" }, workerLabel(row)),
-      );
+      const item = element("li", "bar-row");
+      item.title = `${row.filesystem} · workers=${row.worker_count} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)}–${formatValue(observedMaximum)} ${unit}`;
+
+      const label = element("span", "bar-name", String(row.filesystem));
+      if (qualified) {
+        label.append(element("small", "", `w${row.worker_count} · ${workerLabel(row)}`));
+      }
+      const track = element("span", "bar-track");
+      const fill = element("span", "bar-fill");
+      fill.style.width = percent(median);
+      track.append(fill);
+      // a single-repetition row has min == max == median, and a zero-width
+      // whisker there is a smudge on the bar rather than a range
+      if (observedMaximum > minimum) {
+        const range = element("span", "bar-range");
+        range.style.left = percent(minimum);
+        range.style.width = percent(observedMaximum - minimum);
+        track.append(range);
+      }
+
+      item.append(label, track, element("span", "bar-number", formatValue(median)));
+      list.append(item);
     });
-    container.append(svg);
+
+    const scale = element("p", "bar-scale");
+    const ticks = element("span");
+    ticks.append(element("span", "", "0"), element("span", "", formatValue(maximum)));
+    scale.append(element("span"), ticks, element("span"));
+
+    container.append(
+      element("p", "chart-caption", `${title} (${unit}) · ${direction}`),
+      list,
+      scale,
+    );
     return container;
   }
 
@@ -832,6 +887,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
           selector.addEventListener("change", draw);
           phaseBody.append(selector, chartHolder, description);
           draw();
+          redraws.push(draw);
         }
         const failed = failedFor(scenario, phase);
         if (failed.length) {
@@ -868,6 +924,26 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     document.querySelector("#summary-table").replaceChildren(makeTable(rows, data.fields, true));
   }
 
+  function setChartSort(order) {
+    if (chartSort === order) return;
+    chartSort = order;
+    document.querySelector("#sort-value").setAttribute("aria-pressed", String(order === "value"));
+    document.querySelector("#sort-name").setAttribute("aria-pressed", String(order === "name"));
+    redraws.forEach((draw) => draw());
+  }
+
+  function setAllOpen(open) {
+    // both levels at once: a scenario opened with its phases still shut would
+    // make "expand all" look like it did nothing
+    document.querySelectorAll("#scenario-groups details").forEach((node) => {
+      node.open = open;
+    });
+  }
+
+  document.querySelector("#sort-value").addEventListener("click", () => setChartSort("value"));
+  document.querySelector("#sort-name").addEventListener("click", () => setChartSort("name"));
+  document.querySelector("#expand-all").addEventListener("click", () => setAllOpen(true));
+  document.querySelector("#collapse-all").addEventListener("click", () => setAllOpen(false));
   document.querySelector("#summary-filter").addEventListener("input", renderCompleteTable);
   renderHealth();
   renderComparisons();

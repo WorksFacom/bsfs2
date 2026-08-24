@@ -1112,6 +1112,46 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn('themeSwitch.addEventListener("click"', report)
         self.assertNotIn("localStorage", report)
 
+    def test_report_charts_fit_without_scrolling_and_expose_order_controls(
+        self,
+    ) -> None:
+        """a filesystem scrolled off the side of a chart reads as "not run", so
+        the chart has to grow downward instead of sideways."""
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        self.assertNotIn("overflow-x: auto", report)
+        self.assertNotIn("minWidth", report)
+        self.assertIn('id="sort-value"', report)
+        self.assertIn('id="sort-name"', report)
+        self.assertIn('id="expand-all"', report)
+        self.assertIn('id="collapse-all"', report)
+        self.assertIn('let chartSort = "value";', report)
+        self.assertIn('#scenario-groups details', report)
+
+    def test_every_metric_records_which_end_is_better(self) -> None:
+        """value order flips with the metric, and the chart script reads the
+        flag rather than parsing the human-facing direction text."""
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        for metric in embedded_report_data(report)["metrics"]:
+            self.assertEqual(metric[5], metric[3] == "Lower is better", metric[0])
+
     def test_empty_report_still_renders_without_manifest(self) -> None:
         report = render_report(
             run_dir=Path("/results/interrupted-run"),
