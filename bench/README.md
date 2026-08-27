@@ -109,8 +109,8 @@ Preflight builds every selected strategy once, copies each `.ko` to
 measured phases. A strategy that cannot build or load fails before the runner
 touches a device. Preflight sets `BSFS_ALLOC_STATS=` to disable the allocation
 counters, which run on the allocation fast path. It restores the default build
-afterward because the correctness gates and QEMU scripts boot
-`$REPO/bsfs2.ko`.
+afterward, keeping the checkout's normal artifacts available for development
+and optional QEMU checks.
 
 `manifest.json` records each copied module under `built_artifacts` with its
 SHA-256. `filesystem_configuration` records the strategy for each target. The
@@ -152,11 +152,10 @@ The custom target then runs the same common, recovery, concurrency, and
 publication-validation matrices as the repository-built BSFS targets.
 
 Custom artifacts remain publication eligible when every normal publication
-check succeeds. The manifest explicitly records that the checkout's QEMU
-correctness gates cover its default module, while a custom module is covered by
-the publication validation matrix only. It also records both artifact hashes,
-their original and staged paths, module vermagic, and discoverable source Git
-state.
+check succeeds. They are covered by the publication validation matrix; optional
+QEMU correctness gates, when requested, cover this checkout's default module
+only. The manifest records both artifact hashes, their original and staged
+paths, module vermagic, and discoverable source Git state.
 
 The quick profile runs reduced versions of every common, recovery, and
 one-/four-worker scenario. Specify only installed filesystems; `zfs` and
@@ -248,13 +247,14 @@ supplied. Both overrides are recorded in the manifest.
 Before measured publication work, the runner:
 
 1. Builds the current module, formatter, and both benchmark runners.
-2. Runs smoke, persistence, copy-on-write, crash, ENOSPC-crash, fuzz, alias,
-   and recovery correctness gates.
-3. Runs a reduced untimed validation matrix.
-4. Records the fixed cyclic filesystem schedule and exact commands.
+2. Runs a reduced untimed validation matrix.
+3. Records the fixed cyclic filesystem schedule and exact commands.
 
-`--skip-correctness-gates` is explicit and permanently marks the run
-non-publication.
+QEMU smoke, persistence, copy-on-write, crash, ENOSPC-crash, fuzz, alias, and
+recovery checks are available with `--run-correctness-gates`. They are not part
+of the benchmark's default path, because they require `KDIR` to point to a
+bootable kernel build compatible with the module being tested. Their outcomes
+and whether they were requested are recorded in the manifest.
 
 ## Outputs
 

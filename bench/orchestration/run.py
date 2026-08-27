@@ -724,7 +724,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-correctness-gates", action="store_true")
+    parser.add_argument(
+        "--run-correctness-gates",
+        action="store_true",
+        help=(
+            "run the optional QEMU smoke/crash correctness suite before a "
+            "publication run; requires KDIR to identify a bootable kernel build"
+        ),
+    )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument(
         "-v",
@@ -844,10 +851,15 @@ def main() -> int:
         except BsfsModuleError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
-    if config.publication and selected_custom_bsfs:
+    run_correctness = bool(
+        config.publication
+        and getattr(args, "run_correctness_gates", False)
+    )
+    if run_correctness and selected_custom_bsfs:
         reporter.warning(
             "custom BSFS artifacts are covered by the publication validation "
-            "matrix, not by this checkout's correctness gates"
+            "matrix only; optional QEMU correctness gates cover this "
+            "checkout's default module"
         )
     runner = CommandRunner(run_dir, dry_run=args.dry_run, reporter=reporter)
     result_owner = sudo_invoker_owner()
@@ -927,7 +939,7 @@ def main() -> int:
         reporter.step("kernel log captured (before)")
 
         correctness: list[dict[str, object]] = []
-        if config.publication and not args.skip_correctness_gates:
+        if run_correctness:
             # The gates boot a VM with $REPO/bsfs2.ko and $REPO/mkfs.bsfs. They
             # need a build even when the benchmark measures no BSFS variant.
             if not bsfs_strategies:
@@ -945,9 +957,6 @@ def main() -> int:
                         encoding="utf-8",
                     )
                 raise
-        elif args.skip_correctness_gates:
-            publication_eligible = False
-
         manifest_device: DeviceInfo | dict[str, object]
         if device_info:
             manifest_device = device_info
@@ -989,6 +998,7 @@ def main() -> int:
             custom_bsfs=selected_custom_bsfs,
         )
         manifest["correctness_gates"] = correctness
+        manifest["correctness_gates_requested"] = run_correctness
         manifest["size_range_override_used"] = bool(
             args.device and args.allow_size_outside_range
         )

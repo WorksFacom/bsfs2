@@ -412,8 +412,8 @@ def build_modules(repository: Path, strategies: tuple[str, ...]) -> tuple[Path, 
         _probe_load(target)
         stashed.append(target)
 
-    # Restore the default build. The correctness gates and QEMU scripts boot
-    # $REPO/bsfs2.ko.
+    # Restore the default build so the checkout's normal artifacts remain
+    # available for developer tooling and optional QEMU correctness tests.
     if strategies:
         restore = _run_capture(build_module_argv(repository))
         if restore.returncode != 0:
