@@ -33,23 +33,6 @@
 #include <linux/types.h>
 
 /**
- * @brief Initializes a linked list of bitmap blocks on disk.
- *
- * This function creates and writes a series of bitmap blocks to the disk,
- * starting at a specified block number. Each bitmap block contains a byte array
- * representing the bitmap data (used to track free/allocated blocks) and a
- * pointer to the next bitmap block. The last block in the list will have its
- * `next_block` field set to `INVALID_BLOCK`, indicating the end of the list.
- *
- * @param disk Pointer to the file representing the disk (filesystem image).
- * @param start_block The starting block number where the bitmap list begins.
- * @param num_blocks The total number of blocks to be initialized in the list.
- *
- * @return 0 on success, or -1 if an error occurs during disk write operations.
- */
-int init_bitmap_list(struct super_block *sb, __u32 start_block, __u32 num_blocks);
-
-/**
  * @brief Loads a bitmap from the specified file.
  *
  * This function reads the bitmap from the disk, starting at the given position
@@ -72,20 +55,6 @@ int load_bitmap(struct super_block *sb);
  * Flushes any bitmap block still dirty before dropping it.
  */
 void release_bitmap(struct super_block *sb);
-
-/**
- * @brief Writes the bitmap to disk starting at the given block.
- *
- * This function traverses the linked list of bitmap blocks on disk and writes
- * the corresponding segments of the bitmap array to each block. It ensures the
- * updated bitmap is persisted for future allocations.
- *
- * @param disk File pointer to the filesystem image.
- * @param bitmap Pointer to the in-memory bitmap data.
- * @param bitmap_start_block Logical block number where the bitmap begins.
- * @return 0 on success, or -1 if an error occurs during reading or writing.
- */
-int write_bitmap(struct super_block *sb, __u8 *bitmap, __u32 bitmap_start_block);
 
 /**
  * @brief Checks if a given block is free in the bitmap.
