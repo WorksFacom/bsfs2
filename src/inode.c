@@ -4,13 +4,7 @@
 #include "../include/file.h"
 #include "../include/rec_entry.h"
 #include <linux/mpage.h>
-#include <linux/version.h>
 #include <linux/writeback.h>
-
-// inode_state_read() only exists from 6.19 on; before that i_state is read directly.
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 19, 0)
-#define inode_state_read(inode) ((inode)->i_state)
-#endif
 
 static struct kmem_cache *bsfs_inode_cache;
 
@@ -231,63 +225,6 @@ int insert_inode(struct super_block *sb, btree_handle_t *handle, const struct di
 //   return 1;
 // }
 
-static inline int bsfs_buffer_uptodate(struct buffer_head *bh) {
-  /*
-   * If the buffer has the write error flag, we have failed
-   * to write out data in the block.  In this  case, we don't
-   * have to read the block because we may read the old data
-   * successfully.
-   */
-  if (buffer_write_io_error(bh))
-    set_buffer_uptodate(bh);
-  return buffer_uptodate(bh);
-}
-
-static inline void __bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
-
-  bh->b_end_io = end_io ? end_io : end_buffer_read_sync;
-  get_bh(bh);
-  submit_bh(REQ_OP_READ | op_flags, bh);
-}
-
-static void bsfs_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
-  BUG_ON(!buffer_locked(bh));
-
-  if (bsfs_buffer_uptodate(bh)) {
-    unlock_buffer(bh);
-    return;
-  }
-
-  __bsfs_read_bh(bh, op_flags, end_io);
-}
-
-static int bsfs_read_bh(struct buffer_head *bh, blk_opf_t op_flags, bh_end_io_t *end_io) {
-  BUG_ON(!buffer_locked(bh));
-
-  if (bsfs_buffer_uptodate(bh)) {
-    unlock_buffer(bh);
-    return 0;
-  }
-
-  __bsfs_read_bh(bh, op_flags, end_io);
-
-  wait_on_buffer(bh);
-
-  if (buffer_uptodate(bh))
-    return 0;
-
-  return -EIO;
-}
-
-static int __maybe_unused bsfs_read_bh_lock(struct buffer_head *bh, blk_opf_t op_flags, bool wait) {
-  lock_buffer(bh);
-  if (!wait) {
-    bsfs_read_bh_nowait(bh, op_flags, NULL);
-    return 0;
-  }
-  return bsfs_read_bh(bh, op_flags, NULL);
-}
-
 // TODO: test
 // int bsfs_block_write_begin(struct folio *folio, loff_t pos, unsigned len, get_block_t *get_block) {
 //   unsigned int        from  = offset_in_folio(folio, pos);
@@ -351,7 +288,7 @@ static int __maybe_unused bsfs_read_bh_lock(struct buffer_head *bh, blk_opf_t op
 //       continue;
 //     }
 //     if (!buffer_uptodate(bh) && !buffer_delay(bh) && !buffer_unwritten(bh) && (block_start < from || block_end > to)) {
-//       bsfs_read_bh_lock(bh, 0, false);
+//       bh_read_nowait(bh, 0);
 //       wait[nr_wait++] = bh;
 //     }
 //   }
@@ -673,7 +610,7 @@ void bsfs_set_inode(struct inode *inode, dev_t rdev) {
   } else if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode) || S_ISFIFO(inode->i_mode) || S_ISSOCK(inode->i_mode)) {
     init_special_inode(inode, inode->i_mode, rdev);
   } else {
-    printk(KERN_DEBUG "BSFS: Invalid file type 0%04o for inode %lu.\n", inode->i_mode, inode->i_ino);
+    printk(KERN_DEBUG "BSFS: Invalid file type 0%04o for inode %llu.\n", inode->i_mode, inode->i_ino);
     make_bad_inode(inode);
   }
 }
@@ -697,7 +634,7 @@ static struct inode *__set_up_inode_new(struct inode *inode) {
   }
 
   if (disk_inode->inode->nlinks == 0) {
-    printk("BSFS: deleted inode referenced: %lu\n", inode->i_ino);
+    printk("BSFS: deleted inode referenced: %llu\n", inode->i_ino);
     mutex_unlock(&sbi->inode_tree_lock);
     brelse(disk_inode->bh);
     kfree(disk_inode);
@@ -909,7 +846,7 @@ void bsfs_evict_inode(struct inode *inode) {
 
         // bsfs_rec_tree_add persists recovery_root to the super block itself
         if (bsfs_rec_tree_add(sb, rec_tree, &rec))
-          pr_warn("failed to record recovery snapshot for inode %lu\n", inode->i_ino);
+          pr_warn("failed to record recovery snapshot for inode %llu\n", inode->i_ino);
         else
           snapshot = true; // the snapshot owns the data blocks now
 
@@ -917,12 +854,11 @@ void bsfs_evict_inode(struct inode *inode) {
 
         kfree(rec_tree);
       } else {
-        pr_warn("no memory for recovery snapshot of inode %lu\n", inode->i_ino);
+        pr_warn("no memory for recovery snapshot of inode %llu\n", inode->i_ino);
       }
     }
   }
 
-  invalidate_inode_buffers(inode);
   clear_inode(inode);
 
   if (want_delete) {
@@ -942,11 +878,11 @@ void bsfs_evict_inode(struct inode *inode) {
         tree_h->root_block = bi->btree_root;
 
         if (btree_deallocate_all(sb, tree_h, tree_h->root_block, NULL) != 0)
-          pr_warn("failed to reclaim the tree of inode %lu, leaking its blocks\n", inode->i_ino);
+          pr_warn("failed to reclaim the tree of inode %llu, leaking its blocks\n", inode->i_ino);
 
         kfree(tree_h);
       } else {
-        pr_warn("no memory to reclaim the tree of inode %lu\n", inode->i_ino);
+        pr_warn("no memory to reclaim the tree of inode %llu\n", inode->i_ino);
       }
 
       bi->btree_root = 0;
@@ -968,7 +904,7 @@ void bsfs_evict_inode(struct inode *inode) {
       mutex_unlock(&sbi->inode_tree_lock);
       kfree(inode_h);
     } else {
-      pr_warn("no memory to remove inode %lu from inode tree\n", inode->i_ino);
+      pr_warn("no memory to remove inode %llu from inode tree\n", inode->i_ino);
     }
   }
 
