@@ -19,22 +19,4 @@ extern const struct inode_operations bsfs_dir_inode_operations;
 
 ino_t bsfs_inode_by_name(struct dentry *dentry);
 
-/**
- * @brief Moves or renames a directory entry from one directory to another.
- *
- * This function removes an existing directory entry from the source directory
- * and inserts it into the destination directory. The entry can also be renamed
- * in the process.
- *
- * @param disk Pointer to the disk file.
- * @param sb Pointer to the superblock.
- * @param src_dir Pointer to the source directory.
- * @param src_name Name of the entry to move (existing name).
- * @param dest_dir Pointer to the destination directory.
- * @param dest_name New name for the entry in the destination (can be same as
- * src_name).
- * @return 0 on success, -1 on failure.
- */
-// int move_dir_entry(FILE *disk, bsfs_super_block *sb, dir_t *src_dir, const char *src_name, dir_t *dest_dir, const char *dest_name);
-
 #endif // DIRECTORY_OPERATIONS_BSFS_H

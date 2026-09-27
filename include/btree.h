@@ -115,13 +115,6 @@ static inline __u32 get_dir_entry_key(const void *entry) {
   return hash_filename(((const struct bsfs_dentry *)entry)->filename);
 }
 
-// static inline int namecompare(int len, int maxlen, const char *name, const char *buffer) {
-//   if (len < maxlen && buffer[len])
-//     return 0;
-//   return !memcmp(name, buffer, len);
-// }
-
-// TODO: use namecompare ??
 static inline int compare_dir_entry(const void *a, const void *b) {
   __u32 ha = get_dir_entry_key(a);
   __u32 hb = get_dir_entry_key(b);

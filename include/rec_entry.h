@@ -56,19 +56,6 @@ void bsfs_rec_tree_mount_init(struct super_block *sb);
 int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entry_t *entry);
 
 /**
- * @brief Fetch the next available recovery_id in the Recovery tree.
- *
- * Scans the tree (if needed) to keep the monotonic recovery_id counter in sync
- * with the current root stored in @p sb. This mirrors get_next_inode_number.
- *
- * @param disk      Open filesystem image.
- * @param sb        Loaded superblock (provides the recovery root and caches).
- * @param rec_tree  Recovery B-tree handle used for traversals.
- * @return Next unused recovery_id.
- */
-// static __u32 get_next_rec_id(struct super_block *sb, btree_handle_t *rec_tree);
-
-/**
  * @brief Remove a recovery entry from the Recovery B-tree by ID.
  *
  * This function deletes a single @ref rec_entry_t identified by its
@@ -107,72 +94,5 @@ int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32
  * @return the number of entries purged.
  */
 unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries, __u64 *blocks_deferred);
-
-/**
- * @brief Look up a recovery entry in the Recovery B-tree by ID.
- *
- * This function searches the Recovery B-tree for a @ref rec_entry_t whose
- * key is the 32-bit @p recovery_id. The B-tree must be configured so that
- * the key for each node record is the @c recovery_id field of @ref rec_entry_t
- * (i.e., the handle's key accessor returns &entry->recovery_id).
- *
- * Semantics:
- *  - If an entry with the given @p recovery_id exists, it is copied into
- *    @p out_entry and the function returns 1.
- *  - If not found, the function returns 0 and leaves @p out_entry unmodified.
- *
- * @param disk        Open filesystem image.
- * @param rec_tree    Recovery B-tree handle (already initialized).
- * @param recovery_id Key (unique ID) of the recovery entry to find.
- * @param out_entry   Output buffer to receive the found entry (must be
- * non-NULL).
- * @return 1 if found; 0 if not found or on invalid arguments.
- */
-// TODO: implement
-// int rec_tree_search(FILE *disk, btree_handle_t *rec_tree, uint32_t recovery_id, rec_entry_t *out_entry);
-
-/**
- * @brief Find recovery entries by original filename.
- *
- * Performs an in-order traversal over the Recovery B-tree (keyed by
- * rec_entry_t::recovery_id) and collects entries whose
- * rec_entry_t::original_name matches exactly the provided @p name.
- *
- * Up to @p max matches are copied into the @p out buffer (if non-NULL). The
- * total number of matches found in the tree (which can be greater than @p max)
- * is returned via @p out_count.
- *
- * @param disk       Open filesystem image.
- * @param rec_tree   Initialized Recovery B-tree handle.
- * @param name       Exact filename to match against rec_entry_t::original_name.
- * @param out        Output buffer for matches (may be NULL to only count).
- * @param max        Capacity of @p out in number of entries.
- * @param out_count  Output: total number of matches found.
- * @return 1 on success (including zero matches), 0 on invalid args or I/O
- *         failure while traversing.
- */
-// TODO: implement? is this still needed?
-// int rec_tree_find_by_name(FILE *disk, btree_handle_t *rec_tree, const char *name, rec_entry_t *out, size_t max, size_t *out_count);
-
-/**
- * @brief Permanently purge a deleted file from the filesystem.
- *
- * Reclaims all data blocks referenced by the snapshot @p rec (both direct
- * spans and spans in the per-file data B-tree), removes the span records, and
- * finally removes the metadata entry from the Recovery B-tree.
- *
- * Failure semantics:
- *  - If deallocation of data or removal of span mappings fails, the recovery
- *    entry is NOT removed and the function returns -1, allowing a retry.
- *
- * @param disk      Open filesystem image.
- * @param sb        Loaded superblock.
- * @param data_tree B-tree handle for file data spans (bspan_t mappings).
- * @param rec_tree  B-tree handle for recovery entries (rec_entry_t).
- * @param rec       The recovery entry describing the file to purge.
- * @return 0 on success; -1 on error.
- */
-// TODO: implement? is this still needed?
-// int purge_file(FILE *disk, bsfs_super_block *sb, btree_handle_t *data_tree, btree_handle_t *rec_tree, const rec_entry_t *rec);
 
 #endif /* REC_ENTRY_OPERATIONS_BSFS_H */
