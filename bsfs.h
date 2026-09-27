@@ -8,12 +8,6 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
-#define BSFS_V1 0x0001
-#define BSFS_V2 0x0002
-
-#define BSFS_VALID_FS 0x0001
-#define BSFS_ERROR_FS 0x0002
-
 #define DEFAULT_RECOVERY_TTL (30ULL * 24ULL * 60ULL * 60ULL)
 
 #define BSFS_RECLAIM_ERROR_SLOTS 16
