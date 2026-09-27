@@ -93,7 +93,7 @@ docs/
 .cache
 .ccls-cache
 
-.env
+local.mk
 mkfs.bsfs
 recovery.bsfs
 __pycache__/

@@ -321,7 +321,7 @@ class BsfsModulePreflightTests(unittest.TestCase):
         argv = self.build_argv("twolevel")
 
         self.assertIn("BSFS_ALLOC=twolevel", argv)
-        # Allocation counters change the measured fast path. A .env setting
+        # Allocation counters change the measured fast path. A local.mk setting
         # must not affect a benchmark build.
         self.assertIn("BSFS_ALLOC_STATS=", argv)
 

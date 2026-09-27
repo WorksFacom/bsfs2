@@ -18,9 +18,9 @@
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-[ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
+[ -f "$SCRIPT_DIR/local.mk" ] && source "$SCRIPT_DIR/local.mk"
 
-: "${KDIR:?KDIR not set — copy .env.example to .env}"
+: "${KDIR:?KDIR not set — copy local.mk.example to local.mk}"
 
 GUEST="${1:-tests/smoke_guest.sh}"
 [ -f "$SCRIPT_DIR/$GUEST" ] || {

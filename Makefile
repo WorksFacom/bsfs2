@@ -1,7 +1,8 @@
-# KDIR comes from .env (the same file start_qemu.sh / tests/smoke.sh source),
+# KDIR comes from local.mk (the same file start_qemu.sh / tests/smoke.sh source),
 # falling back to the running kernel's build tree. BSFS_ALLOC can be pinned
 # there too, so the QEMU flow does not have to repeat it on every build.
--include .env
+# it must parse as both sh and make: plain VAR=value, no quotes, ${HOME} not $HOME.
+-include local.mk
 KDIR ?= /lib/modules/$(shell uname -r)/build
 export KDIR
 
@@ -43,15 +44,13 @@ ccflags-y += -include $(PWD)/include/pr_fmt.h
 ccflags-y += -DBSFS_ALLOC_STRATEGY_NAME=\"$(BSFS_ALLOC)\"
 ccflags-y += $(if $(BSFS_ALLOC_STATS),-DBSFS_ALLOC_STATS)
 
-SRC_FILES = $(shell find src -type f -name '*.c')
-
 MKFS = mkfs.bsfs
 RECOVERY = recovery.bsfs
 
 all: $(MKFS) $(RECOVERY)
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
-$(MKFS): tools/mkfs.c
+$(MKFS): tools/mkfs.c include/bsfs_shared.h
 	$(CC) -Wall -o $@ $<
 
 $(RECOVERY): tools/recovery.c include/bsfs_shared.h
@@ -69,6 +68,6 @@ bench-check:
 	$(MAKE) -C bench check
 
 compile_commands.json:
-	make -C $(KDIR) M=$(PWD) compile_commands.json
+	$(MAKE) -C $(KDIR) M=$(PWD) compile_commands.json
 
 .PHONY: all clean compile_commands.json bench bench-check

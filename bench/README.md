@@ -78,7 +78,7 @@ stale binary is detectable after the fact.
 When a repository-built `bsfs` target is selected, the launcher builds
 `bsfs2.ko`, removes any stale `bsfs2` module, and verifies the new module can
 load on the running kernel before it creates a result directory or touches the
-benchmark target. If this fails (for example, `.env` points `KDIR` at a
+benchmark target. If this fails (for example, `local.mk` points `KDIR` at a
 different kernel), the launcher exits with setup status 2 and reports the
 running kernel and module vermagic. Set `KDIR` to the running kernel's build
 tree, rebuild, and retry.

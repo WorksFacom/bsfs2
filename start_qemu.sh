@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-[ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
+[ -f "$SCRIPT_DIR/local.mk" ] && source "$SCRIPT_DIR/local.mk"
 
 DEBUG_FLAGS=""
 

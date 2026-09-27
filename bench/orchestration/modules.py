@@ -83,7 +83,7 @@ def build_module_argv(repository: Path, strategy: str | None = None) -> list[str
     """
     argv = ["make", "-C", str(repository), f"PWD={repository}"]
     if strategy is not None:
-        # Command-line assignments override `-include .env`, so its chosen
+        # Command-line assignments override `-include local.mk`, so its chosen
         # strategy cannot affect a measured build.
         argv.extend([f"BSFS_ALLOC={strategy}", f"BSFS_ALLOC_STATS={MEASURED_STATS}"])
     return argv
