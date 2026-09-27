@@ -9,29 +9,6 @@
 #include "../include/bitmap.h"
 #include "../bsfs.h"
 
-// int init_bitmap_list(struct super_block *sb, __u32 start_block, __u32 num_blocks) {
-//   for (uint32_t i = 0; i < num_blocks; i++) {
-//     bitmap_block_t block;
-//     memset(block.bits, 0, BITMAP_BLOCK_BYTES);
-//     if (i < num_blocks - 1) {
-//       block.next_block = start_block + i + 1;
-//     } else {
-//       block.next_block = INVALID_BLOCK;
-//     }
-//
-//     if (fseek(disk, (start_block + i) * BLOCK_SIZE, SEEK_SET) != 0) {
-//       fprintf(stderr, "Failed to seek while initializing bitmap list.\n");
-//       return -1;
-//     }
-//     if (fwrite(&block, sizeof(bitmap_block_t), 1, disk) != 1) {
-//       fprintf(stderr, "Failed to write bitmap block.\n");
-//       return -1;
-//     }
-//   }
-//   fflush(disk);
-//   return 0;
-// }
-
 int load_bitmap(struct super_block *sb) {
   struct buffer_head **bitmap_map;
   __u8               **bitmap;
