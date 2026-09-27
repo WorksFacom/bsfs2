@@ -142,9 +142,8 @@ static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 nod
  *
  * Deleting a file does not free anything on its own: bsfs_evict_inode() hands
  * the file's extent tree to a recovery snapshot instead, deliberately, so it
- * can be restored later. Nothing ever took those blocks back - the code that
- * was supposed to lives in src/rec_gc.c, which is still userspace and out of
- * the build - so in practice space was gone until the next mkfs.
+ * can be restored later. Nothing ever took those blocks back, so in practice
+ * space was gone until the next mkfs.
  *
  * This is the reclaim end of that deal, and it only runs under space pressure:
  * a snapshot is a nice-to-have, a filesystem that can still be written to is

@@ -5,7 +5,6 @@
 #include "../include/alloc.h"
 #include "../include/alloc_strategy.h"
 #include "../include/rec_entry.h"
-#include "../include/rec_gc.h"
 #include "../include/reclaim_stats.h"
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
@@ -492,12 +491,6 @@ __u32 allocate_single_block(struct super_block *sb) {
   pr_warn_ratelimited("no blocks available (%zu deferred)\n", sbi->pending_free_count);
 
   return INVALID_BLOCK;
-
-  // GC on-demand for at least 1 block, then retry once
-  // TODO: reenable
-  // (void)rec_gc_purge_until(sb, 1, (__u64)ktime_get_real_seconds());
-
-  // return allocate_single_block(sb);
 }
 
 /*

@@ -34,7 +34,6 @@ bsfs2-src-objs := \
 	inode.o \
 	reclaim_stats.o \
 	rec_entry.o
-	# rec_gc.o
 
 obj-m += bsfs2.o
 
