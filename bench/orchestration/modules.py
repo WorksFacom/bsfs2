@@ -77,11 +77,7 @@ def custom_artifact_paths(repository: Path, name: str) -> tuple[Path, Path]:
 
 
 def build_module_argv(repository: Path, strategy: str | None = None) -> list[str]:
-    """Pass PWD explicitly because make -C leaves it at the caller's directory.
-
-    The kernel build uses M=$(PWD), so this keeps build files in the repository.
-    """
-    argv = ["make", "-C", str(repository), f"PWD={repository}"]
+    argv = ["make", "-C", str(repository)]
     if strategy is not None:
         # Command-line assignments override `-include local.mk`, so its chosen
         # strategy cannot affect a measured build.
