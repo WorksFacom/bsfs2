@@ -154,9 +154,6 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   bsfs_rec_tree_mount_init(s);
 
-  // TODO
-  // __set_bit(0, sbi->s_imap[0]->b_data);
-
   /* set up enough so that it can read an inode */
   s->s_op       = &bsfs_sops;
   s->s_time_min = 0;
@@ -272,5 +269,4 @@ static void __exit exit_bsfs(void) {
 module_init(init_bsfs);
 module_exit(exit_bsfs);
 MODULE_DESCRIPTION("BSFS Filesystem");
-// MODULE_LICENSE("AGPL");
 MODULE_LICENSE("GPL");

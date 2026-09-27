@@ -318,12 +318,6 @@ struct disk_mapped_inode *bsfs_read_disk_inode(struct super_block *sb, ino_t ino
   if (ret != 1)
     return NULL;
 
-  // TODO: applicable?
-  // if (!ino || ino > sbi->s_ninodes) {
-  //   printk("Bad inode number on dev %s: %ld is out of range\n", sb->s_id, (long)ino);
-  //   return NULL;
-  // }
-
   // free btree_node without releasing buffer
   // buffer will be brelsed later
   struct buffer_head *bh = node->bh;
