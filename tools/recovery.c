@@ -40,8 +40,6 @@ _Static_assert(sizeof(btree_node_t) == BSFS_BLOCK_SIZE, "B+ tree node layout mus
 /* bounds every walk, a child pointer aimed at an ancestor would loop forever */
 #define MAX_TREE_DEPTH 64
 
-/* ----- low level block IO ------------------------------------------------ */
-
 static int read_block(FILE *img, uint32_t block, void *buf) {
   if (fseeko(img, (off_t)block * BSFS_BLOCK_SIZE, SEEK_SET) != 0)
     return -1;
@@ -87,9 +85,7 @@ static int validate_backing_size(FILE *img, const bsfs_super_block *sb) {
   return 0;
 }
 
-/* ----- node layout helpers (must match kernel src/btree.c) --------------- */
-
-/* copy of src/btree.c:compute_min_degree() */
+/* must match src/btree.c:compute_min_degree() */
 static int compute_min_degree(uint64_t entry_size) {
   int t = 2;
   while (1) {
@@ -110,8 +106,6 @@ static uint32_t *node_children(btree_node_t *n, int t, size_t entry_size) {
   size_t off = (size_t)(2 * t - 1) * entry_size;
   return (uint32_t *)(n->data + off);
 }
-
-/* ----- offline metadata transaction ------------------------------------- */
 
 typedef uint32_t (*entry_key_fn)(const void *entry);
 typedef int (*entry_cmp_fn)(const void *a, const void *b);
@@ -354,6 +348,7 @@ static int txn_retire(struct restore_txn *tx, uint32_t block) {
     fprintf(stderr, "refusing to release block %u from outside the data region\n", block);
     return -1;
   }
+  // never published, free it now instead of at commit
   if (vec_contains(&tx->allocated, block)) {
     txn_release_new(tx, block);
     return 0;
@@ -372,8 +367,7 @@ static int tree_read(struct restore_txn *tx, const struct tree_desc *d, uint32_t
   uint32_t          max_entries = (uint32_t)(2 * d->min_degree - 1);
 
   *out = NULL;
-  // nodes only live in the data region. without the lower bound a corrupt btree_root gets the
-  // superblock or a bitmap block parsed, cloned and freed
+  // nodes only live in the data region, else a corrupt root gets the superblock or a bitmap block cloned and freed
   if (block < tx->sb->data_block_start || block >= tx->sb->total_blocks || !bitmap_is_set(tx->bitmap, block)) {
     fprintf(stderr, "%s tree references invalid/unallocated block %u\n", d->name, block);
     return -1;
@@ -430,6 +424,7 @@ static int tree_new_node(struct restore_txn *tx, uint8_t is_leaf, struct disk_no
   return 0;
 }
 
+/* cow, blocks allocated in this txn were never published so they're already private */
 static int tree_make_private(struct restore_txn *tx, const struct tree_desc *d, uint32_t old_block, uint32_t *out_block) {
   struct disk_node *old = NULL, *copy = NULL;
 
@@ -459,6 +454,7 @@ err:
   return -1;
 }
 
+/* b+ tree, a key equal to a separator lives in the right child */
 static uint32_t descend_cmp(const struct disk_node *node, const struct tree_desc *d, const void *entry) {
   const uint8_t *entries = node->raw.data;
   uint32_t       i = 0;
@@ -571,6 +567,7 @@ static int tree_split_child(struct restore_txn *tx, const struct tree_desc *d, s
     memcpy(tree_children(right, d), tree_children(left, d) + d->min_degree,
            (size_t)d->min_degree * sizeof(uint32_t));
 
+  // leaves keep the middle entry and copy it up, internal nodes move it up
   left->raw.num_entries = left->raw.is_leaf ? d->min_degree : d->min_degree - 1;
   memmove(&children[index + 2], &children[index + 1],
           (parent->raw.num_entries - index) * sizeof(uint32_t));
@@ -831,6 +828,7 @@ static int tree_bulk_build(struct restore_txn *tx, const struct tree_desc *d, co
     struct disk_node *leaf;
     size_t            remaining = count - offset;
     size_t            groups = level_count - i;
+    // ceil(remaining / groups) spreads entries evenly so the last node isn't underfull
     size_t            n = remaining / groups + !!(remaining % groups);
 
     if (tree_new_node(tx, 1, &leaf) != 0)
@@ -893,6 +891,7 @@ err:
   return -1;
 }
 
+/* no btree delete here, rebuild from the surviving leaf entries and retire every old node */
 static int rebuild_without_key(struct restore_txn *tx, const struct tree_desc *d, uint32_t old_root, uint32_t remove_key,
                                uint32_t *new_root) {
   struct entry_collection c = {0};
@@ -931,7 +930,7 @@ out:
   return rc;
 }
 
-/* returns 0 on success, -1 before publication, -2 if publication is uncertain. */
+/* 0 on success, -1 before publication, -2 if publication is uncertain */
 static int txn_commit(struct restore_txn *tx, const bsfs_super_block *new_sb) {
   uint8_t super_raw[BSFS_BLOCK_SIZE];
 
@@ -960,8 +959,6 @@ static int txn_commit(struct restore_txn *tx, const bsfs_super_block *new_sb) {
   return 0;
 }
 
-/* ----- formatting -------------------------------------------------------- */
-
 /* "YYYY-mm-dd HH:MM:SS", "-" for zero */
 static void fmt_time(uint64_t ts, char *buf, size_t cap) {
   if (!buf || cap == 0)
@@ -987,16 +984,10 @@ static int name_len(const rec_entry_t *e) {
   return (int)strnlen(e->original_name, sizeof(e->original_name));
 }
 
-/* ----- recovery tree traversal ------------------------------------------- */
-
-/*
- * called per entry in recovery_id order, nonzero stops the walk.
- */
+/* entries arrive in recovery_id order, nonzero return stops the walk */
 typedef int (*rec_visit_fn)(const rec_entry_t *e, void *ctx);
 
-/*
- * returns 0 on a full walk or a visitor stop, -1 on a read error.
- */
+/* 0 on a full walk or visitor stop, -1 on a read error */
 static int walk_rec(FILE *img, const bsfs_super_block *sb, uint32_t block, int t, rec_visit_fn visit, void *ctx,
                     unsigned depth) {
   if (block == 0)
@@ -1034,14 +1025,12 @@ static int walk_rec(FILE *img, const bsfs_super_block *sb, uint32_t block, int t
     return 0;
   }
 
-  /* internal entries are separator copies */
+  /* internal entries are separator copies, the real records live in leaves */
   for (uint32_t i = 0; i <= n->num_entries; i++)
     if (walk_rec(img, sb, kids[i], t, visit, ctx, depth + 1) != 0)
       return -1;
   return 0;
 }
-
-/* ----- subcommands ------------------------------------------------------- */
 
 static int load_super(FILE *img, bsfs_super_block *sb) {
   uint8_t raw[BSFS_BLOCK_SIZE];
@@ -1065,8 +1054,6 @@ static int load_super(FILE *img, bsfs_super_block *sb) {
   }
   return 0;
 }
-
-/* --- list --- */
 
 struct list_ctx {
   const char *filter; /* exact original_name match, or NULL for all */
@@ -1113,8 +1100,6 @@ static int cmd_list(FILE *img, const bsfs_super_block *sb, const char *filter) {
   }
   return 0;
 }
-
-/* --- show --- */
 
 struct show_ctx {
   uint32_t    id;
@@ -1165,8 +1150,6 @@ static int cmd_show(FILE *img, const bsfs_super_block *sb, uint32_t id) {
   printf("  btree_root           %u\n", e->btree_root);
   return 0;
 }
-
-/* --- restore --- */
 
 struct extent_check {
   struct u32_vec nodes;
@@ -1376,6 +1359,7 @@ static int cmd_restore(FILE *img, const bsfs_super_block *sb, uint32_t id, const
     goto out;
   }
 
+  // reuse the original inode number unless something took it
   ino = rec.inode_number;
   found = ino ? load_inode_entry(&tx, &inode_tree, inode_root, ino, &existing) : 1;
   if (found < 0)
@@ -1440,8 +1424,6 @@ out:
   return rc;
 }
 
-/* --- stats --- */
-
 struct stats_ctx {
   size_t   count;
   uint64_t total_size;
@@ -1481,8 +1463,6 @@ static int cmd_stats(FILE *img, const bsfs_super_block *sb) {
   printf("  newest deleted   %s\n", newbuf);
   return 0;
 }
-
-/* ----- main -------------------------------------------------------------- */
 
 static void usage(const char *p) {
   fprintf(stderr,
