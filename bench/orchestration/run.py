@@ -103,7 +103,7 @@ else:
 def sudo_invoker_owner(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[int, int] | None:
-    """Return the uid/gid of the user that invoked sudo, when available."""
+    """uid/gid of the user who ran sudo, or None."""
     environment = os.environ if environ is None else environ
     uid_text = environment.get("SUDO_UID")
     gid_text = environment.get("SUDO_GID")
@@ -122,13 +122,11 @@ def sudo_invoker_owner(
 def transfer_result_ownership(
     run_dir: Path, owner: tuple[int, int]
 ) -> list[str]:
-    """Give a completed result tree to the user who invoked sudo.
+    """Chowns a finished result tree back to the user who ran sudo.
 
-    returns the paths that couldn't be transferred, so one unwritable entry
-    doesn't strand the rest of the tree under root. symlinks aren't followed,
-    and mounted directories are skipped outright, since the benchmark
-    mountpoint lives under run_dir and a failed umount would otherwise send
-    this chown recursively across the device under test.
+    returns the paths it couldn't chown, so one bad entry doesn't strand the rest under root. symlinks
+    aren't followed and mounted dirs are skipped, since the mountpoint lives under run_dir and a failed
+    umount would otherwise send this chown across the device under test.
     """
     if not run_dir.exists():
         return []
@@ -156,7 +154,7 @@ def custom_bsfs_definitions(
     repository: Path,
     values: Sequence[Sequence[str]] | None,
 ) -> dict[str, CustomBsfsArtifacts]:
-    """Parse and validate repeatable ``--custom-bsfs`` triples."""
+    """Parses and validates the repeatable ``--custom-bsfs`` triples."""
     definitions: dict[str, CustomBsfsArtifacts] = {}
     for name, module, formatter in values or ():
         if name in COMMON_FILESYSTEMS:
@@ -229,7 +227,7 @@ class BenchmarkRun:
         )
 
     def filesystem_version(self, adapter: FilesystemAdapter) -> str:
-        """Queried once per filesystem; the tools do not change mid-run."""
+        """Cached per filesystem, the tools don't change mid-run."""
         if adapter.name not in self.versions:
             self.versions[adapter.name] = adapter.version()
         return self.versions[adapter.name]
@@ -413,8 +411,7 @@ class BenchmarkRun:
             self.run_phase(
                 adapter, scenario, "create", repetition, seed, **phase_kwargs
             )
-            # lookups and iteration hit the dentry cache unless it is dropped,
-            # which would make every kernel filesystem look identical
+            # without a drop, lookups hit the dentry cache and every kernel filesystem looks the same
             cold_reset(adapter)
             self.run_phase(
                 adapter, scenario, "stat-cold", repetition, seed, **phase_kwargs
@@ -911,7 +908,7 @@ def main() -> int:
                 f"({config.loop_size_mib} MiB)"
             )
 
-        # A dry run skips preflight, so print the builds it would run.
+        # dry runs skip preflight, so show the builds it would do
         if args.dry_run:
             for strategy in bsfs_strategies:
                 runner.run(
@@ -940,8 +937,7 @@ def main() -> int:
 
         correctness: list[dict[str, object]] = []
         if run_correctness:
-            # The gates boot a VM with $REPO/bsfs2.ko and $REPO/mkfs.bsfs. They
-            # need a build even when the benchmark measures no BSFS variant.
+            # the gates boot a VM with $REPO/bsfs2.ko and $REPO/mkfs.bsfs, so build even with no BSFS selected
             if not bsfs_strategies:
                 with reporter.timed("build gate artifacts"):
                     runner.run(build_bsfs_argv, label="build-gate-artifacts")
@@ -1012,7 +1008,7 @@ def main() -> int:
             }
             for repetition in range(config.repetitions)
         ]
-        # generated from the adapters so it cannot drift from what is actually run
+        # built from the adapters so it can't drift from what actually runs
         filesystem_configuration: dict[str, object] = {}
         for filesystem in selected:
             try:

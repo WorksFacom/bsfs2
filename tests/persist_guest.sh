@@ -136,7 +136,7 @@ BYTES=$(cat "$MNT/regrow" | tr -d '\0' | wc -c)
 # 8. statfs and truncating a heavily fragmented file.
 #
 #    Interleaving writes between two files gives each of them ~150 single-block
-#    spans, which is more than one collect pass of bsfs_truncate() holds - it
+#    spans, which is more than one collect pass of bsfs_truncate() holds. It
 #    used to silently truncate only part of the file. df(1) also only works now
 #    that the filesystem implements ->statfs, so it doubles as the check that
 #    every block really came back.

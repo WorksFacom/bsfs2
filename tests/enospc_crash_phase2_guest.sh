@@ -33,7 +33,7 @@ while [ "$i" -le 12 ]; do
   GOT=$(md5sum "$MNT/victim$i" | awk '{print $1}') || fail "victim$i is unreadable"
 
   # phase 1 rewrote block 4 of every victim without syncing, so either the old
-  # or the new contents are acceptable - what is not acceptable is a block that
+  # or the new contents are acceptable. What is not acceptable is a block that
   # belongs to somebody else
   if [ "$WANT" != "$GOT" ]; then
     ZEROED=$(dd if="$MNT/victim$i" bs=4096 skip=4 count=1 2>/dev/null | tr -d '\0' | wc -c)

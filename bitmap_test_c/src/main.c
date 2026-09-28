@@ -1,5 +1,5 @@
 /*
- * CLI entry point. Port of run.py (non-interactive subset).
+ * CLI entry point. port of run.py minus the TUI.
  */
 #include <stdio.h>
 #include <stdlib.h>

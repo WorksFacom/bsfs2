@@ -140,9 +140,8 @@ static int metadata_create(struct bench_run_config *config,
 }
 
 /*
- * Runs twice: once after the orchestration drops caches, once straight after.
- * The warm pass is a dentry-cache measurement and is identical code for every
- * kernel filesystem, so only the cold pass says anything about on-disk layout.
+ * runs cold (after orchestration drops caches) then warm. warm only measures the shared
+ * dentry cache, so only the cold pass says anything about on-disk layout
  */
 static int metadata_stat(struct bench_run_config *config,
                          const struct metadata_parameters *parameters,

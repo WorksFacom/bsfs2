@@ -1,33 +1,24 @@
 #!/usr/bin/env python3
 """
-Entry point for the Bitmap Allocators Benchmark Suite.
+Entry point for the bitmap allocator benchmark suite.
 
-Execution modes:
-- Interactive TUI (no args or --tui): numbered menu to select strategy and mode.
-- Direct CLI: `python run.py [STRATEGY] [--demo] [--stress] [--stress-ops N] [--stress-blocks N]`
-- Report: `--report` runs all strategies and saves a report-YYYYMMDD-HHMMSS.md file.
-- Validation: `--validate` verifies that all allocators produce the same bitmap on a fixed workload.
-- Statistical benchmark: `--stat-bench` runs multiple seeded experiments and saves a CSV of results.
+Modes:
+- no args or --tui: interactive menu to pick a strategy and mode.
+- `python run.py [STRATEGY] [--demo] [--stress] [--stress-ops N] [--stress-blocks N]`
+- `--report`: stress every strategy, write report-YYYYMMDD-HHMMSS.md.
+- `--validate`: check every allocator ends with the same bitmap on a fixed workload.
+- `--stat-bench`: many seeded runs, results to CSV. `--workload OPS:FILE_MIB` is repeatable,
+  one run of `StatisticalRunner` per workload.
 
-Key functions:
-- `run_tui`: interactive loop with strategy and mode selectors.
-- `run_single_test` / `run_all_tests`: runs demo and/or stress for one or all strategies.
-- `run_and_save_report`: runs stress across all strategies and saves a Markdown report.
-- `run_consistency_validator`: delegates to `ValidatorRunner` and returns True/False.
-- `run_statistical_benchmark`: builds a `StatBenchmarkConfig` and runs `StatisticalRunner`
-  for each workload defined via `--workload OPS:FILE_MIB`.
-
-Argument helpers:
-- `_extract_stat_arg`: extracts the value of the next token after `--flag` in the args list.
-- `_extract_stat_args`: collects all values from repeatable flags (e.g. multiple `--workload`).
-- `_resolve_bitmap_config`: resolves `--bitmap-size` or `--disk-size-gib` to a block count.
-- `_parse_workloads`: converts `--workload OPS:FILE_MIB` into dicts with pre-computed `blocks_per_alloc`.
+`_extract_stat_arg` / `_extract_stat_args` pull the value(s) after a flag, `_resolve_bitmap_config`
+turns `--bitmap-size` or `--disk-size-gib` into a block count, and `_parse_workloads` turns
+`--workload` specs into dicts with `blocks_per_alloc` precomputed.
 """
 
 import os
 import sys
 
-# Add current directory to path for relative imports
+# so `core`, `allocators` etc. import when run from anywhere
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from allocators import get_strategy_specs
@@ -48,7 +39,7 @@ STRATEGIES = {
 
 
 def _menu_select(title, options):
-    """Render a simple numbered TUI selector."""
+    """Numbered menu selector."""
     while True:
         print("\n" + "=" * 72)
         print(title)
@@ -65,7 +56,6 @@ def _menu_select(title, options):
 
 
 def run_tui():
-    """Interactive terminal UI for selecting benchmark options."""
     strategy_labels = [f"all - All strategies"] + [f"{key} - {name}" for key, (_, name) in STRATEGIES.items()]
     mode_labels = ["Demo + Stress", "Demo only", "Stress only"]
 
@@ -109,7 +99,7 @@ def run_tui():
 
 
 def run_consistency_validator(args=None):
-    """Validate that all allocators end with the same bitmap on fixed workload."""
+    """True if all allocators end with the same bitmap on the fixed workload."""
     args = args or []
     bitmap_size = _extract_stat_arg(args, "--validate-bitmap-size", int, None)
     if bitmap_size is not None and bitmap_size <= 0:
@@ -129,7 +119,6 @@ def run_single_test(
     stress_ops=100,
     workloads=None,
 ):
-    """Run test for a specific strategy."""
     if strategy_name not in STRATEGIES:
         print(f"Unknown strategy: {strategy_name}")
         print(f"Available: {', '.join(STRATEGIES.keys())}")
@@ -174,7 +163,6 @@ def run_all_tests(
     stress_ops=100,
     workloads=None,
 ):
-    """Run tests for all strategies."""
     for _, allocator_class, name in STRATEGY_SPECS:
         runner = BenchmarkRunner(allocator_class, name, bitmap_size=bitmap_size)
         if demo:
@@ -211,7 +199,7 @@ def run_and_save_report(
     stress_blocks=2560,
     stress_ops=100,
 ):
-    """Run all benchmarks and save markdown report."""
+    """Stress every strategy and save a markdown report."""
     results = ReportRunner.run_all_benchmarks(
         STRATEGY_SPECS,
         bitmap_size=bitmap_size,
@@ -358,7 +346,6 @@ def run_statistical_benchmark(args):
 
 
 def print_usage():
-    """Print usage information"""
     print(f"""
 Bitmap Allocators Benchmark Suite
 ==================================

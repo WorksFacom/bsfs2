@@ -1,4 +1,4 @@
-# Bitmap Allocators Benchmark Suite - C port
+# bitmap allocators benchmark suite, C port
 CC = gcc
 CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -Isrc/include
 LDFLAGS =

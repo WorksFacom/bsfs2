@@ -1,24 +1,13 @@
-"""Allocator with an implicit sparse Segment Tree and next_fresh optimization.
+"""Sparse implicit segment tree allocator with a next_fresh cursor.
 
-Strategy idea:
-- split free blocks into two sources: fresh (never-allocated) via next_fresh
-  cursor, and recycled (deallocated) blocks indexed in a segment tree.
-- next_fresh provides O(1) allocation for the "pristine" address range.
-- the segment tree tracks recycled-free counts per interval, not occupied counts.
-- structure is sparse: only nodes with recycled blocks exist in the tree.
+Never-allocated blocks come from `next_fresh` in O(1). Freed blocks go into a segment tree that
+counts recycled blocks per interval, not occupied ones. The tree is sparse: only nodes with
+recycled blocks under them exist. Allocation takes the smaller of the two sources, O(log N) when
+it comes from the tree.
 
-Allocation:
-- O(1) for fresh blocks: increment next_fresh cursor.
-- O(log N) for recycled blocks: find minimum recycled index and remove from tree.
-- always picks the smaller index between the two sources.
-
-Deallocation:
-- O(log N): descend to block's leaf in the recycled tree, mark it as recycled
-  (count=1), propagate sums back up, pruning zero-count ancestors.
-
-Rollback:
-- rolled-back blocks (whether originally fresh or recycled) are inserted into
-  the recycled tree; next_fresh cursor is never decremented.
+Deallocation walks down to the block's leaf, sets it to 1, and propagates sums up, pruning
+ancestors that hit zero. Rolled-back blocks always go into the tree, whichever source they came
+from, since next_fresh is never decremented.
 """
 
 from core import BaseAllocator, register
@@ -26,8 +15,6 @@ from core import BaseAllocator, register
 
 @register("segtree", display_name="Segment Tree")
 class BitmapSegmentTree(BaseAllocator):
-    """Bitmap allocator using a sparse implicit segment tree with next_fresh."""
-
     def __init__(self, size):
         super().__init__(size)
         # node index -> recycled-free count in that interval
@@ -39,7 +26,6 @@ class BitmapSegmentTree(BaseAllocator):
         return self.recycled.get(node, 0)
 
     def _insert_recycled(self, index):
-        """Insert a recycled block into the tree."""
         if index < 0 or index >= self.size:
             raise IndexError(f"block index out of range: {index}")
 
@@ -74,7 +60,7 @@ class BitmapSegmentTree(BaseAllocator):
                 recycled.pop(parent, None)
 
     def _find_min_recycled_idx(self):
-        """Find the minimum recycled block index without removing it. O(log N)."""
+        """Minimum recycled index without removing it, O(log N)."""
         if self._node_recycled(1) == 0:
             return -1
 
@@ -97,7 +83,7 @@ class BitmapSegmentTree(BaseAllocator):
         return left
 
     def _pop_min_recycled(self):
-        """Find and remove the minimum recycled block index. O(log N)."""
+        """Pop the minimum recycled index, O(log N)."""
         if self._node_recycled(1) == 0:
             return -1
 
@@ -139,7 +125,6 @@ class BitmapSegmentTree(BaseAllocator):
             self._insert_recycled(idx)
 
     def allocate_blocks(self, count):
-        """Allocate count blocks using dual-source selection (fresh + recycled)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -188,7 +173,6 @@ class BitmapSegmentTree(BaseAllocator):
         return allocated
 
     def deallocate_blocks(self, indices):
-        """Deallocate blocks and insert into recycled tree."""
         if not self.validate_deallocation(indices):
             return False
 
@@ -200,5 +184,4 @@ class BitmapSegmentTree(BaseAllocator):
         return True
 
     def count_free_blocks(self):
-        """Count total free blocks."""
         return self.free_blocks_remaining

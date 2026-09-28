@@ -1,7 +1,6 @@
 /*
- * Open-addressing hash map: long key -> long value.
- * Used by the segment-tree allocator (node index -> recycled count) and the
- * hybrid allocator (block index -> heap position).
+ * open-addressing hash map, long -> long. segtree uses it for node index -> recycled count, hybrid
+ * for block index -> heap position.
  */
 #ifndef LONGMAP_H
 #define LONGMAP_H

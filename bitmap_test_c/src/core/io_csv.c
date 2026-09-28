@@ -14,7 +14,7 @@ static void mkparents(const char *path) {
         return;
     }
     *slash = '\0';
-    /* create intermediate directories */
+    /* mkdir -p */
     for (char *p = buf + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';

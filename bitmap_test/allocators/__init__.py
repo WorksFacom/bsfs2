@@ -1,15 +1,12 @@
 """
-Bitmap Allocators Package - Multiple strategies for bitmap block allocation.
-
-Allocators are split into two families:
-- `scatter/`: allocate_blocks returns the N smallest free indices (no contiguity).
-- `extent/`: allocate_blocks returns a single contiguous run when possible,
-  scattering only as a fallback.
+Bitmap allocator strategies, in two families:
+- `scatter/`: allocate_blocks returns the N smallest free indices, contiguous or not.
+- `extent/`: allocate_blocks returns one contiguous run when it can, scattering only as a fallback.
 """
 
 from core.registry import list_strategies
 
-# Scatter family
+# scatter
 from .scatter.avl import BitmapAVL
 from .scatter.avl_range import BitmapAVLRange
 from .scatter.rbtree import BitmapRB
@@ -23,7 +20,7 @@ from .scatter.treap import BitmapTreap
 from .scatter.baseline import BitmapBaseline
 from .scatter.needle_sequential import BitmapNeedleSequential
 
-# Extent family
+# extent
 from .extent.avl_range_extent import BitmapAVLRangeExtent
 from .extent.treap_range_extent import BitmapTreapRangeExtent
 from .extent.rb_range_extent import BitmapRBRangeExtent

@@ -3,7 +3,7 @@
 #
 # Deleting does not free anything directly, and that is on purpose: the file's
 # extent tree is handed to a recovery snapshot so it can be restored. What was
-# missing is the other half of the deal - nothing ever purged those snapshots,
+# missing is the other half of the deal: nothing ever purged those snapshots,
 # and btree_deallocate_all() had no caller in the module at all, so in practice
 # every byte ever deleted stayed gone until the next mkfs. df is expected not to
 # move on rm; what must hold is that the blocks come back the moment the

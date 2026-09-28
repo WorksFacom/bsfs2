@@ -10,7 +10,7 @@
 # The initramfs (tools/mkinitramfs.sh) drops to a shell as PID 1 normally; with
 # "bsfs.run=<script>" on the kernel cmdline its /init runs that script from the
 # share instead and powers the VM off. Note: passing a quoted `rdinit=/bin/sh -c "..."`
-# does NOT work — the kernel splits the cmdline on whitespace and sh dies with
+# does NOT work, the kernel splits the cmdline on whitespace and sh dies with
 # "-c: option requires an argument", so the flag lives in the initramfs instead.
 #
 # Exits 0 on SMOKE_OK, nonzero otherwise. Full console output is kept in
@@ -20,7 +20,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SCRIPT_DIR/local.mk" ] && source "$SCRIPT_DIR/local.mk"
 
-: "${KDIR:?KDIR not set — copy local.mk.example to local.mk}"
+: "${KDIR:?KDIR not set, copy local.mk.example to local.mk}"
 
 GUEST="${1:-tests/smoke_guest.sh}"
 [ -f "$SCRIPT_DIR/$GUEST" ] || {
@@ -65,7 +65,7 @@ if grep -q '^SMOKE_FAIL:' "$LOG"; then
   exit 1
 fi
 
-# Neither sentinel present — likely infrastructure failure (timeout, boot hang,
+# Neither sentinel present, likely infrastructure failure (timeout, boot hang,
 # rdinit not honored by this initramfs, etc.). Print the tail so the user can
 # see what happened without opening the log.
 echo "INFRA FAIL (qemu exit=$RC). Tail of $LOG:"

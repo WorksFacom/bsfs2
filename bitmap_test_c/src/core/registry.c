@@ -4,7 +4,7 @@
 
 #include "allocators.h"
 
-/* preferred_order from allocators/__init__.py. */
+/* preferred_order from allocators/__init__.py */
 static const strategy_spec SPECS[] = {
     /* scatter */
     {"baseline", baseline_create, "Baseline Sequential Scan"},

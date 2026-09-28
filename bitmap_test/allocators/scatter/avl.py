@@ -1,34 +1,15 @@
 """
-Allocator with a lazy model using AVL for recycled blocks.
+Lazy AVL allocator.
 
-Strategy idea:
-- split free blocks into two sources: fresh range (`next_fresh`) and
-  recycled blocks indexed in an AVL tree.
-- always pick the smallest index between those two sources.
-
-How `next_fresh` works:
-- `next_fresh` points to the smallest index never allocated.
-- when allocation uses this index, the cursor advances by +1.
-- deallocated blocks do not move the cursor; they return through the AVL tree.
-
-Allocation:
-- combines two free-block sources: `next_fresh` (never-used blocks) and
-  the AVL-tree minimum (previously deallocated blocks).
-- always picks the smallest index between both sources.
-- if it comes from `next_fresh`, advances the cursor; if from AVL, removes it
-  from the tree.
-
-Deallocation:
-- validates indices, marks each block as free in the bitmap, and reinserts
-  indices into the AVL tree for ordered reuse.
+Free blocks come from two places: `next_fresh`, the smallest never-allocated index, and an AVL
+tree of recycled indices. Allocation takes the smaller of the two, advancing the cursor or
+removing the tree node. Frees never move the cursor back, they go into the tree.
 """
 
 from core import BaseAllocator, register
 
 
 class AVLNode:
-    """AVL Tree node"""
-    
     def __init__(self, index):
         self.index = index
         self.left = None
@@ -38,16 +19,13 @@ class AVLNode:
 
 @register("avl", display_name="AVL Tree")
 class BitmapAVL(BaseAllocator):
-    """AVL Tree indexed Bitmap Allocator"""
-    
     def __init__(self, size):
-        """Initialize AVL tree for recycled blocks (lazy free model)."""
         super().__init__(size)
         self.root = None
         self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index among recycled AVL and fresh range."""
+        """Smallest free index across the tree and the fresh cursor."""
         tree_min = -1
         if self.root:
             node = self.root
@@ -62,7 +40,7 @@ class BitmapAVL(BaseAllocator):
         return min(tree_min, fresh_min)
     
     def allocate_blocks(self, count):
-        """Allocate count free blocks using first-fit (O(count × log n))"""
+        """O(count log n)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -84,7 +62,6 @@ class BitmapAVL(BaseAllocator):
         return allocated
     
     def deallocate_blocks(self, indices):
-        """Deallocate blocks by reinserting into AVL tree."""
         if not self.validate_deallocation(indices):
             return False
 
@@ -94,13 +71,11 @@ class BitmapAVL(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks."""
         return self.free_blocks_remaining
 
-    # ===== AVL Tree Operations =====
+    # ===== AVL tree =====
     
     def _insert(self, node, index):
-        """Insert index into AVL tree"""
         if not node:
             return AVLNode(index)
         
@@ -112,20 +87,20 @@ class BitmapAVL(BaseAllocator):
         node.height = 1 + max(self._get_height(node.left), self._get_height(node.right))
         balance = self._get_balance(node)
         
-        # Left-Left
+        # left-left
         if balance > 1 and index < node.left.index:
             return self._rotate_right(node)
         
-        # Right-Right
+        # right-right
         if balance < -1 and index > node.right.index:
             return self._rotate_left(node)
         
-        # Left-Right
+        # left-right
         if balance > 1 and index > node.left.index:
             node.left = self._rotate_left(node.left)
             return self._rotate_right(node)
         
-        # Right-Left
+        # right-left
         if balance < -1 and index < node.right.index:
             node.right = self._rotate_right(node.right)
             return self._rotate_left(node)
@@ -133,7 +108,6 @@ class BitmapAVL(BaseAllocator):
         return node
     
     def _delete(self, node, index):
-        """Delete index from AVL tree"""
         if not node:
             return None
         
@@ -173,7 +147,6 @@ class BitmapAVL(BaseAllocator):
         return node
     
     def _rotate_left(self, node):
-        """Left rotation"""
         right_child = node.right
         node.right = right_child.left
         right_child.left = node
@@ -182,7 +155,6 @@ class BitmapAVL(BaseAllocator):
         return right_child
     
     def _rotate_right(self, node):
-        """Right rotation"""
         left_child = node.left
         node.left = left_child.right
         left_child.right = node
@@ -191,9 +163,7 @@ class BitmapAVL(BaseAllocator):
         return left_child
     
     def _get_height(self, node):
-        """Get node height"""
         return node.height if node else 0
     
     def _get_balance(self, node):
-        """Get balance factor"""
         return self._get_height(node.left) - self._get_height(node.right) if node else 0

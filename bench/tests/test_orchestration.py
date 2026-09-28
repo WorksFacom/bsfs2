@@ -178,8 +178,7 @@ class ResultOwnershipTests(unittest.TestCase):
             )
 
     def test_transfer_result_ownership_skips_a_mounted_mountpoint(self) -> None:
-        """a failed umount leaves a live benchmark filesystem under run_dir,
-        and chowning through it would rewrite the device under test."""
+        """a failed umount leaves a live filesystem under run_dir, and chowning through it hits the device."""
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"
             mounted = run_dir / "mnt"
@@ -269,7 +268,7 @@ class BsfsModulePreflightTests(unittest.TestCase):
         return build_module_argv(REPOSITORY, strategy)
 
     def patched(self, *, loaded: bool = False, built_as_ok: bool = True):
-        """Patch writes to bench/build and strategy verification."""
+        """Patches out writes to bench/build and the strategy check."""
         assertion = (
             patch("bench.orchestration.modules._assert_built_as")
             if built_as_ok
@@ -309,7 +308,7 @@ class BsfsModulePreflightTests(unittest.TestCase):
                 call(["rmmod", "bsfs2"]),
                 call(["insmod", str(stash)]),
                 call(["rmmod", "bsfs2"]),
-                # Correctness gates and QEMU scripts boot the default build.
+                # gates and QEMU scripts boot the default build
                 call(BUILD_ARGV),
             ],
         )
@@ -321,8 +320,7 @@ class BsfsModulePreflightTests(unittest.TestCase):
         argv = self.build_argv("twolevel")
 
         self.assertIn("BSFS_ALLOC=twolevel", argv)
-        # Allocation counters change the measured fast path. A local.mk setting
-        # must not affect a benchmark build.
+        # counters sit on the measured fast path, and local.mk must not turn them back on
         self.assertIn("BSFS_ALLOC_STATS=", argv)
 
     def test_build_runs_make_in_the_repository(self) -> None:
@@ -755,7 +753,7 @@ class AllocStrategyTargetTests(unittest.TestCase):
             BSFS_FILESYSTEMS,
             ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY))),
         )
-        # old-bsfs is separate from the BSFS allocator variants.
+        # old-bsfs is not an allocator variant
         self.assertNotIn("old-bsfs", BSFS_FILESYSTEMS)
 
     def test_plain_bsfs_still_means_the_default_build(self) -> None:
@@ -794,7 +792,7 @@ class AllocStrategyTargetTests(unittest.TestCase):
         self.assertEqual(adapter.configuration()["alloc_strategy"], "heap")
 
     def test_shared_builds_are_collapsed_into_one_compile(self) -> None:
-        # "bsfs" and "bsfs-linear" name the same module.
+        # "bsfs" and "bsfs-linear" are the same module
         self.assertEqual(
             bsfs_targets_by_strategy(
                 ("bsfs", "bsfs-linear", "bsfs-heap", "ext4", "old-bsfs")
@@ -805,8 +803,7 @@ class AllocStrategyTargetTests(unittest.TestCase):
 
 class AnalyzeEntryPointTests(unittest.TestCase):
     def test_analyze_runs_as_a_script_from_an_unrelated_directory(self) -> None:
-        """analyze.py is executable and has a shebang, so it needs to work
-        without the repository root already on sys.path."""
+        """analyze.py has a shebang, so it must work without the repo root on sys.path."""
         script = REPOSITORY / "bench/orchestration/analyze.py"
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"
@@ -1078,7 +1075,7 @@ class AnalysisTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("BSFS benchmark report — run-1", report)
+        self.assertIn("BSFS benchmark report: run-1", report)
         self.assertIn("Not publication eligible", report)
         self.assertIn("Complete derived data", report)
         self.assertIn("durable_throughput_mib_s_median", report)
@@ -1112,8 +1109,7 @@ class AnalysisTests(unittest.TestCase):
     def test_report_charts_fit_without_scrolling_and_expose_order_controls(
         self,
     ) -> None:
-        """a filesystem scrolled off the side of a chart reads as "not run", so
-        the chart has to grow downward instead of sideways."""
+        """a filesystem scrolled off the side reads as "not run", so charts grow down, not sideways."""
         report = render_report(
             run_dir=Path("/results/run-1"),
             record_count=0,
@@ -1134,8 +1130,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn('#scenario-groups details', report)
 
     def test_every_metric_records_which_end_is_better(self) -> None:
-        """value order flips with the metric, and the chart script reads the
-        flag rather than parsing the human-facing direction text."""
+        """value order flips per metric, read from the flag rather than the direction text."""
         report = render_report(
             run_dir=Path("/results/run-1"),
             record_count=0,
@@ -1181,8 +1176,7 @@ class AnalysisTests(unittest.TestCase):
     def test_a_non_finite_metric_fails_loudly_instead_of_blanking_the_page(
         self,
     ) -> None:
-        """a bare NaN token makes JSON.parse throw, which would leave the
-        reader an empty page instead of just a broken number."""
+        """a bare NaN makes JSON.parse throw and blanks the whole page, not just one number."""
         with self.assertRaises(ValueError):
             render_report(
                 run_dir=Path("/results/run-1"),
@@ -1490,7 +1484,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(sorted(executed), planned)
 
     def test_alloc_plan_matches_executed_phases(self) -> None:
-        """Each allocator variant runs the BSFS recovery path."""
+        """Every allocator variant runs the BSFS recovery path."""
         executed, config = self._executed_phases("alloc")
         plan = build_plan(config, config.filesystems)
 

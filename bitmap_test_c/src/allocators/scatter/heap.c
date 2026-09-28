@@ -1,6 +1,5 @@
 /*
- * Lazy allocator using a min-heap for recycled blocks + next_fresh cursor.
- * Port of allocators/scatter/heap.py.
+ * lazy allocator, min-heap of recycled blocks + next_fresh cursor. port of allocators/scatter/heap.py.
  */
 #include <stdlib.h>
 

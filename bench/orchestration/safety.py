@@ -161,9 +161,8 @@ def inspect_physical_device(
 
     target_ancestry = _device_ancestors(major, minor)
     repository = repository.resolve()
-    # Any mount sharing ancestry with the target is a rejection, not just the
-    # ones on a list: a curated list cannot know where this host keeps /efi,
-    # /var or anything else, and the cost of being wrong is a wiped partition.
+    # reject any mount sharing ancestry, not just listed ones. a list can't know where this host keeps
+    # /efi or /var, and guessing wrong wipes a partition
     for devnum, mountpoint in _mount_devices():
         try:
             mounted_ancestry = _device_ancestors(*devnum)

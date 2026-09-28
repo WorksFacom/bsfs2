@@ -59,10 +59,7 @@ struct bench_backend_ops {
   int (*flush)(struct bench_backend *backend);
   int (*space)(struct bench_backend *backend, struct bench_space *out);
 
-  /*
-   * Recovery operations are optional. They return -EOPNOTSUPP when the
-   * selected backend does not expose a corresponding native operation.
-   */
+  /* optional, -EOPNOTSUPP when the backend has no native equivalent */
   int (*recovery_list)(struct bench_backend *backend,
                        struct bench_recovery_entry *entries, size_t capacity,
                        size_t *count);
@@ -78,7 +75,7 @@ struct bench_backend {
   void *private_data;
 };
 
-/* Exactly one implementation is linked into each runner executable. */
+/* each runner binary links exactly one implementation */
 int bench_backend_create(struct bench_backend *backend);
 void bench_backend_destroy(struct bench_backend *backend);
 

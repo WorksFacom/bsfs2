@@ -1,46 +1,29 @@
 /**
  * @file alloc_heap.c
- * @brief Min-heap of recycled blocks plus a sequential cursor.
+ * @brief min-heap of recycled blocks plus a sequential cursor.
  *
- * Selected by `make BSFS_ALLOC=heap`. Port of the `heap` strategy from
- * bitmap_test_c/src/allocators/scatter/heap.c ("Min-Heap" in the benchmarks).
+ * `make BSFS_ALLOC=heap`. port of bitmap_test_c/src/allocators/scatter/heap.c ("Min-Heap" in the benchmarks).
  *
- * The idea is that the two kinds of free block deserve different structures.
- * Blocks the filesystem has never handed out form one long run at the end, and a
- * cursor describes that run in a single word. Blocks that were handed out and
- * later freed are scattered, and those go in a min-heap. Allocating is then just
- * `min(heap top, cursor)`, which is the smallest free block on the device - the
- * same block the linear scan would have found, without the scan.
+ * never-used blocks are one run at the end, so a cursor covers them. freed blocks are scattered and go
+ * in a min-heap. alloc is `min(heap top, cursor)`, the same block a linear scan finds, minus the scan.
  *
- * ## Where this differs from the userspace prototype
+ * ## Differences from the userspace prototype
  *
- * The prototype starts from an empty bitmap, so `next_fresh = 0` and "every free
- * block below the cursor is in the heap" holds trivially. A mounted filesystem
- * starts from a bitmap full of holes, and preloading the heap with them would
- * cost 4 bytes per free block at mount time - 262 MB on a 250 GiB filesystem,
- * before the first write.
- *
- * So the cursor here *skips allocated blocks* instead of just counting up:
+ * the prototype starts from an empty bitmap. a mounted fs is full of holes and preloading them costs
+ * 4 bytes per free block, 262 MB on 250 GiB. so the cursor skips allocated bits instead of counting up:
  *
  *   alloc()      advance the cursor past occupied bits
  *                take min(heap top, cursor)
  *   freed(b)     push b only if b < cursor
  *
- * which preserves the same invariant - every free block below the cursor is in
- * the heap - starting from an empty heap at mount, because the cursor only ever
- * moves across bits that are *not* free. Blocks freed ahead of the cursor need
- * no bookkeeping at all; the cursor will reach them. The heap therefore holds
- * only what this mount has freed behind itself, not the whole filesystem.
+ * invariant: every free block below the cursor is in the heap. holds from an empty heap at mount since the
+ * cursor only crosses used bits. blocks freed ahead of it need nothing, the cursor gets there. the cursor
+ * never goes backwards, so scanning is O(n) per mount, not per alloc.
  *
- * Because the cursor never moves backwards, the scanning it does costs O(n) once
- * over the lifetime of a mount, not O(n) per allocation as the linear scan does.
+ * ## Persistence
  *
- * ## What is not here
- *
- * Nothing persists. The heap is rebuilt implicitly on the next mount (cursor
- * back to data_block_start, heap empty), and the bitmap in the buffer heads
- * stays the only record of what is allocated. That also means a crash costs
- * nothing but a slower first pass.
+ * none. next mount starts over (cursor at data_block_start, empty heap) and the bitmap stays the only
+ * record, so a crash costs a slower first pass.
  */
 #include "../include/alloc_strategy.h"
 #include "../include/bitmap.h"
@@ -50,15 +33,11 @@
 #define HEAP_INITIAL_CAP 64
 
 /**
- * @brief In-memory state of the heap strategy, hung off sbi->alloc_private.
+ * @brief heap strategy state, hung off sbi->alloc_private.
  *
- * @var heap       recycled block indices, a min-heap; kvmalloc'd, never on disk
- * @var next_fresh lowest block the cursor has not passed yet. Every free block
- *                 below it is in the heap; everything at or above it is still to
- *                 be discovered by scanning.
- * @var lossy      set when a push could not grow the array, which leaves blocks
- *                 reachable only by a full scan. alloc() falls back to one
- *                 rather than lose them.
+ * @var heap       recycled block indices, kvmalloc'd min-heap
+ * @var next_fresh lowest block the cursor hasn't passed. free blocks below it are in the heap
+ * @var lossy      a push failed to grow the array, so some free blocks are only reachable by a full scan
  */
 struct heap_alloc {
   __u32 *heap;
@@ -101,15 +80,9 @@ static void heap_sift_down(__u32 *heap, __u32 len, __u32 i) {
 }
 
 /*
- * Records a freed block.
- *
- * The array is grown with kvmalloc rather than kmalloc because on a filesystem
- * that is emptied in one go it holds one entry per freed block, which outgrows
- * the slab allocator's comfortable sizes long before it outgrows memory.
- *
- * A failed growth must not drop the block on the floor: its bit is already
- * clear, so nothing else would ever point at it again. The heap is marked
- * incomplete instead, and alloc() pays for a scan when it runs dry.
+ * kvmalloc since emptying a whole fs pushes one entry per block, way past comfortable slab sizes.
+ * a failed grow can't just drop the block, its bit is already clear and nothing would find it again.
+ * mark the heap lossy and let alloc() scan when it runs dry.
  */
 // caller holds sbi->bitmap_lock
 static void heap_push(struct super_block *sb, struct heap_alloc *h, __u32 block) {
@@ -157,9 +130,8 @@ static __u32 heap_pop(struct heap_alloc *h) {
 /* ------------------------------------------------------------ strategy ---- */
 
 /*
- * Nothing is preloaded: at mount every free block is at or above the cursor by
- * definition, so the heap starts empty and stays proportional to what this mount
- * frees rather than to the size of the filesystem.
+ * nothing preloaded. at mount every free block is at or above the cursor, so the heap only grows
+ * with what this mount frees.
  */
 int bsfs_alloc_strategy_init(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -189,11 +161,7 @@ void bsfs_alloc_strategy_destroy(struct super_block *sb) {
 }
 
 /*
- * Last resort: walk the whole bitmap.
- *
- * Only reachable after a failed heap growth, when a block may be free without
- * being recorded anywhere. Correctness net, never the normal path - the counter
- * exists so a test can insist it stays at zero.
+ * full bitmap walk, only after a failed heap grow. tests check the counter stays at zero.
  */
 // caller holds sbi->bitmap_lock
 static __u32 heap_fallback_scan(struct super_block *sb) {
@@ -213,15 +181,11 @@ static __u32 heap_fallback_scan(struct super_block *sb) {
 }
 
 /*
- * Hands out the lowest free block: min(heap top, cursor).
+ * lowest free block, min(heap top, cursor). compared rather than assumed since the cursor can get
+ * dragged past a block pushed earlier.
  *
- * The heap only ever holds blocks freed behind the cursor, so its top is below
- * next_fresh whenever it exists - but the two are compared rather than assumed,
- * since the cursor may have been dragged past a block pushed earlier.
- *
- * A block popped from the heap is supposed to be free. If it is not, something
- * has drifted out of sync and handing it out would give one block to two owners,
- * so it is dropped instead. It comes back on its next real free.
+ * a popped block that isn't free means drift. handing it out would give it two owners, so drop it,
+ * it comes back on its next real free.
  */
 // caller holds sbi->bitmap_lock
 __u32 bsfs_alloc_strategy_alloc(struct super_block *sb) {
@@ -272,9 +236,7 @@ __u32 bsfs_alloc_strategy_alloc(struct super_block *sb) {
 }
 
 /*
- * At or above the cursor there is nothing to record: the cursor has not been
- * there yet and will find the block on its own. That is also what keeps the heap
- * small - a filesystem filled and emptied in order never pushes anything.
+ * at or above the cursor the scan will find it anyway. filling and emptying in order never pushes.
  */
 // caller holds sbi->bitmap_lock
 void bsfs_alloc_strategy_freed(struct super_block *sb, __u32 block) {

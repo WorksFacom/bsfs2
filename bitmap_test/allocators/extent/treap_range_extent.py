@@ -1,15 +1,10 @@
 """
-Treap allocator with extent-first allocation and max_gap augmentation.
+Treap extent allocator with max_gap augmentation.
 
-Free space is a set of disjoint ranges held in a treap (randomized BST) keyed by
-`start`. Each node stores `max_gap` = the largest range size in its subtree,
-which makes best-fit and largest-range queries O(log n) expected.
-
-The allocation policy (best-fit extent, then lowest-address scatter fallback,
-with coalescing on free) lives in `RangeExtentAllocator`; this module only
-provides the treap operations behind the structure hooks. Treap rotations are
-local (no rebalancing fixup), so maintaining `max_gap` is just an O(1) recompute
-after each rotate / insert / delete.
+Free ranges live in a treap keyed by `start`; `max_gap` is the largest range in the subtree, so
+best-fit and largest-range queries are expected O(log n). Policy lives in `RangeExtentAllocator`;
+this module only implements the structure hooks. Treap rotations are local with no fixup pass,
+so `max_gap` is an O(1) recompute after each rotate/insert/delete.
 """
 
 import random
@@ -19,7 +14,7 @@ from .extent_base import RangeExtentAllocator
 
 
 class TreapRangeNode:
-    """Treap node storing one free range [start, end] with max_gap augmentation."""
+    """Treap node holding one free range [start, end]."""
 
     __slots__ = ("start", "end", "priority", "left", "right", "max_gap")
 
@@ -41,8 +36,7 @@ def _node_max_gap(node):
 
 
 def _update(node):
-    # Inlined max over (own size, child gaps): called on every node along each
-    # insert/delete path, so the helper-call + max() overhead is worth avoiding.
+    # inlined max over own size and child gaps, it runs on every node of every insert/delete path
     m = node.end - node.start + 1
     left = node.left
     if left is not None and left.max_gap > m:
@@ -55,13 +49,11 @@ def _update(node):
 
 @register("treap_range_extent", display_name="Treap Range Extent-First")
 class BitmapTreapRangeExtent(RangeExtentAllocator):
-    """Bitmap allocator using a treap of free ranges with extent-first allocation."""
-
     def _init_structure(self, size):
         self.treap_root = TreapRangeNode(0, size - 1) if size > 0 else None
 
     # ------------------------------------------------------------------
-    # Structure hooks
+    # structure hooks
     # ------------------------------------------------------------------
 
     def _find_best_fit(self, count):
@@ -107,7 +99,7 @@ class BitmapTreapRangeExtent(RangeExtentAllocator):
         return (succ.start, succ.end) if succ else None
 
     # ------------------------------------------------------------------
-    # Treap internals
+    # treap internals
     # ------------------------------------------------------------------
 
     def _best_fit_node(self, node, count):
@@ -145,11 +137,9 @@ class BitmapTreapRangeExtent(RangeExtentAllocator):
         return new_root
 
     def _insert(self, node, new_node):
-        # Returns (subtree_root, changed): `changed` is False once the inserted
-        # range no longer affects this subtree's max_gap and no rotation bubbled
-        # through, letting ancestors skip the max_gap recompute. Treap rotations
-        # only bubble up contiguously from the leaf, so once they stop and the
-        # gap stabilizes, nothing above changes.
+        # returns (subtree_root, changed). `changed` goes False once the new range stops affecting
+        # this subtree's max_gap and no rotation bubbled through. treap rotations bubble up
+        # contiguously from the leaf, so once they stop and the gap settles nothing above changes.
         if node is None:
             return new_node, True
 
@@ -172,9 +162,8 @@ class BitmapTreapRangeExtent(RangeExtentAllocator):
         return node, node.max_gap != old
 
     def _delete(self, node, start):
-        # Returns (subtree_root, changed); see `_insert`. Delete rotations only
-        # push the target node downward, so ancestors above it never rotate and
-        # can stop once the max_gap stops changing.
+        # returns (subtree_root, changed), see `_insert`. delete rotations only push the target down,
+        # so ancestors never rotate and can stop once max_gap settles.
         if node is None:
             return None, False
 

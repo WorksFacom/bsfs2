@@ -190,8 +190,8 @@ static void run_validation_workload(const strategy_spec *spec, long bitmap_size,
     free(to_free);
     free(allocated.data);
     al->destroy(al);
-    /* Note: when keep_copy, caller owns out->bitmap_copy. The allocator's own
-     * bitmap is freed; comparisons use the snapshot. */
+    /* with keep_copy the caller owns out->bitmap_copy. the allocator's bitmap is gone by now, compare
+     * against the snapshot. */
     (void)out;
 }
 
@@ -219,12 +219,11 @@ int runner_validate(long bitmap_size, long blocks_per_alloc, long num_operations
     int divergence_failed = 0;
 
     for (long s = 0; s < nspecs; s++) {
-        /* Build allocator briefly to read its consistency group. */
+        /* throwaway allocator just to read its consistency group */
         allocator *probe = specs[s].factory(1);
         const char *group = probe->consistency_group;
         probe->destroy(probe);
 
-        /* Find group slot. */
         long gi = -1;
         for (long g = 0; g < ngroups; g++) {
             if (strcmp(group_names[g], group) == 0) {
@@ -369,7 +368,6 @@ void runner_report(long bitmap_size, long blocks_per_alloc, long num_operations,
     char gen_at[64];
     strftime(gen_at, sizeof(gen_at), "%Y-%m-%d %H:%M:%S", &tmv);
 
-    /* Build markdown */
     char path[512];
     char ts[32];
     strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmv);

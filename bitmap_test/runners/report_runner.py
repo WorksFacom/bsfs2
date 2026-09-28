@@ -1,11 +1,9 @@
 """
-Comparative report runner across all registered strategies.
+Comparative report across all registered strategies.
 
-ReportRunner:
-- `run_all_benchmarks`: iterates over all `strategy_specs` and collects stress results via `BenchmarkRunner`.
-- `build_report_markdown`: builds a Markdown report with a throughput ranking table, detailed metrics table,
-  and a winner section showing the percentage advantage over the second-place strategy.
-- `save_report_file`: writes the report to `report-YYYYMMDD-HHMMSS.md` in the given output directory.
+`run_all_benchmarks` stresses every strategy through `BenchmarkRunner`. `build_report_markdown`
+renders a throughput ranking, a detailed metrics table and the winner's margin over second
+place. `save_report_file` writes it to `report-YYYYMMDD-HHMMSS.md`.
 """
 
 from __future__ import annotations

@@ -1,9 +1,6 @@
 #include "../include/btree.h"
 #include "../bsfs.h"
 
-/*
- * Static functions prototypes
- */
 typedef struct btree_cow_ctx btree_cow_ctx_t;
 
 static int  __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node *node, void *entry,
@@ -42,8 +39,7 @@ static int compute_min_degree(__u64 entry_size) {
 }
 
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key) {
-  // NOFS throughout: every one of these runs under ->writepages (via
-  // bsfs_get_block) and ->write_inode, where reclaim must not re-enter the fs
+  // NOFS everywhere, this runs under ->writepages (via bsfs_get_block) and ->write_inode
   btree_handle_t *handle = kmalloc(sizeof(btree_handle_t), GFP_NOFS);
 
   if (!handle)
@@ -64,7 +60,7 @@ static inline void btree_shift_left(void *entries, __u64 entry_size, int from, i
   memmove((__u8 *)entries + from * entry_size, (__u8 *)entries + (from + 1) * entry_size, (count - 1 - from) * entry_size);
 }
 
-// TODO: properly handle alignment (e.g: get_unaligned_le32)
+// TODO: handle alignment (get_unaligned_le32)
 int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block, struct btree_node **out_node) {
   struct buffer_head     *bh;
   struct btree_node_t    *raw;
@@ -105,15 +101,9 @@ int btree_read_node(struct super_block *sb, btree_handle_t *handle, __u32 block,
   return 0;
 }
 
-// grabs a freshly allocated block, zeroes it and marks it dirty; never reads
-// from disk, so stale on-disk contents can't fail validation
 /*
- * Prepares a freshly allocated block as a node. The block still holds whatever
- * its previous owner left there - very often file data, since copy-on-write and
- * the data allocator hand the same freed blocks back and forth - so its
- * contents are never read back through btree_read_node(), whose validation
- * would (rightly) reject them. `src` is a full block image to copy in, or NULL
- * to start from zeroes.
+ * sb_getblk, never a read. the block still holds its last owner's bytes (often file data) and
+ * btree_read_node() would reject them. `src` is a full block image, NULL means zeroes.
  */
 static int btree_setup_new_node(struct super_block *sb, __u32 block, const void *src, struct btree_node **out_node) {
   struct buffer_head *bh;
@@ -159,12 +149,7 @@ void btree_free_node(struct btree_node *node) {
 }
 
 /*
- * Index of the child to descend into to reach `needle`.
- *
- * B+ convention of this tree (the same one used by btree_search_entry and by
- * the split): an internal node's separator is a COPY of the first entry of the
- * leaf to its right, so a key equal to the separator lives in the RIGHT
- * subtree.
+ * separators are copies of the right leaf's first entry, so a key equal to one goes right.
  */
 static __u32 btree_descend_index_cmp(struct btree_node *node, btree_handle_t *handle, const void *needle) {
   __u8 *entries = bentries(node);
@@ -193,31 +178,20 @@ static __u32 btree_descend_index_key(struct btree_node *node, btree_handle_t *ha
 }
 
 /* ------------------------------------------------------------------------- *
- * Copy-on-write (shadowing)
+ * copy-on-write
  *
- * Every mutation builds a shadow of the tree instead of writing over the live
- * one: each node about to be written is first copied to a freshly allocated
- * block, and the parent - already a copy itself - is repointed at it. Subtrees
- * nobody touched stay shared between the old and the new tree.
+ * mutations never write the live tree. a node gets cloned to a new block and its (already cloned)
+ * parent repointed at it, untouched subtrees stay shared.
  *
- * The invariant that keeps this honest is: **a node is only ever written after
- * it has been cloned in the current transaction**. Rather than cloning the whole
- * root-to-leaf path up front, cloning happens during the descent (cow_child()),
- * which also covers the siblings that merge/borrow reach for - those are not on
- * the path, so an up-front path copy would leave them shared and mutate the old
- * tree through the back door.
+ * rule: a node is only written after it was cloned in this transaction. cloning happens during the
+ * descent (cow_child()) instead of copying the path up front, because merge/borrow also write
+ * siblings that aren't on the path.
  *
- * The context tracks two block lists:
- *   - `allocated`: blocks created by this transaction. Freed if it aborts.
- *   - `replaced` : old blocks whose contents were cloned. Freed when it commits.
+ *   allocated  blocks this transaction created, freed on abort
+ *   replaced   old blocks that got cloned, deferred on publish
  *
- * Crash consistency: the shadow tree only becomes reachable once the caller
- * persists the new handle->root_block into the superblock or the inode. Until
- * then the on-disk tree still points at the blocks this mutation replaced, so
- * cow_publish() does not free them - it queues them with
- * bsfs_defer_free_block(), and they are only handed back to the allocator at a
- * commit point (->sync_fs, ->put_super, or when the allocator runs dry), after
- * everything dirty has been flushed.
+ * the shadow is only reachable once the caller persists handle->root_block, so cow_publish() defers
+ * replaced blocks via bsfs_defer_free_block() instead of freeing them.
  * ------------------------------------------------------------------------- */
 
 struct btree_cow_ctx {
@@ -268,8 +242,7 @@ static int cow_track_replaced(btree_cow_ctx_t *cow, __u32 block) {
   return 0;
 }
 
-// True when the block was created by this transaction, i.e. it is already a
-// private copy and can be written without cloning it again.
+// already a private copy from this transaction, safe to write
 static bool cow_is_fresh(const btree_cow_ctx_t *cow, __u32 block) {
   for (size_t i = 0; i < cow->allocated_count; i++) {
     if (cow->allocated[i] == block)
@@ -295,9 +268,7 @@ static void cow_begin(btree_cow_ctx_t *cow, const btree_handle_t *handle) {
   cow->new_root = handle->root_block;
 }
 
-// Releases a block that belongs to the shadow tree (e.g. the right sibling
-// consumed by a merge, or a root that collapsed). It was allocated by this
-// transaction, so it must also leave the rollback list.
+// frees a shadow block (merged sibling, collapsed root) and drops it from the rollback list
 static void cow_free_block(struct super_block *sb, btree_cow_ctx_t *cow, __u32 block) {
   if (block == 0 || block == INVALID_BLOCK)
     return;
@@ -309,9 +280,7 @@ static void cow_free_block(struct super_block *sb, btree_cow_ctx_t *cow, __u32 b
 static void cow_publish(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow) {
   handle->root_block = cow->new_root;
 
-  // The replaced blocks are queued, not freed: the caller has not persisted the
-  // new root yet, so the on-disk tree can still reach them. They come back to
-  // the allocator at the next commit point (see bsfs_defer_free_block()).
+  // deferred, not freed. the new root isn't on disk yet so the old tree still reaches them
   for (size_t i = 0; i < cow->replaced_count; i++)
     (void)bsfs_defer_free_block(sb, cow->replaced[i]);
 
@@ -321,8 +290,6 @@ static void cow_publish(struct super_block *sb, btree_handle_t *handle, btree_co
 }
 
 static void cow_abort(struct super_block *sb, btree_cow_ctx_t *cow) {
-  // Give back everything this transaction allocated; the old tree was never
-  // touched, so it stays exactly as it was.
   for (size_t i = cow->allocated_count; i > 0; i--)
     (void)deallocate_single_block(sb, cow->allocated[i - 1]);
 
@@ -331,7 +298,6 @@ static void cow_abort(struct super_block *sb, btree_cow_ctx_t *cow) {
   memset(cow, 0, sizeof(*cow));
 }
 
-// Allocates a block and copies `old_block` into it byte for byte.
 static int cow_clone_block(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow, __u32 old_block, __u32 *out_block) {
   struct btree_node *old_node = NULL, *new_node = NULL;
   __u32              new_block;
@@ -372,9 +338,8 @@ err_dealloc:
 }
 
 /*
- * Makes sure children[idx] of an already-cloned `parent` is a private copy, and
- * repoints the parent at it. Returns the block to descend into, or
- * INVALID_BLOCK on failure. Call this before writing anything into a child.
+ * clones children[idx] of an already-cloned parent if needed and repoints the parent.
+ * returns the block to descend into, or INVALID_BLOCK. call before writing a child.
  */
 static __u32 cow_child(struct super_block *sb, btree_handle_t *handle, btree_cow_ctx_t *cow, struct btree_node *parent, __u32 idx) {
   __u32 *children = bchildren(parent, handle);
@@ -397,9 +362,7 @@ static __u32 cow_child(struct super_block *sb, btree_handle_t *handle, btree_cow
 }
 
 /*
- * Rewrites the entry with the same key inside the shadow tree. `node_block` is
- * already a private copy of the node, and every child descended into is cloned
- * on the way down.
+ * `node_block` is already a private copy, children get cloned on the way down.
  */
 static int __btree_update_shadow(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry, btree_cow_ctx_t *cow) {
   __u32  i, key, child_block;
@@ -449,10 +412,7 @@ static int __btree_update_shadow(struct super_block *sb, btree_handle_t *handle,
 }
 
 /*
- * Note: `node_block` is kept for source compatibility but the copy-on-write
- * transaction always starts at handle->root_block - updating an arbitrary
- * subtree in isolation cannot publish a new root. Every caller already passes
- * the root.
+ * `node_block` is ignored, a cow update has to start at the root to publish one. callers pass the root anyway.
  */
 int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_block, void *new_entry) {
   btree_cow_ctx_t cow;
@@ -479,7 +439,7 @@ int btree_update(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
   ret = __btree_update_shadow(sb, &shadow, shadow.root_block, new_entry, &cow);
 
   if (ret != 1 || cow.error) {
-    // Key not there (or a failure): roll the shadow back, keep the live tree.
+    // key missing or failure
     cow_abort(sb, &cow);
     return 0;
   }
@@ -522,15 +482,14 @@ int btree_search(struct super_block *sb, btree_handle_t *handle, __u32 node_bloc
       if (i < node->node->num_entries && handle->get_key(entries + i * size) == key) {
         *output   = entries + i * size;
         *out_node = node;
-        // Ownership of this leaf node is transferred to the caller.
+        // caller owns the leaf now
         return 1;
       }
       btree_free_node(node);
       return 0;
     }
 
-    // Internal node: separators are copies of leaf entries; keys equal to a
-    // separator live in the right subtree (see split_child leaf convention).
+    // key equal to a separator lives in the right subtree
     if (i < node->node->num_entries && handle->get_key(entries + i * size) == key)
       next_block = bchildren(node, handle)[i + 1];
     else
@@ -580,7 +539,7 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
     return 0;
   }
 
-  // Internal: descend right on separator equality (separator lives in right leaf).
+  // equal to the separator goes right
   children = bchildren(node, handle);
   __u32 child_block;
   if (i < (int)node->node->num_entries && handle->cmp(entries + i * handle->entry_size, needle) == 0)
@@ -591,8 +550,8 @@ int btree_search_entry(struct super_block *sb, btree_handle_t *handle, __u32 nod
   return btree_search_entry(sb, handle, child_block, needle, output);
 }
 
-// walks the btree to find the bspan with the greatest file_blk <= key
-// a mid-walk failure must not return the partial best-so-far or callers would map/allocate against a stale span
+// bspan with the greatest file_blk <= key. a mid-walk failure must not return the best so far,
+// callers would map against a stale span
 int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key, bspan_t *out) {
   int                ret, have = 0;
   struct btree_node *node;
@@ -619,8 +578,7 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
     }
 
     if (node->node->is_leaf) {
-      // Only leaf entries hold authoritative data in a B+ tree; take the
-      // largest entry <= key from this leaf.
+      // only leaves hold real records
       if (i > 0) {
         memcpy(&best, entries + (i - 1) * handle->entry_size, sizeof(best));
         have = 1;
@@ -629,7 +587,7 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
       break;
     }
 
-    // Internal node: separator == key means the entry lives in the right subtree.
+    // separator == key goes right
     __u32 child;
     if (i < node->node->num_entries && handle->get_key(entries + i * handle->entry_size) == key)
       child = bchildren(node, handle)[i + 1];
@@ -648,9 +606,7 @@ int bspan_search_le(struct super_block *sb, btree_handle_t *handle, uint32_t key
 }
 
 /*
- * Runs the insert against the shadow tree. `handle` here is a copy whose
- * root_block already points at a cloned root (or 0 for an empty tree), so
- * everything it writes belongs to the transaction.
+ * `handle` is the shadow copy, its root_block is already cloned (or 0 for an empty tree).
  */
 static int __btree_insert_shadow(struct super_block *sb, btree_handle_t *handle, void *entry, btree_cow_ctx_t *cow) {
   int                ret;
@@ -714,8 +670,7 @@ static int __btree_insert_shadow(struct super_block *sb, btree_handle_t *handle,
 
     bchildren(new_root, handle)[0] = handle->root_block;
 
-    // children[0] is the cloned root, so the split already writes into blocks
-    // owned by this transaction.
+    // children[0] is the cloned root, so the split writes transaction blocks
     if (__btree_split_child(sb, handle, blocknr, new_root, 0, cow) != 0) {
       btree_free_node(new_root);
       btree_free_node(root);
@@ -796,8 +751,7 @@ static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle
       i--;
     i++;
 
-    // The child is about to be written (split now, or the insert further down),
-    // so give this transaction a private copy of it first.
+    // about to be written, either split here or inserted into below
     __u32 child_block = cow_child(sb, handle, cow, node, (__u32)i);
 
     if (child_block == INVALID_BLOCK)
@@ -815,8 +769,7 @@ static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle
       }
 
       {
-        // B+: the separator just inserted is a copy of the right leaf's first
-        // entry, so an entry equal to it belongs in the right child.
+        // new separator copies the right leaf's first entry, equal goes right
         void *mid = entries + i * size;
 
         if (handle->cmp(entry, mid) >= 0)
@@ -824,8 +777,7 @@ static int __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle
       }
       btree_free_node(child);
 
-      // The split may have sent the entry to the freshly created sibling, which
-      // already belongs to the transaction; cow_child() is a no-op for it.
+      // may now be the new sibling, cow_child() is a no-op for it
       child_block = cow_child(sb, handle, cow, node, (__u32)i);
 
       if (child_block == INVALID_BLOCK)
@@ -875,8 +827,6 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
     return ret;
   }
 
-  // Freshly allocated block: set it up instead of reading it back, it still
-  // holds the previous owner's bytes.
   ret = btree_init_new_node(sb, blocknr, &new_node);
 
   if (ret != 0) {
@@ -888,15 +838,14 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
   new_node->node->is_leaf     = child->node->is_leaf;
   new_node->node->num_entries = handle->min_degree - 1;
 
-  // Right half: entries [t, 2t-2] move to the new node in both cases.
+  // entries [t, 2t-2] move right, leaf or not
   memcpy(bentries(new_node), (char *)bentries(child) + handle->min_degree * size, (handle->min_degree - 1) * size);
 
   if (!child->node->is_leaf)
     memcpy(bchildren(new_node, handle), bchildren(child, handle) + handle->min_degree, handle->min_degree * sizeof(__u32));
 
-  // B+: in a leaf no record is promoted, so the child keeps t entries (the one
-  // at index t-1 is still data). In an internal node the median moves up to the
-  // parent, so the child keeps t-1.
+  // leaves keep t entries since nothing is promoted (t-1 is still data). internal nodes push the
+  // median up and keep t-1.
   child->node->num_entries = child->node->is_leaf ? handle->min_degree : handle->min_degree - 1;
 
   memmove(&parent_children[index + 2], &parent_children[index + 1], (parent->node->num_entries - index) * sizeof(__u32));
@@ -904,8 +853,7 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
 
   memmove(parent_entries + (index + 1) * size, parent_entries + index * size, (parent->node->num_entries - index) * size);
 
-  // Separator: in a leaf it is a COPY of the right leaf's first entry (the
-  // record stays there); in an internal node it is the median, moved up.
+  // leaf: separator copies the right leaf's first entry. internal: the median moves up
   if (child->node->is_leaf)
     memcpy((char *)parent_entries + index * size, bentries(new_node), size);
   else
@@ -923,8 +871,7 @@ static int __btree_split_child(struct super_block *sb, btree_handle_t *handle, _
 }
 
 /*
- * Removal against the shadow tree. Returns 1 when the key was found and
- * removed, 0 otherwise. The root here is already a clone.
+ * returns 1 if removed. root is already a clone.
  */
 static int __btree_remove_shadow(struct super_block *sb, btree_handle_t *handle, __u32 key, btree_cow_ctx_t *cow) {
   int                ret;
@@ -935,9 +882,8 @@ static int __btree_remove_shadow(struct super_block *sb, btree_handle_t *handle,
   if (!ret)
     return 0;
 
-  // An empty root collapses: a leaf turns the tree back into "no tree", an
-  // internal node hands the crown to its only child. The old root block belongs
-  // to this transaction, so it goes straight back to the allocator.
+  // empty root collapses. a leaf means no tree, internal hands off to its only child. the old root
+  // is ours, so it's freed directly.
   if (btree_read_node(sb, handle, handle->root_block, &root) == 0 && root) {
     if (root->node->num_entries == 0) {
       __u32 empty_block = handle->root_block;
@@ -982,8 +928,7 @@ int btree_remove(struct super_block *sb, btree_handle_t *handle, __u32 key) {
   ret = __btree_remove_shadow(sb, &shadow, key, &cow);
 
   if (ret <= 0 || cow.error) {
-    // Nothing was removed (or something failed): roll back, leaving the live
-    // tree untouched.
+    // nothing removed or failure
     cow_abort(sb, &cow);
     return 0;
   }
@@ -995,8 +940,7 @@ int btree_remove(struct super_block *sb, btree_handle_t *handle, __u32 key) {
 }
 
 /*
- * B+ removal by key - same shape as the comparator version above: descend to
- * the leaf, rebalancing children along the way; only the leaf deletes.
+ * key variant of btree_remove_entry_internal() below.
  */
 static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, __u32 key, btree_cow_ctx_t *cow) {
   int                ret = 0;
@@ -1029,8 +973,7 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
 
   child_idx = btree_descend_index_key(node, handle, key);
 
-  // Clone before touching: the child is either rebalanced here or written to
-  // further down the descent.
+  // rebalanced here or written further down, clone first
   child_block = cow_child(sb, handle, cow, node, child_idx);
 
   if (child_block == INVALID_BLOCK) {
@@ -1045,7 +988,7 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
 
   if (child->node->num_entries < (__u32)handle->min_degree) {
     if (__btree_fill(sb, handle, node_block, node, (int)child_idx, cow) != 0) {
-      // the child is still underfull, so descending would break the invariant
+      // still underfull, descending would break the invariant
       cow->error = 1;
       btree_free_node(child);
       btree_free_node(node);
@@ -1058,8 +1001,7 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
     if (child_idx > node->node->num_entries)
       child_idx = node->node->num_entries;
 
-    // fill() may have merged the child away; whatever sits at the recomputed
-    // index must itself be a private copy before we descend into it.
+    // fill() may have merged the child away, clone whatever is at the new index
     child_block = cow_child(sb, handle, cow, node, child_idx);
 
     if (child_block == INVALID_BLOCK) {
@@ -1076,13 +1018,8 @@ static int __btree_remove_internal(struct super_block *sb, btree_handle_t *handl
 }
 
 /*
- * B+ removal by comparator.
- *
- * Since every record lives in a leaf, there is no predecessor/successor swap
- * like in a B-tree: we descend to the leaf making sure along the way that each
- * visited child holds at least `min_degree` entries (via __btree_fill), and the
- * deletion happens only in the leaf. Separators left stale by this are still
- * valid routing keys.
+ * b+ removal by comparator. records only live in leaves, so no predecessor swap. fill each child
+ * to min_degree on the way down, delete in the leaf. stale separators still route fine.
  */
 static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *handle, __u32 node_block, const void *needle, int *success,
                                         btree_cow_ctx_t *cow) {
@@ -1126,8 +1063,7 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
 
   child_idx = btree_descend_index_cmp(node, handle, needle);
 
-  // Clone before touching: the child is either rebalanced here or written to
-  // further down the descent.
+  // rebalanced here or written further down, clone first
   child_block = cow_child(sb, handle, cow, node, child_idx);
 
   if (child_block == INVALID_BLOCK) {
@@ -1145,7 +1081,7 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
 
   if (child->node->num_entries < (__u32)handle->min_degree) {
     if (__btree_fill(sb, handle, node_block, node, (int)child_idx, cow) != 0) {
-      // the child is still underfull, so descending would break the invariant
+      // still underfull, descending would break the invariant
       cow->error = 1;
       *success   = 0;
       btree_free_node(child);
@@ -1155,8 +1091,7 @@ static void btree_remove_entry_internal(struct super_block *sb, btree_handle_t *
 
     mark_buffer_dirty(node->bh);
 
-    // fill() may have merged/borrowed: the separators changed, so the descent
-    // index has to be recomputed against the already-updated node.
+    // fill() changed the separators, recompute
     child_idx = btree_descend_index_cmp(node, handle, needle);
     if (child_idx > node->node->num_entries)
       child_idx = node->node->num_entries;
@@ -1204,9 +1139,7 @@ int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const voi
 
   shadow.root_block = cloned_root;
 
-  // Callers may hand in a pointer into a live node's buffer. Shifts, merges and
-  // the copy-on-write clones all rewrite (or release) that buffer mid-descent,
-  // so compare against a stable private copy.
+  // `entry` may point into a node buffer that gets rewritten or released mid-descent
   needle = kmemdup(entry, handle->entry_size, GFP_NOFS);
 
   if (!needle) {
@@ -1223,7 +1156,7 @@ int btree_remove_entry(struct super_block *sb, btree_handle_t *handle, const voi
     return 0;
   }
 
-  // Collapse an empty root, exactly as the key-based removal does.
+  // collapse an empty root, same as __btree_remove_shadow()
   if (shadow.root_block != 0 && btree_read_node(sb, handle, shadow.root_block, &root) == 0 && root) {
     if (root->node->num_entries == 0) {
       __u32 empty_block = shadow.root_block;
@@ -1271,9 +1204,8 @@ static int __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 p
 
   __u32 left_entries = left->node->num_entries;
 
-  // The callers only merge underfull siblings, so this always fits. Check it
-  // anyway: getting here with a full sibling (because a read failed during the
-  // borrow decision, say) would run straight off the end of the entry array.
+  // should always fit, but a read failure during the borrow decision could get us here with a full
+  // sibling and we'd run off the entry array
   if (left_entries + right->node->num_entries + (left->node->is_leaf ? 0 : 1) > (__u32)(2 * handle->min_degree - 1)) {
     pr_err("refusing to merge oversized siblings at blocks %u and %u\n", left_block, right_block);
     btree_free_node(left);
@@ -1281,10 +1213,8 @@ static int __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 p
     return -EUCLEAN;
   }
 
-  // B+: in an internal node the parent separator moves down and becomes an
-  // entry of the merged node; in a leaf it does NOT move down - it is only a
-  // copy of the right leaf's first entry, which is already being concatenated
-  // (moving it down would duplicate the record).
+  // internal: the separator moves down. leaf: it's just a copy of right's first entry, moving it
+  // down would duplicate the record.
   if (!left->node->is_leaf) {
     memcpy(bentries(left) + left_entries * size, bentries(parent) + idx * size, size);
     left_entries++;
@@ -1311,8 +1241,7 @@ static int __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 p
   mark_buffer_dirty(left->bh);
   mark_buffer_dirty(parent->bh);
 
-  // The right sibling was cloned by the caller, so this hands a block from the
-  // current transaction back to the allocator.
+  // right was cloned by the caller, so it's a transaction block
   cow_free_block(sb, cow, right_block);
 
   btree_free_node(left);
@@ -1321,10 +1250,7 @@ static int __btree_merge(struct super_block *sb, btree_handle_t *handle, __u32 p
 }
 
 /*
- * Every failure here used to be swallowed, which left the child underfull and
- * let the descent carry on into it - the removal below then produced a node
- * with fewer entries than the invariant allows. Errors now abort the whole
- * transaction, so the tree stays as it was.
+ * errors must abort the transaction, descending into an underfull child breaks the invariant.
  */
 static int __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 parent_block, struct btree_node *parent, int idx,
                         btree_cow_ctx_t *cow) {
@@ -1334,9 +1260,7 @@ static int __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 pa
 
   children = bchildren(parent, handle);
 
-  // Borrowing and merging write into the sibling as well, so every sibling that
-  // ends up being modified is cloned first. Reading them to *decide* is fine on
-  // the shared blocks; the clone happens right before the mutation.
+  // reading shared siblings to decide is fine, clone right before mutating one
   if (idx > 0) {
     ret = btree_read_node(sb, handle, children[idx - 1], &left);
 
@@ -1376,7 +1300,7 @@ static int __btree_fill(struct super_block *sb, btree_handle_t *handle, __u32 pa
   {
     int merge_idx = (idx > 0) ? idx - 1 : idx;
 
-    // Both sides of the merge get written (left absorbs right, right is freed).
+    // both sides get written
     if (cow_child(sb, handle, cow, parent, (__u32)merge_idx) == INVALID_BLOCK)
       return -ENOSPC;
 
@@ -1423,13 +1347,12 @@ static int __btree_borrow_from_prev(struct super_block *sb, btree_handle_t *hand
   sibling_children = bchildren(sibling, handle);
 
   if (child->node->is_leaf) {
-    // B+: the sibling's last RECORD becomes the child's first one, and the
-    // parent separator becomes a copy of that new first entry (rotating through
-    // the parent, as in a B-tree, would duplicate or lose a record).
+    // sibling's last record moves over, separator copies it. rotating through the parent would
+    // duplicate or lose a record.
     memcpy(child_entries, sibling_entries + (sibling->node->num_entries - 1) * size, size);
     memcpy(parent_entries + (idx - 1) * size, child_entries, size);
   } else {
-    // Internal node: classic rotation through the parent separator.
+    // plain rotation through the separator
     memcpy(child_entries, parent_entries + (idx - 1) * size, size);
     child_children[0] = sibling_children[sibling->node->num_entries];
     memcpy(parent_entries + (idx - 1) * size, sibling_entries + (sibling->node->num_entries - 1) * size, size);
@@ -1478,8 +1401,7 @@ static int __btree_borrow_from_next(struct super_block *sb, btree_handle_t *hand
   sibling_children = bchildren(sibling, handle);
 
   if (child->node->is_leaf) {
-    // B+: the right sibling's first RECORD moves to the end of the child, and
-    // the parent separator becomes a copy of the sibling's new first entry.
+    // sibling's first record moves over, separator copies the sibling's new first entry
     memcpy(child_entries + child->node->num_entries * size, sibling_entries, size);
     if (sibling->node->num_entries > 1)
       memcpy(parent_entries + idx * size, sibling_entries + size, size);
@@ -1532,9 +1454,7 @@ int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 n
     }
   }
 
-  // B+: only leaves hold records. Entries in internal nodes are separator
-  // copies of leaf entries, so freeing their spans here would release the same
-  // data blocks twice.
+  // only leaves hold records, internal entries are separator copies and would double free
   if (handle->type == BTREE_TYPE_BSPAN && node->node->is_leaf) {
     sbi = bsfs_sb(sb);
     if (!sbi || !sbi->super) {
@@ -1552,8 +1472,7 @@ int btree_deallocate_all(struct super_block *sb, btree_handle_t *handle, __u32 n
                sbi->super->total_blocks);
         continue;
       }
-      // deferred, like every other release: the owner that still points at this
-      // tree (an inode, or the superblock) is not on disk yet
+      // the owner pointing at this tree isn't on disk yet
       if (bsfs_defer_free_bspan(sb, entry) != 0) {
         btree_free_node(node);
         return -1;

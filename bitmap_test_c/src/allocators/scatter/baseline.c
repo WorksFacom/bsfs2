@@ -1,6 +1,5 @@
 /*
- * Baseline allocator (linear bitmap scan). Port of allocators/scatter/baseline.py.
- * No auxiliary index: the bitmap itself is the search structure.
+ * baseline allocator, linear bitmap scan with no index. port of allocators/scatter/baseline.py.
  */
 #include <stdlib.h>
 

@@ -50,13 +50,12 @@ def physical_cores() -> list[list[int]]:
 def select_cpus(count: int, *, avoid_cpu0: bool = True) -> list[int]:
     """Picks `count` CPUs on distinct physical cores.
 
-    CPU 0 is skipped by default: it is the usual default IRQ target, so it is
-    the one CPU whose noise correlates with the I/O rate being measured.
+    Skips CPU 0 by default. It is the usual IRQ target, so its noise tracks the I/O rate being measured.
     """
     candidates = [core[0] for core in physical_cores()]
     preferred = [cpu for cpu in candidates if cpu != 0] if avoid_cpu0 else candidates
     if len(preferred) < count:
-        # a small or non-SMT machine: fall back rather than refuse to run
+        # small or non-SMT box, fall back rather than refuse to run
         preferred = candidates
     if len(preferred) < count:
         raise ValueError(
@@ -67,8 +66,7 @@ def select_cpus(count: int, *, avoid_cpu0: bool = True) -> list[int]:
 
 
 def sibling_conflicts(cpus: tuple[int, ...]) -> list[tuple[int, int]]:
-    """Configured CPUs that share a physical core, which would silently halve
-    the parallelism a concurrency scenario believes it has."""
+    """Configured CPU pairs sharing a physical core, which would quietly halve real parallelism."""
     conflicts: list[tuple[int, int]] = []
     for index, cpu in enumerate(cpus):
         for other in cpus[index + 1 :]:

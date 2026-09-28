@@ -1,18 +1,9 @@
 """
-Pareto workload scenario with three file sizes.
+Pareto workload with three file sizes.
 
-File size distribution:
-- 70% of operations use 1 MiB files (256 blocks at 4 KiB each).
-- 25% use 10 MiB files (2,560 blocks).
-- 5% use 1 GiB files (262,144 blocks).
-
-Workload:
-- each operation the RNG picks a file size then decides alloc/dealloc (80/20 split).
-- each size class maintains its own allocated block list and separate timing lists.
-
-Extra metrics:
-- in addition to global metrics, returns `ops_per_sec_<size>`, `alloc_avg_<size>`, etc.
-  for each size class (1mib, 10mib, 1gib), enabling per-file-class analysis.
+Sizes: 70% 1 MiB (256 blocks), 25% 10 MiB (2,560), 5% 1 GiB (262,144). Each op picks a size,
+then alloc or dealloc 80/20. Every size class keeps its own allocated list and timings and adds
+`ops_per_sec_<size>`, `alloc_avg_<size>` etc. (1mib, 10mib, 1gib) on top of the global metrics.
 """
 
 from __future__ import annotations
@@ -27,9 +18,9 @@ from .base import BenchmarkScenario
 
 class MultisizeParetoScenario(BenchmarkScenario):
     FILE_SIZES = [
-        (0.70, 256),      # 1 MB → 256 blocks (block = 4 KiB)
-        (0.25, 2560),     # 10 MB → 2560 blocks
-        (0.05, 262144),   # 1 GB → 262144 blocks
+        (0.70, 256),      # 1 MiB, 4 KiB blocks
+        (0.25, 2560),     # 10 MiB
+        (0.05, 262144),   # 1 GiB
     ]
     SIZE_KEYS = {
         256: "1mib",

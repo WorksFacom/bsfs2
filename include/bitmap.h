@@ -1,28 +1,15 @@
 /**
- * @file bitmap_operations_bsfs.h
- * @brief Bitmap management utilities for the BSFS file system.
+ * @file bitmap.h
+ * @brief The block bitmap, pinned in memory for the whole mount.
  *
- * This header provides the core functions to manage the block allocation bitmap
- * in the Basic Solution File System (BSFS). The bitmap tracks which blocks on
- * the disk are allocated or free, and is essential for operations such as:
+ * On disk the bitmap is a chain of bitmap_block_t, linked through next_block.
+ * load_bitmap() reads every block once and keeps its buffer head, so
+ * sbi->bitmap[i] points straight into the page cache and a set or clear only has
+ * to mark the buffer dirty. Bit n covers block n. Bits are LSB-first inside a
+ * byte, which is the little-endian layout the kernel's *_le bitops expect.
  *
- * - Block allocation and deallocation
- * - File creation and deletion
- * - Space management and consistency
- *
- * The bitmap is stored on disk as a linked list of fixed-size blocks and is
- * loaded into memory for manipulation during runtime. These functions abstract
- * the bitmap I/O and provide low-level access to set, clear, and query bit
- * status.
- *
- * ## Key functionalities:
- * - Initialization of the bitmap block list on disk
- * - Loading and saving the bitmap from/to disk
- * - Marking individual blocks as free or occupied
- * - Querying the state of specific blocks
- *
- * This interface is used internally by the allocator and file system logic
- * to ensure efficient space tracking and integrity of data block usage.
+ * The inline accessors do no locking and no bounds checks. Callers hold
+ * sbi->bitmap_lock and keep the index below total_blocks.
  */
 #ifndef BITMAP_OPERATIONS
 #define BITMAP_OPERATIONS
@@ -33,40 +20,31 @@
 #include <linux/types.h>
 
 /**
- * @brief Loads a bitmap from the specified file.
+ * @brief Reads the bitmap chain and pins every block of it.
  *
- * This function reads the bitmap from the disk, starting at the given position
- * and using the block size to determine the number of bytes to read.
+ * Walks next_block from block_bitmap_start for block_bitmap_total hops, and
+ * refuses any link outside that range. The hop count is checked against
+ * total_blocks first. Both values come off the disk, and the bit accessors
+ * index the result without bounds checks.
  *
- * The chain is walked under the block count the superblock declares, and that
- * count is checked against the size of the filesystem first: both come off the
- * disk, and the bit accessors index the resulting array without bounds checks.
- *
- * @param disk The file pointer to the filesystem image.
- * @param bitmap_start_block The block where the bitmap starts.
- * @return 0 on success, or a negative error. On failure the caller must still
- *         call release_bitmap() to drop whatever was loaded.
+ * @return 0, -EUCLEAN for a bitmap that is too short or a bad link, -ENOMEM, or
+ *         -EIO. On failure the caller must still call release_bitmap() to drop
+ *         whatever was loaded.
  */
 int load_bitmap(struct super_block *sb);
 
 /**
- * @brief Releases everything load_bitmap() pinned (buffer heads and arrays).
+ * @brief Drops the buffer heads and arrays load_bitmap() pinned.
  *
- * Flushes any bitmap block still dirty before dropping it.
+ * Flushes any bitmap block still dirty first. Safe after a failed load_bitmap().
  */
 void release_bitmap(struct super_block *sb);
 
 /**
- * @brief Checks if a given block is free in the bitmap.
+ * @brief Tests one bit.
  *
- * This function checks the status of a specific block in the bitmap to
- * determine if it is free (available for allocation) or occupied.
- *
- * @param bitmap The pointer to the bitmap.
- * @param index The index of the block to check.
- * @return 1 if the block is free, 0 if the block is occupied.
+ * @return 1 if block @p index is free, 0 if it is allocated.
  */
-// TODO: are these 3 functions below working??
 static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
@@ -80,16 +58,11 @@ static inline __u32 bsfs_is_bit_free(struct super_block *sb, __u32 index) {
 }
 
 /**
- * @brief Marks a block as allocated in the bitmap.
+ * @brief Marks block @p index allocated and dirties its bitmap buffer.
  *
- * This function sets the bit corresponding to a given block to indicate that it
- * is now allocated (occupied).
- *
- * @param bitmap The pointer to the bitmap.
- * @param index The index of the block to mark as allocated.
+ * @return true if the bit went from 0 to 1, false if it was already set. The
+ *         caller adjusts sbi->free_blocks only on true.
  */
-// returns true when the bit actually changed, so the caller can keep the free
-// count straight - the allocator clears some bits twice on its rollback paths
 static inline bool bsfs_set_bit(struct super_block *sb, __u32 index) {
   // TODO: #define ext4_test_and_set_bit		__test_and_set_bit_le
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -110,13 +83,12 @@ static inline bool bsfs_set_bit(struct super_block *sb, __u32 index) {
 }
 
 /**
- * @brief Marks a block as free in the bitmap.
+ * @brief Marks block @p index free and dirties its bitmap buffer.
  *
- * This function clears the bit corresponding to a given block to indicate that
- * it is now free (available for allocation).
+ * The rollback paths can free the same block twice, so the return value is what
+ * keeps the free count straight.
  *
- * @param bitmap The pointer to the bitmap.
- * @param index The index of the block to mark as free.
+ * @return true if the bit went from 1 to 0, false if it was already clear.
  */
 static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -137,7 +109,7 @@ static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
 }
 
 /**
- * @brief Finds the first free block in [from, to), or returns @to if there is
+ * @brief Finds the first free block in [from, to), or returns @p to if there is
  *        none.
  *
  * The bit-at-a-time alternative is a loop over bsfs_is_bit_free(), which redoes
@@ -145,10 +117,9 @@ static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
  * through find_next_zero_bit_le(), so a full bucket or a long run of allocated
  * blocks is skipped 64 bits per operation instead of one.
  *
- * The `_le` variant is the correct one: bsfs packs bits LSB-first inside a byte
- * (`1U << (index & 7)`, see above), which is the little-endian on-disk bitmap
- * convention the kernel provides these accessors for. On x86 it compiles to the
- * same thing as the native version; on big-endian it would not.
+ * The `_le` variant is the correct one because bsfs packs bits LSB-first inside
+ * a byte (`1U << (index & 7)`). On x86 it compiles to the same thing as the
+ * native version. On big-endian it would not.
  *
  * The search is split at bitmap-block boundaries because the bits of each one
  * live in a separate buffer head and are not contiguous in memory. Callers whose
@@ -156,7 +127,7 @@ static inline bool bsfs_clear_bit(struct super_block *sb, __u32 index) {
  *
  * @param from first block to consider (must be < the total block count)
  * @param to   one past the last block to consider
- * @return the block index, or @to if every block in the range is allocated.
+ * @return the block index, or @p to if every block in the range is allocated.
  */
 static inline __u32 bsfs_find_free_bit(struct super_block *sb, __u32 from, __u32 to) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -168,9 +139,8 @@ static inline __u32 bsfs_find_free_bit(struct super_block *sb, __u32 from, __u32
     __u32         limit = (to - base < per) ? to - base : per;
     unsigned long hit;
 
-    // Bits past `limit` are masked off by the search itself, so the tail of the
-    // last word - which overlaps bitmap_block_t.next_block - can never be
-    // returned as a free block. Reading it stays inside the 4096-byte buffer.
+    // the search masks bits past `limit`, so the tail of the last word (which overlaps next_block) is
+    // never returned. reading it stays inside the 4096-byte buffer.
     hit = find_next_zero_bit_le(sbi->bitmap[block], limit, from - base);
 
     if (hit < limit)

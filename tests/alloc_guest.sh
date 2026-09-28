@@ -12,9 +12,9 @@
 #     shrinks over time and never recovers
 #
 # Neither is specific to a strategy, so this runs unchanged against every
-# BSFS_ALLOC build - it is the test that says a new strategy is safe to use.
+# BSFS_ALLOC build. It is the test that says a new strategy is safe to use.
 #
-# With BSFS_ALLOC_STATS=y it additionally checks the module's own counters,
+# With BSFS_ALLOC_STATS=y it also checks the module's own counters,
 # which is the only way to tell that the strategy is actually engaged rather
 # than merely not breaking anything.
 #
@@ -168,7 +168,7 @@ echo "alloc: recycled half the files without a collision"
 #
 # Snapshot df, run a full create/delete cycle, and come back to the same number.
 # A strategy that forgets a freed block leaks it; one that records a block twice
-# makes free_blocks count space that is not there, which is worse - it turns
+# makes free_blocks count space that is not there, which is worse, it turns
 # into a failed allocation with df still claiming room.
 #
 # Deletion parks blocks in a recovery snapshot, so df is only expected to return
@@ -267,7 +267,7 @@ echo "alloc: all $N files intact after exhaustion"
 umount "$MNT" || fail "final umount failed"
 
 # The counters live in the in-memory superblock, so each summary covers one
-# mount and the last one covers the read-only checks above - almost no work.
+# mount and the last one covers the read-only checks above, almost no work.
 # Every summary is checked instead, and the recycling requirement is asked of
 # the run as a whole.
 dmesg | tr -d '\r' | grep -o 'alloc\[[a-z_]*\] allocs=.*' >/tmp/alloc_stats.txt
@@ -320,7 +320,7 @@ if [ -s /tmp/alloc_stats.txt ]; then
     fail "strategy '$STRATEGY' never allocated from its index across a full recycle workload"
   fi
 
-  echo "alloc: totals for '$STRATEGY' - allocs=$TOTAL_ALLOCS frees=$TOTAL_FREES from_index=$TOTAL_INDEX"
+  echo "alloc: totals for '$STRATEGY': allocs=$TOTAL_ALLOCS frees=$TOTAL_FREES from_index=$TOTAL_INDEX"
 else
   echo "alloc: no counters in this build (BSFS_ALLOC_STATS off), skipping stats checks"
 fi

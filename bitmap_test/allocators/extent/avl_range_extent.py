@@ -1,28 +1,19 @@
 """
-AVL allocator with extent-first allocation and max_gap augmentation.
+AVL extent allocator with max_gap augmentation.
 
-Strategy idea:
-- represent free space as disjoint ranges in an AVL tree keyed by `start`.
-- each node stores `max_gap` = max(size of any range in this subtree),
-  enabling O(log n) best-fit and largest-range queries.
-- initialization starts with one range [0, size-1] when bitmap is non-empty.
+Free ranges live in an AVL tree keyed by `start`, starting as one range [0, size-1]. Each node's
+`max_gap` is the largest range in its subtree, so best-fit and largest-range lookups are O(log n).
 
-Allocation (extent-first):
-- first, searches for a single contiguous range that fits N (best-fit).
-- if no single range fits, falls back to taking from the largest range(s)
-  until N blocks are allocated (non-contiguous).
-- all-or-nothing: partial allocations are rolled back on failure.
-
-Deallocation:
-- validates indices, marks them free in bitmap, groups contiguous indices
-  into ranges, and reinserts each range with neighbor merging.
+Allocation tries best-fit into one contiguous range first. If nothing fits it takes from the
+largest ranges until it has N blocks, rolling back if it can't. Deallocation groups freed indices
+into ranges and reinserts them, merging with neighbors.
 """
 
 from core import BaseAllocator, register
 
 
 class AVLRangeExtentNode:
-    """AVL node storing one free range [start, end] with max_gap augmentation."""
+    """AVL node holding one free range [start, end]."""
 
     def __init__(self, start, end):
         self.start = start
@@ -48,8 +39,8 @@ def _node_height(node):
 def _update_node(node):
     if not node:
         return
-    # Inlined height + max_gap recompute: avoids the helper calls and two max()
-    # builtins on the hot insert/delete path.
+    # inlined height + max_gap recompute, the helper calls and two max() builtins hurt on the hot
+    # insert/delete path
     left = node.left
     right = node.right
     lh = left.height if left is not None else 0
@@ -65,11 +56,8 @@ def _update_node(node):
 
 @register("avl_range_extent", display_name="AVL Range Extent-First")
 class BitmapAVLRangeExtent(BaseAllocator):
-    """Bitmap allocator using AVL tree of free ranges with extent-first allocation."""
-
-    # Best-fit but with a *largest-range* fallback (unlike the lowest-address
-    # fallback shared by the treap/rb/bplustree extent allocators), so it forms
-    # its own bitmap-equivalence group.
+    # best-fit with a *largest-range* fallback, unlike the lowest-address fallback the treap/rb/bplustree
+    # extents share, so it gets its own bitmap-equivalence group
     CONSISTENCY_GROUP = "extent_bestfit_largest"
 
     def __init__(self, size):
@@ -84,7 +72,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
 
         allocated = []
 
-        # Step 1: try a single contiguous range (best-fit)
+        # best-fit into a single contiguous range
         node = self._find_best_fit(self.root, count)
         if node:
             range_start, range_end = node.start, node.end
@@ -96,7 +84,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
                 self.bitmap[idx] = 1
             return allocated
 
-        # Step 2: fallback — take from largest ranges until N satisfied
+        # nothing fits, drain the largest ranges until count is met
         remaining = count
         while remaining > 0:
             node = self._find_largest(self.root)
@@ -143,7 +131,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
         return self.free_blocks_remaining
 
     # ------------------------------------------------------------------
-    # Range tree operations
+    # range tree ops
     # ------------------------------------------------------------------
 
     def _add_free_range(self, start, end):
@@ -170,14 +158,13 @@ class BitmapAVLRangeExtent(BaseAllocator):
         self.root, _ = self._insert(self.root, start, end)
 
     # ------------------------------------------------------------------
-    # AVL insertion / deletion
+    # AVL insert / delete
     # ------------------------------------------------------------------
 
     def _insert(self, node, start, end):
-        # Returns (subtree_root, changed): `changed` is False once neither the
-        # height nor the max_gap of this subtree changed, so ancestors can stop
-        # recomputing/rebalancing. An AVL insert rotation restores the subtree's
-        # pre-insert height, so height changes never propagate past a rotation.
+        # returns (subtree_root, changed). `changed` goes False once neither height nor max_gap moved, so
+        # ancestors can stop recomputing. an AVL insert rotation restores the pre-insert height, so
+        # height changes never propagate past a rotation.
         if not node:
             return AVLRangeExtentNode(start, end), True
 
@@ -208,9 +195,8 @@ class BitmapAVLRangeExtent(BaseAllocator):
         return node, (node.height != old_height or node.max_gap != old_gap)
 
     def _delete(self, node, start):
-        # Returns (subtree_root, changed); see `_insert`. A delete can shrink the
-        # subtree height and cascade rotations upward, so we keep unwinding while
-        # height or max_gap changes and stop as soon as both are stable.
+        # returns (subtree_root, changed), see `_insert`. a delete can shrink height and cascade rotations
+        # upward, so keep unwinding while height or max_gap changes.
         if not node:
             return None, False
 
@@ -253,7 +239,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
         return node, (node.height != old_height or node.max_gap != old_gap)
 
     # ------------------------------------------------------------------
-    # Search helpers
+    # search helpers
     # ------------------------------------------------------------------
 
     def _find_best_fit(self, node, count):
@@ -311,7 +297,7 @@ class BitmapAVLRangeExtent(BaseAllocator):
         return succ
 
     # ------------------------------------------------------------------
-    # Rotations
+    # rotations
     # ------------------------------------------------------------------
 
     def _rotate_left(self, node):

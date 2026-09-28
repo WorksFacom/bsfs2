@@ -1,6 +1,5 @@
 /*
- * Lazy allocator using a Red-Black tree of recycled blocks + next_fresh cursor.
- * Port of allocators/scatter/rbtree.py.
+ * lazy allocator, red-black tree of recycled blocks + next_fresh cursor. port of allocators/scatter/rbtree.py.
  */
 #include <stdlib.h>
 
@@ -238,8 +237,8 @@ static void rb_fix_delete(rb_alloc *a, rb_node *node) {
             }
         }
     }
-    /* NOTE: rbtree.py does not recolor `node` to BLACK after the loop; kept
-     * faithful. Only colors are affected, never the stored index set / order. */
+    /* rbtree.py never recolors `node` BLACK after the loop, kept as is. only colors are off, never
+     * the index set or order. */
 }
 
 static void rb_fix_delete_null(rb_alloc *a, rb_node *parent, int is_left) {

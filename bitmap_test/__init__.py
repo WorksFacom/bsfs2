@@ -1,1 +1,1 @@
-"""Bitmap allocators test suite"""
+"""Bitmap allocator benchmark suite."""

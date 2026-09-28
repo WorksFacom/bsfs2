@@ -1,19 +1,16 @@
 #!/bin/bash
-# Builds the initramfs used by the test VMs (start_qemu.sh and tests/smoke.sh).
+# builds $KDIR/initramfs.cpio.gz for the test vms (start_qemu.sh, tests/smoke.sh) from the host's static busybox.
+# /init mounts /proc, /sys, /dev and the 9p share at /mnt/host. with bsfs.run=<script> on the cmdline it
+# runs the script and powers off, otherwise you get a shell.
 #
-# Produces $KDIR/initramfs.cpio.gz out of a static busybox from the host.
-# The resulting /init mounts /proc, /sys, /dev and the host's 9p share at
-# /mnt/host; with "bsfs.run=<script>" on the kernel cmdline it runs that script
-# and powers the VM off, otherwise it drops to an interactive shell.
-#
-# Usage:   ./tools/mkinitramfs.sh
-# Requires: busybox, cpio, gzip, and file on PATH.
+# usage: ./tools/mkinitramfs.sh
+# needs busybox, cpio, gzip and file on PATH
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SCRIPT_DIR/local.mk" ] && source "$SCRIPT_DIR/local.mk"
-: "${KDIR:?KDIR not set - copy local.mk.example to local.mk}"
+: "${KDIR:?KDIR not set, copy local.mk.example to local.mk}"
 
 BUSYBOX="${BUSYBOX:-$(command -v busybox || true)}"
 [ -x "$BUSYBOX" ] || {
@@ -36,17 +33,15 @@ trap 'rm -rf "$ROOT"' EXIT
 mkdir -p "$ROOT"/{bin,sbin,proc,sys,dev,tmp,etc,mnt/host}
 cp "$BUSYBOX" "$ROOT/bin/busybox"
 
-# One symlink per applet, so sh/mount/insmod/losetup/... exist in PATH.
+# one symlink per applet
 (cd "$ROOT" && ./bin/busybox --list-full | while read -r applet; do
-  # Some BusyBox builds list their multicall binary as an applet.  Do not
-  # replace the executable we just copied with a symlink to itself.
+  # some builds list the multicall binary itself, don't turn it into a self symlink
   [ "$applet" = "bin/busybox" ] && continue
   mkdir -p "$(dirname "$applet")"
   ln -sf /bin/busybox "$applet"
 done)
 
-# mkfs.bsfs runs in the guest straight from the 9p share, but it is a dynamic
-# binary: copy the host's libc/loader into the initramfs so it can execute.
+# mkfs.bsfs runs from the 9p share and is dynamic, so ship the host's libc and loader
 if [ -x "$SCRIPT_DIR/mkfs.bsfs" ]; then
   ldd "$SCRIPT_DIR/mkfs.bsfs" 2>/dev/null | grep -oE '/[^ ]*\.so[^ ]*' | sort -u | while read -r lib; do
     [ -e "$lib" ] || continue
@@ -68,8 +63,7 @@ if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=512000 hostshare /mnt/ho
 	echo "WARNING: failed to mount the 9p share (hostshare)"
 fi
 
-# bsfs.run=<path relative to the repo>: run that script from the share, then
-# power the VM off.
+# bsfs.run=<repo relative path> runs that script from the share, then powers off
 RUN=$(sed -n 's/.*bsfs\.run=\([^ ]*\).*/\1/p' /proc/cmdline)
 if [ -n "$RUN" ]; then
 	sh "/mnt/host/$RUN"

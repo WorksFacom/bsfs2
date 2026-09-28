@@ -3,7 +3,7 @@
 #include "../include/inode.h"
 
 // TODO: rec tree CLI
-// TODO: initialize rec_tree on mkfs - see old implementation
+// TODO: init rec_tree in mkfs, see the old implementation
 void bsfs_rec_tree_mount_init(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
@@ -93,11 +93,7 @@ int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entr
 }
 
 /*
- * Picks the entry to drop first: anything already past its retention, and
- * failing that simply the oldest.
- *
- * B+: only leaves hold records, so internal entries are skipped - they are
- * separator copies and would offer the same victim twice.
+ * expired first, else oldest. internal entries are separator copies, so leaves only.
  */
 static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 node_block, __u64 now, rec_entry_t *best, int *have) {
   struct btree_node *node;
@@ -137,17 +133,9 @@ static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 nod
 }
 
 /*
- * Drops recovery snapshots, oldest (or expired) first, and frees the blocks
- * they were holding.
- *
- * Deleting a file does not free anything on its own: bsfs_evict_inode() hands
- * the file's extent tree to a recovery snapshot instead, deliberately, so it
- * can be restored later. Nothing ever took those blocks back, so in practice
- * space was gone until the next mkfs.
- *
- * This is the reclaim end of that deal, and it only runs under space pressure:
- * a snapshot is a nice-to-have, a filesystem that can still be written to is
- * not. Returns the number of entries purged.
+ * drops snapshots (expired, then oldest) and frees their blocks. deleting a file hands its span tree
+ * to a snapshot, so this is the only way that space comes back. only runs under space pressure.
+ * returns entries purged.
  */
 unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entries, __u64 *blocks_deferred) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -167,8 +155,7 @@ unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entrie
     return 0;
   }
 
-  // purging is the last source of free space there is, so it outranks
-  // everything else when it comes to the reserve
+  // last source of free space, may spend the whole reserve
   rec_tree->prio = BSFS_ALLOC_SHRINK;
 
   mutex_lock(&sbi->rec_lock);
@@ -189,9 +176,7 @@ unsigned int bsfs_rec_tree_purge(struct super_block *sb, unsigned int max_entrie
 
     data_root = victim->btree_root;
 
-    // drop the snapshot first: it is the only thing still referring to those
-    // blocks, and releasing them while it can be found would be the same
-    // dangling reference copy-on-write exists to avoid
+    // unlink the snapshot before freeing its blocks, or it dangles
     if (!bsfs_rec_tree_remove(sb, rec_tree, victim->recovery_id)) {
       pr_warn("recovery purge could not remove id %u, giving up\n", victim->recovery_id);
       break;

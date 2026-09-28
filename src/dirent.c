@@ -1,19 +1,12 @@
 /**
- * @file dir_entry_operations_bsfs.c
- * @brief Directory entry B-tree operations for BSFS.
- *
- * Provides the in-memory directory descriptor (@ref dir_t) and the set of
- * operations for creating, removing, updating, looking up, and iterating
- * directory entries backed by a B-tree stored in the filesystem image.
+ * @file dirent.c
+ * @brief lookup, add and remove on a directory's dentry btree.
  */
 #include "../include/dirent.h"
 #include "../include/btree.h"
 
 /*
- * The tree is ordered by (hash(filename), filename) - see compare_dir_entry() -
- * so a lookup is a descent, not a scan. This used to walk every node of the
- * directory comparing names, which made each path resolution linear in the size
- * of the directory and also matched separator copies in internal nodes.
+ * ordered by (hash(filename), filename), see compare_dir_entry(), so this is a descent, not a scan.
  */
 int lookup_dir_entry(struct dentry *dentry, struct bsfs_dentry *out) {
   int ret;
@@ -76,7 +69,7 @@ int bsfs_add_link(struct dentry *dentry, struct inode *inode) {
   needle.filename[namelen] = '\0';
   needle.name_hash         = hash_filename(needle.filename);
 
-  // TODO: create btree_exist? or alike
+  // TODO: btree_exists() or similar
   err = btree_search_entry(sb, handle, handle->root_block, &needle, &existing);
 
   if (err < 0)
@@ -117,10 +110,8 @@ int bsfs_remove_link(struct dentry *dentry) {
   struct bsfs_dentry  needle;
   int                 err    = 0;
 
-  // The needle has to be a private copy: removal mutates the very buffers a
-  // pointer into the tree would aim at (shift_left/merge/borrow, plus the
-  // copy-on-write clones), so its contents would change mid-descent and the
-  // tree would end up removing the neighbouring entry.
+  // private copy. removal rewrites the node buffers mid-descent, a pointer into them would end up
+  // naming the neighbouring entry.
   err = lookup_dir_entry(dentry, &needle);
 
   if (err < 0)
@@ -139,8 +130,7 @@ int bsfs_remove_link(struct dentry *dentry) {
     goto out;
   }
 
-  // removing a name is a shrink, so it may spend the whole reserve - this is
-  // one of the paths that has to keep working on a filesystem that is full
+  // a shrink, must keep working on a full fs
   handle->prio       = BSFS_ALLOC_SHRINK;
   handle->root_block = bsfs_i(dir)->btree_root;
 

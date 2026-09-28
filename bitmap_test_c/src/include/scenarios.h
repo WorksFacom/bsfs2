@@ -1,7 +1,6 @@
 /*
- * Benchmark scenarios. Ports of scenarios/{stress,pareto,allocation_only,
- * multisize_pareto}.py. Each builds an allocator from a spec, runs the
- * workload, and returns aggregated metrics.
+ * ports of scenarios/{stress,pareto,allocation_only,multisize_pareto}.py. each builds an allocator
+ * from a spec, runs the workload and returns aggregated metrics.
  */
 #ifndef SCENARIOS_H
 #define SCENARIOS_H

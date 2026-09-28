@@ -15,7 +15,7 @@ uint64_t rng_next_u64(rng_state *st) {
 }
 
 double rng_double(rng_state *st) {
-    /* Top 53 bits -> [0, 1). */
+    /* top 53 bits -> [0, 1) */
     uint64_t x = rng_next_u64(st) >> 11;
     return (double)x * (1.0 / 9007199254740992.0);
 }
@@ -25,7 +25,7 @@ long rng_below(rng_state *st, long n) {
         return 0;
     }
     uint64_t un = (uint64_t)n;
-    /* Unbiased rejection sampling. */
+    /* rejection sampling, unbiased */
     uint64_t limit = UINT64_MAX - (UINT64_MAX % un);
     uint64_t r;
     do {
@@ -82,8 +82,7 @@ void rng_sample(rng_state *st, const long *population, long n, long k, long *out
         k = n;
     }
 
-    /* Pool method when k is a large fraction of n (mirrors CPython's branch),
-     * otherwise the set method. Both yield k distinct elements. */
+    /* pool method when k is a big fraction of n, set method otherwise, same split as CPython */
     if (k > n / 2) {
         long *pool = (long *)malloc((size_t)n * sizeof(long));
         for (long i = 0; i < n; i++) {

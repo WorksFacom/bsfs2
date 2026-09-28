@@ -1,9 +1,8 @@
 /*
- * Lazy allocator using a treap (randomized BST) for recycled blocks.
- * Port of allocators/scatter/treap.py.
+ * lazy allocator, treap of recycled blocks. port of allocators/scatter/treap.py.
  *
- * The produced bitmap is baseline-identical regardless of priorities (selection
- * is purely by minimum index); priorities use the project PRNG for balancing.
+ * selection is purely by minimum index, so the bitmap matches baseline whatever the priorities.
+ * priorities come from the project PRNG and only affect balance.
  */
 #include <stdlib.h>
 

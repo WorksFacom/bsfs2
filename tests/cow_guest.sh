@@ -44,7 +44,7 @@ mkdir -p "$MNT"
 mount -t bsfs "$LOOP" "$MNT" 2>&1 || fail "mount failed"
 
 # 1. Churn: create and delete the same set of files over and over. Files are
-#    left empty on purpose - deleted data blocks are kept on purpose for the
+#    left empty on purpose, deleted data blocks are kept on purpose for the
 #    recovery subsystem, so only the metadata is meant to be reclaimed here.
 r=1
 while [ "$r" -le "$ROUNDS" ]; do

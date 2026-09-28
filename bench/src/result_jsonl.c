@@ -20,10 +20,7 @@ static int compare_u64(const void *left, const void *right) {
   return (a > b) - (a < b);
 }
 
-/*
- * Nearest-rank on a zero-based sorted array, rounding up: p99 of 100 samples
- * is the maximum. Matches fio's reporting so the numbers are comparable.
- */
+/* nearest-rank rounding up, so p99 of 100 samples is the max. matches fio */
 static uint64_t percentile(const uint64_t *values, size_t count,
                            unsigned int percent) {
   size_t index;
@@ -214,10 +211,8 @@ int bench_result_write(const struct bench_run_config *config,
     fputs(",\"throughput_mib_s\":null,\"iops\":null", output);
   }
   /*
-   * throughput_mib_s divides by the operation path alone, so for buffered
-   * writes it is page-cache ingest rate. These divide by the flush as well,
-   * which is the only rate comparable across filesystems that defer
-   * differently.
+   * throughput_mib_s excludes the flush, so buffered writes measure page-cache ingest.
+   * these include it, the only rate comparable across filesystems that defer differently
    */
   if (durable_seconds > 0.0) {
     fprintf(output, ",\"durable_throughput_mib_s\":%.9f,\"durable_iops\":%.9f",

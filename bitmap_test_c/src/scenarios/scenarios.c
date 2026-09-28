@@ -44,7 +44,7 @@ static void larr_extend(larr *a, const long *src, long n) {
     a->len += n;
 }
 
-/* Remove the values present in `freed` (a set) from array `a`, in place. */
+/* drop every value in the set `freed` from `a`, in place */
 static void larr_remove_set(larr *a, longmap *freed) {
     long w = 0;
     for (long i = 0; i < a->len; i++) {

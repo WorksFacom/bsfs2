@@ -1,9 +1,7 @@
-"""Prepare repository-built and externally supplied BSFS modules.
+"""Builds and stages the BSFS modules the benchmark loads.
 
-BSFS_ALLOC in the top-level Makefile selects a src/alloc_<name>.c file. Every
-build produces bsfs2.ko, which registers the "bsfs" filesystem type. The
-benchmark loads a saved module for the selected strategy. Custom targets stage
-an already-built module together with its matching formatter.
+BSFS_ALLOC picks a src/alloc_<name>.c. Every build is bsfs2.ko registering "bsfs", so each strategy's
+module is saved separately. Custom targets stage a prebuilt module with its matching formatter.
 """
 from __future__ import annotations
 
@@ -19,8 +17,8 @@ import subprocess
 
 DEFAULT_STRATEGY = "linear"
 
-# -DBSFS_ALLOC_STATS adds counters to the allocation fast path. Benchmarks must
-# measure the module without those counters. See include/alloc_strategy.h.
+# -DBSFS_ALLOC_STATS puts counters on the allocation fast path, so measured builds leave it empty.
+# see include/alloc_strategy.h
 MEASURED_STATS = ""
 
 CUSTOM_BSFS_NAME = re.compile(r"bsfs-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z")
@@ -35,10 +33,9 @@ class BsfsModuleError(RuntimeError):
 
 @dataclass(frozen=True)
 class CustomBsfsArtifacts:
-    """A matching out-of-tree BSFS module/formatter pair.
+    """An out-of-tree BSFS module and its formatter.
 
-    The source paths identify what the caller supplied. ``module`` and
-    ``formatter`` point at immutable copies used by the benchmark matrix.
+    ``source_*`` is what the caller passed, ``module`` and ``formatter`` are the frozen copies the matrix uses.
     """
 
     name: str
@@ -53,7 +50,7 @@ class CustomBsfsArtifacts:
 
 
 def alloc_strategies(repository: Path) -> tuple[str, ...]:
-    """Return strategies from src/alloc_<name>.c, as the Makefile does."""
+    """Strategies from src/alloc_<name>.c, same discovery as the Makefile."""
     return tuple(
         sorted(
             path.name[len("alloc_") : -len(".c")]
@@ -63,11 +60,7 @@ def alloc_strategies(repository: Path) -> tuple[str, ...]:
 
 
 def module_path(repository: Path, strategy: str) -> Path:
-    """Store a built strategy under bench/build.
-
-    `make -C bench clean` removes this directory, which .gitignore already
-    excludes.
-    """
+    """Where a built strategy is saved. gitignored, and `make -C bench clean` wipes it."""
     return repository / "bench/build/modules" / f"bsfs2-{strategy}.ko"
 
 
@@ -79,8 +72,7 @@ def custom_artifact_paths(repository: Path, name: str) -> tuple[Path, Path]:
 def build_module_argv(repository: Path, strategy: str | None = None) -> list[str]:
     argv = ["make", "-C", str(repository)]
     if strategy is not None:
-        # Command-line assignments override `-include local.mk`, so its chosen
-        # strategy cannot affect a measured build.
+        # command-line vars beat `-include local.mk`, so its strategy can't leak into a measured build
         argv.extend([f"BSFS_ALLOC={strategy}", f"BSFS_ALLOC_STATS={MEASURED_STATS}"])
     return argv
 
@@ -135,7 +127,7 @@ def define_custom_artifacts(
     module: Path,
     formatter: Path,
 ) -> CustomBsfsArtifacts:
-    """Validate caller-supplied artifacts without changing the repository."""
+    """Validates caller-supplied artifacts without touching the repository."""
     if CUSTOM_BSFS_NAME.fullmatch(name) is None:
         raise BsfsModuleError(
             f"invalid custom BSFS name {name!r}; use a lowercase "
@@ -229,10 +221,9 @@ def _module_failure(
 
 
 def _assert_built_as(repository: Path, strategy: str) -> None:
-    """Confirm that kbuild recorded the requested strategy.
+    """Checks kbuild really built the requested strategy.
 
-    .bsfs.o.cmd is the only artifact that records the selected strategy. A
-    wrong module is otherwise hard to spot.
+    .bsfs.o.cmd is the only place the strategy gets recorded, and a wrong module is otherwise hard to spot.
     """
     command_file = repository / ".bsfs.o.cmd"
     try:
@@ -268,13 +259,9 @@ def _probe_load(
     expected_filesystem: str | None = None,
     remedy: str = DEFAULT_MODULE_REMEDY,
 ) -> None:
-    """Check compatibility by loading the module.
-
-    vermagic alone does not prove that the kernel can load a module.
-    """
-    # An already-loaded module cannot be the module under test. rmmod also
-    # fails when no module is loaded, so /sys/module identifies that harmless
-    # case.
+    """Loads and unloads the module, since matching vermagic doesn't prove the kernel will take it."""
+    # a loaded bsfs2 can't be the one under test. rmmod also fails when nothing is loaded,
+    # so /sys/module tells that harmless case apart
     removal = _run_capture(["rmmod", "bsfs2"])
     if removal.returncode != 0 and _module_loaded():
         raise _module_failure(
@@ -307,7 +294,7 @@ def _probe_load(
 def stage_custom_artifacts(
     artifacts: CustomBsfsArtifacts,
 ) -> CustomBsfsArtifacts:
-    """Freeze a custom pair, verify the copy, then probe the staged module."""
+    """Freezes a custom pair, verifies the copy, then probes the staged module."""
     try:
         artifacts.module.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(artifacts.source_module, artifacts.module)
@@ -329,8 +316,7 @@ def stage_custom_artifacts(
         raise BsfsModuleError(
             f"custom BSFS {artifacts.name}: formatter changed while it was copied"
         )
-    # the module builds run between define_custom_artifacts and here, so a source
-    # rebuilt in the meantime would otherwise be staged without a word
+    # module builds run between define_custom_artifacts and here, so catch a source rebuilt meanwhile
     if artifacts.module_sha256 != staged_module_digest:
         raise BsfsModuleError(
             f"custom BSFS {artifacts.name}: module changed since it was supplied: "
@@ -375,12 +361,10 @@ def stage_custom_artifacts(
 
 
 def build_modules(repository: Path, strategies: tuple[str, ...]) -> tuple[Path, ...]:
-    """Build, save, and probe one module per allocation strategy.
+    """Builds, saves, and probes one module per allocation strategy.
 
-    Build every strategy before the matrix starts. That keeps compilers out of
-    measured phases and reports a build or load failure before the runner
-    touches a device. This code does not use CommandRunner, so a failure cannot
-    create a benchmark result directory.
+    Runs before the matrix, so no compiler runs during measured phases and build or load failures surface
+    before any device is touched. Skips CommandRunner so a failure never creates a result directory.
     """
     known = alloc_strategies(repository)
     unknown = tuple(strategy for strategy in strategies if strategy not in known)
@@ -408,8 +392,7 @@ def build_modules(repository: Path, strategies: tuple[str, ...]) -> tuple[Path, 
         _probe_load(target)
         stashed.append(target)
 
-    # Restore the default build so the checkout's normal artifacts remain
-    # available for developer tooling and optional QEMU correctness tests.
+    # put the default build back for dev tooling and the optional QEMU gates
     if strategies:
         restore = _run_capture(build_module_argv(repository))
         if restore.returncode != 0:

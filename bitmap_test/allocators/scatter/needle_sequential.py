@@ -1,21 +1,9 @@
 """
-Sequential bitmap allocator with a first-free needle cursor.
+Sequential allocator with a first-free needle.
 
-Strategy idea:
-- keeps sequential scan behavior similar to baseline, but starts each search
-  from a moving cursor (`needle`) instead of always starting at index 0.
-- preserves a first-free policy by moving `needle` back on deallocation when a
-  smaller free index appears.
-
-Allocation:
-- scans sequentially from `needle` with wrap-around until collecting `count`
-  free indices.
-- marks blocks as occupied only after enough indices are found.
-- updates `needle` to the next free index after the allocation window.
-
-Deallocation:
-- validates indices, frees blocks in bitmap, and moves `needle` to the
-  smallest newly freed index when needed to preserve first-free behavior.
+Like baseline, but each scan starts at a moving cursor (`needle`) instead of index 0 and wraps
+around. After an allocation the needle moves to the next free index; a free below the needle pulls
+it back, which keeps the first-free policy.
 """
 
 from core import BaseAllocator, register
@@ -23,8 +11,6 @@ from core import BaseAllocator, register
 
 @register("needle", display_name="Sequential Needle")
 class BitmapNeedleSequential(BaseAllocator):
-    """Sequential scan allocator with first-free needle cursor."""
-
     def __init__(self, size):
         super().__init__(size)
         self.needle = 0

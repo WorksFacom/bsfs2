@@ -1,6 +1,5 @@
 /*
- * Two-level index allocator (buckets + continuous forward scan).
- * Port of allocators/scatter/two_level_index.py.
+ * two-level index allocator, buckets + one forward scan. port of allocators/scatter/two_level_index.py.
  */
 #include <stdlib.h>
 

@@ -58,8 +58,7 @@ def validate_benchmark_binaries(
 
 
 class CorrectnessGateError(RuntimeError):
-    """Carries the outcomes collected so far so the failing gate still reaches
-    the manifest instead of being discarded with the exception."""
+    """Carries the outcomes so far, so the failing gate still reaches the manifest."""
 
     def __init__(self, outcomes: list[dict[str, Any]], cause: CommandError):
         self.outcomes = outcomes

@@ -1,17 +1,13 @@
 """
-Statistical benchmark runner with multiple reproducible seeds.
+Multi-seed statistical benchmark runner.
 
-StatisticalRunner:
-- takes `strategy_specs` and a `StatBenchmarkConfig` and repeats each scenario for every seed.
-- `_build_scenario`: instantiates the correct scenario (AllocationOnly, Pareto, MultisizePareto) based on `config.mode`.
-- `_row_from_metrics`: builds the CSV row dict from scenario metrics, selecting the right field set
-  for default or multisize mode.
-- `run`: executes the full seeds × strategies matrix, catches per-run exceptions without aborting the rest,
-  reports progress every ~5%, and writes a timestamped CSV at the end.
+`StatisticalRunner.run` does the full seeds x strategies matrix for one `StatBenchmarkConfig`.
+A failed run is recorded and the rest keep going; progress prints about every 5% and a
+timestamped CSV is written at the end. `_build_scenario` picks the scenario from `config.mode`
+and `_row_from_metrics` builds the CSV row.
 
-CSV field sets:
-- default mode (`RUN_FIELDS_DEFAULT`): workload metadata + aggregated metrics.
-- multisize mode (`RUN_FIELDS_MULTISIZE`): per-file-size metrics (1 MiB, 10 MiB, 1 GiB) in addition to global ones.
+`RUN_FIELDS_DEFAULT` is workload metadata plus aggregate metrics. `RUN_FIELDS_MULTISIZE` adds
+per-size metrics (1 MiB, 10 MiB, 1 GiB).
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SCRIPT_DIR/local.mk" ] && source "$SCRIPT_DIR/local.mk"
-: "${KDIR:?KDIR not set - copy local.mk.example to local.mk}"
+: "${KDIR:?KDIR not set, copy local.mk.example to local.mk}"
 
 PREFIX="${1:-crash}"
 PHASE1="tests/${PREFIX}_phase1_guest.sh"

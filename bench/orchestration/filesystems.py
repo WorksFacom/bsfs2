@@ -28,8 +28,7 @@ class FilesystemContext:
     stable_device: str
     mountpoint: Path
     run_id: str
-    # carried here so cache.py can report through adapter.context without every
-    # adapter method growing an argument
+    # lives here so cache.py can report via adapter.context without threading it through every method
     reporter: Any | None = None
 
 
@@ -96,8 +95,7 @@ class FilesystemAdapter:
         return output.splitlines()[0] if output else "unknown"
 
     def configuration(self) -> dict[str, str]:
-        """Describes what this adapter actually does, so the manifest cannot
-        drift from the commands it records."""
+        """Derived from the real commands, so the manifest can't drift from what ran."""
         return {
             "format_command": " ".join(self.format_argv()),
             "mount_options": self.mount_options,
@@ -112,8 +110,7 @@ class BsfsAdapter(FilesystemAdapter):
     name = "bsfs"
     required_tools = ("mount", "umount", "insmod", "rmmod")
     mount_options = "noatime"
-    # The source file that selected this allocator. Every strategy registers
-    # the same "bsfs" type. Only the loaded .ko differs.
+    # every strategy registers the same "bsfs" type, only the loaded .ko differs
     alloc_strategy: str | None = DEFAULT_STRATEGY
 
     @property
@@ -287,9 +284,8 @@ class BtrfsAdapter(FilesystemAdapter):
     mount_options = "noatime,nodiscard"
 
     def format_argv(self) -> list[str]:
-        # -m single is explicit: mkfs.btrfs defaults to DUP metadata on a single
-        # device, which doubles every metadata write and would show up as btrfs
-        # write amplification for reasons unrelated to its design
+        # mkfs.btrfs defaults to DUP metadata on one device, doubling every metadata write and
+        # showing up as btrfs write amplification that has nothing to do with its design
         return [
             "mkfs.btrfs",
             "-f",
@@ -325,9 +321,8 @@ class BtrfsAdapter(FilesystemAdapter):
 class ZfsAdapter(FilesystemAdapter):
     name = "zfs"
     required_tools = ("zpool", "zfs")
-    # stated rather than inherited: at the 128K default a 4K random overwrite
-    # is a 128K read-modify-write, which is ZFS's real behaviour but is not
-    # comparable to the 4K-block filesystems without saying so
+    # spelled out on purpose. at 128K a 4K random overwrite is a 128K read-modify-write, which is
+    # real ZFS behaviour but not comparable to the 4K-block filesystems unless you say so
     recordsize = "128K"
     checksum = "on"
 
@@ -382,7 +377,7 @@ class ZfsAdapter(FilesystemAdapter):
         )
 
     def mount(self) -> None:
-        # zpool create/import mounts the root dataset automatically.
+        # zpool create/import already mounts the root dataset
         return
 
     def unmount(self) -> None:
@@ -421,8 +416,7 @@ class ZfsAdapter(FilesystemAdapter):
 
 
 class Zfs4KAdapter(ZfsAdapter):
-    """ZFS matched to the 4K block size the other filesystems are formatted
-    with, so random-overwrite results are comparable as well as realistic."""
+    """ZFS at the 4K block size the others use, so random-overwrite results are comparable."""
 
     name = "zfs-4k"
     recordsize = "4K"
@@ -437,9 +431,7 @@ ADAPTERS: dict[str, type[FilesystemAdapter]] = {
     "zfs-4k": Zfs4KAdapter,
 }
 
-# Generate one target per allocation strategy. Adding src/alloc_<name>.c makes
-# it benchmarkable without an orchestrator change. Plain "bsfs" remains the
-# default-strategy target.
+# one target per src/alloc_<name>.c, no orchestrator change needed. plain "bsfs" is the default strategy
 for _strategy in alloc_strategies(REPOSITORY):
     ADAPTERS[f"bsfs-{_strategy}"] = type(
         f"Bsfs{_strategy.capitalize()}Adapter",
@@ -447,18 +439,16 @@ for _strategy in alloc_strategies(REPOSITORY):
         {"name": f"bsfs-{_strategy}", "alloc_strategy": _strategy},
     )
 
-# Code that handles BSFS targets specially must use this membership list, not a
-# "bsfs" prefix test. old-bsfs is a separate filesystem.
+# test membership here, never a "bsfs" prefix. old-bsfs is a different filesystem
 BSFS_FILESYSTEMS = ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY)))
 
 
 def bsfs_targets_by_strategy(
     filesystems: Iterable[str],
 ) -> dict[str, tuple[str, ...]]:
-    """Return required builds in first-use order.
+    """Maps each needed strategy, in first-use order, to the targets sharing its module.
 
-    Each value lists the targets that share its module. "bsfs" and
-    "bsfs-linear" use the same module.
+    "bsfs" and "bsfs-linear" share one.
     """
     grouped: dict[str, tuple[str, ...]] = {}
     for name in filesystems:

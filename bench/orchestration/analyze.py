@@ -38,8 +38,7 @@ METRICS = (
 
 
 def load_records(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """An interrupted run leaves a truncated final line; report it rather than
-    refusing to analyze everything that did complete."""
+    """Skips and reports unparseable lines, since an interrupted run leaves a truncated last one."""
     records: list[dict[str, Any]] = []
     skipped: list[str] = []
     with path.open("r", encoding="utf-8") as stream:
@@ -98,8 +97,7 @@ def derive_summary(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 row[f"{metric}_{statistic}"] = value
         amplifications = []
         for record in group:
-            # without a flush inside the phase the device counters describe
-            # whatever writeback happened to land, not this phase's writes
+            # without a flush in the phase, device counters show whatever writeback landed, not this phase
             if not record.get("has_durable_window"):
                 continue
             logical = record.get("logical_bytes") or 0

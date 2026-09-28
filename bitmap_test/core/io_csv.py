@@ -1,11 +1,9 @@
 """
-CSV output helpers for benchmark artifacts.
+CSV writer for benchmark output.
 
-`write_csv`:
-- creates the parent directory if it does not exist.
-- accepts `header_labels` to rename columns in the CSV without changing internal key names
-  (e.g. `ops_per_sec` → `ops_per_sec[ops/s]`).
-- enforces deterministic column order via the explicit `fieldnames` list.
+`write_csv` creates the parent dir, writes columns in `fieldnames` order, and can relabel
+headers via `header_labels` (e.g. `ops_per_sec` -> `ops_per_sec[ops/s]`) without touching
+the row keys.
 """
 
 from __future__ import annotations

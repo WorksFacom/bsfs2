@@ -1,6 +1,5 @@
-# Compares the block-allocation strategies selected at compile time.
-# Preflight builds one module per strategy. See BSFS_ALLOC in the top-level
-# Makefile and tests/alloc_matrix.sh for the matching correctness test.
+# compares compile-time block allocation strategies, preflight builds one module per strategy.
+# see BSFS_ALLOC in the top-level Makefile and tests/alloc_matrix.sh for the correctness side.
 [run]
 profile = "quick"
 repetitions = 1

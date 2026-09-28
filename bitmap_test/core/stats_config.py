@@ -1,18 +1,15 @@
 """
-Configuration model for statistical benchmarks with multiple seeds.
+Config for multi-seed statistical benchmarks.
 
-StatBenchmarkConfig:
-- frozen dataclass that centralises all parameters for a statistical run.
-- `bitmap_size` is derived from `disk_size_gib` and `PAGE_SIZE_KIB` unless `bitmap_size_override` is set.
-- `resolved_num_operations` defaults depend on mode: `allocation_only` uses `num_files`;
-  other modes default to 100,000 operations.
-- `validate()` enforces invariants before any runner starts, including the constraint
-  that `target_blocks` must fit within the bitmap.
+`StatBenchmarkConfig` is a frozen dataclass holding every parameter of a run. `bitmap_size`
+comes from `disk_size_gib` and `PAGE_SIZE_KIB` unless `bitmap_size_override` is set.
+`resolved_num_operations` defaults to `num_files` for `allocation_only` and 100,000 otherwise.
+`validate()` runs before any runner starts and rejects a `target_blocks` that doesn't fit.
 
-Supported modes:
-- `allocation_only` — sequential allocations only, no deallocations.
-- `pareto` — 80% allocation / 20% deallocation mix with a fixed file size.
-- `multisize_pareto` — 80/20 mix with three file sizes (1 MiB, 10 MiB, 1 GiB).
+Modes:
+- `allocation_only`: allocations only, nothing freed.
+- `pareto`: 80% alloc / 20% dealloc with one file size.
+- `multisize_pareto`: 80/20 with three file sizes (1 MiB, 10 MiB, 1 GiB).
 """
 
 from __future__ import annotations

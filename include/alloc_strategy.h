@@ -1,6 +1,6 @@
 /**
  * @file alloc_strategy.h
- * @brief The pluggable block-allocation strategy interface.
+ * @brief Interface every block-allocation strategy implements.
  *
  * Everything about allocating blocks in BSFS is strategy-independent except one
  * question: given the bitmap, which free block do we hand out next? The linear
@@ -11,11 +11,11 @@
  *
  * Exactly one implementation is compiled into the module, chosen at build time:
  *
- *   make                        # BSFS_ALLOC=linear, the historical behaviour
+ *   make                        # BSFS_ALLOC=linear, the default
  *   make BSFS_ALLOC=heap        # min-heap
  *   make BSFS_ALLOC=twolevel    # two-level index
  *
- * so these are plain extern functions rather than a vtable - the linker picks
+ * so these are plain extern functions rather than a vtable. The linker picks
  * the implementation and the calls stay direct.
  *
  * ## The contract
@@ -68,8 +68,8 @@ void bsfs_alloc_strategy_destroy(struct super_block *sb);
  *
  * Caller holds sbi->bitmap_lock and has already checked the reserve floor.
  *
- * The implementation must mark the block with bsfs_set_bit() - that is what
- * dirties the bitmap buffer - and must NOT touch sbi->free_blocks; the caller
+ * The implementation must mark the block with bsfs_set_bit(), since that is what
+ * dirties the bitmap buffer. It must NOT touch sbi->free_blocks. The caller
  * adjusts it based on the return value.
  *
  * @return the block index, or INVALID_BLOCK if nothing is available.
@@ -82,7 +82,7 @@ __u32 bsfs_alloc_strategy_alloc(struct super_block *sb);
  * Caller holds sbi->bitmap_lock and calls this only after a real 1->0 transition
  * of the block's bit, i.e. when bsfs_clear_bit() returned true.
  *
- * That guarantee matters: the rollback paths in btree.c and inode.c can reach
+ * That guarantee matters. The rollback paths in btree.c and inode.c can reach
  * the same block twice, and a strategy that recorded it twice would hand it out
  * to two different owners.
  */
@@ -91,7 +91,7 @@ void bsfs_alloc_strategy_freed(struct super_block *sb, __u32 block);
 /**
  * @brief One line about the strategy's state, for the unmount summary.
  *
- * Only ever called under BSFS_ALLOC_STATS. Writes at most @len bytes into @buf.
+ * Only ever called under BSFS_ALLOC_STATS. Writes at most @p len bytes into @p buf.
  * A strategy with nothing to report may write an empty string.
  */
 void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
@@ -100,8 +100,8 @@ void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
  * Allocation counters.
  *
  * These exist so a test can tell that a strategy is actually engaged, instead of
- * only that the filesystem did not break - "the min-heap recycled 9871 blocks"
- * is an assertion; "no test failed" is not. Off by default, since the counters
+ * only that the filesystem did not break. "The min-heap recycled 9871 blocks"
+ * is an assertion, "no test failed" is not. Off by default, since the counters
  * sit on the allocation hot path:
  *
  *   make BSFS_ALLOC=heap BSFS_ALLOC_STATS=y
@@ -132,8 +132,8 @@ void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
 /**
  * @brief Logs the strategy name at mount, and the counters at unmount.
  *
- * The name line is unconditional (one line per mount); the counters only exist
- * under BSFS_ALLOC_STATS.
+ * The name line is printed on every mount. The counters only exist under
+ * BSFS_ALLOC_STATS.
  */
 void bsfs_alloc_log_mount(struct super_block *sb);
 void bsfs_alloc_log_unmount(struct super_block *sb);

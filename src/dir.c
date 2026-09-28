@@ -1,10 +1,6 @@
 /**
- * @file directory_operations_bsfs.c
- * @brief Implementation of high-level directory operations for BSFS.
- *
- * This module handles directory creation, deletion, and movement of files and
- * subdirectories between parent directories. It relies on directory entry
- * manipulation and inode handling provided by supporting modules.
+ * @file dir.c
+ * @brief directory inode and file operations.
  */
 
 #include "../include/dir.h"
@@ -40,10 +36,8 @@ static struct dentry *bsfs_lookup(struct inode *dir, struct dentry *dentry, unsi
 }
 
 /*
- * Every directory operation below mutates at least two trees, and under
- * copy-on-write that means allocating. Commit the deferred list here, at the
- * VFS entry point where no tree lock is held, rather than discovering there is
- * nothing left halfway through a removal.
+ * every op below mutates at least two trees, so commit here with no tree lock held instead of
+ * running dry halfway through a removal.
  */
 static void bsfs_reclaim_if_low(struct inode *dir) {
   if (bsfs_should_reclaim(dir->i_sb))
@@ -79,16 +73,13 @@ static int __bsfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, 
 }
 
 /*
- * Both halves of a create allocate: the inode tree splits, and so does the
- * parent's dentry tree. Under copy-on-write an ENOSPC often just means the
- * deferred-free list is holding every free block, and this is a VFS entry point
- * with no tree lock held - the only kind that can run the barrier and retry.
- * Failure paths leave the dentry negative, so a second attempt is a clean one.
+ * ENOSPC here often means the deferred list holds every free block. no tree lock is held, so run
+ * the barrier and retry. failure leaves the dentry negative, so the retry starts clean.
  */
 static int bsfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev) {
   int err;
 
-  // TODO: old -> new?
+  // TODO: old_valid_dev or new_valid_dev?
   if (!old_valid_dev(rdev))
     return -EINVAL;
 
@@ -116,14 +107,13 @@ static int __bsfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode) 
   if (IS_ERR(inode))
     return PTR_ERR(inode);
 
-  inode_inc_link_count(dir); // .. in the new dir references the parent
+  inode_inc_link_count(dir); // new ".."
   bsfs_set_inode(inode, 0);
-  inode_inc_link_count(inode); // . self-link: i_nlink 1 -> 2
+  inode_inc_link_count(inode); // "." makes it 2
 
   mark_inode_dirty(inode);
 
-  // . and .. are synthesized by bsfs_readdir/the dcache, so no on-disk dot
-  // entries are created here - only the new name is added to the parent
+  // . and .. are synthesized, never stored
   err = bsfs_add_link(dentry, inode);
 
   if (err)
@@ -141,7 +131,7 @@ out_fail:
   goto out;
 }
 
-// same ENOSPC retry as bsfs_mknod, see the comment there
+// same ENOSPC retry as bsfs_mknod
 static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode) {
   int err;
 
@@ -155,9 +145,7 @@ static struct dentry *bsfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, str
   return ERR_PTR(err);
 }
 
-// Recovery snapshot is not built here: a name can be removed while the file is still open (and being written to) or while other hard links
-// remain. We only want a snapshot once the inode is truly gone, so we stash the parent ino + name and let bsfs_evict_inode build it from
-// the inode's final state when i_nlink == 0
+// no snapshot here, the file may still be open or have other links. evict builds it at i_nlink == 0
 static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
   int err;
 
@@ -168,7 +156,6 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
 
   bsfs_reclaim_if_low(dir);
 
-  // hand the parent ino + name to bsfs_evict_inode for the recovery snapshot.
   bsfs_i(inode)->i_deleted_parent_ino = dir->i_ino;
   strscpy(bsfs_i(inode)->i_deleted_name, dentry->d_name.name, MAX_FILENAME);
 
@@ -181,8 +168,7 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
   return 0;
 }
 
-// Walks the directory entry btree and reports whether any stored entry exists.
-// . and .. are synthesized on readdir and never stored, so any entry => not empty.
+// . and .. are never stored, so any entry means not empty
 static bool bsfs_subtree_has_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
   struct btree_node *node;
   __u32             *children = NULL;
@@ -200,7 +186,7 @@ static bool bsfs_subtree_has_entry(struct super_block *sb, btree_handle_t *handl
     return true;
   }
 
-  // empty node: defensively descend into any children before concluding
+  // empty node, check children anyway
   if (!node->node->is_leaf) {
     children = bchildren(node, handle);
     for (i = 0; i <= node->node->num_entries && !found; i++)
@@ -216,7 +202,7 @@ static bool bsfs_empty_dir(struct inode *dir) {
   bool            empty;
 
   if (!handle)
-    return false; // conservative: treat as non-empty when we can't check
+    return false; // can't check, say non-empty
 
   handle->root_block = bsfs_i(dir)->btree_root;
   empty              = !bsfs_subtree_has_entry(dir->i_sb, handle, handle->root_block);
@@ -225,9 +211,7 @@ static bool bsfs_empty_dir(struct inode *dir) {
   return empty;
 }
 
-// Reverses bsfs_mkdir's link-count moves: an empty dir sits at i_nlink 2 (. and the
-// parent entry). Like bsfs_unlink, we stash the parent ino + name so bsfs_evict_inode
-// builds the recovery snapshot once i_nlink reaches 0.
+// empty dir sits at i_nlink 2. stashes parent + name for evict's snapshot like bsfs_unlink
 static int bsfs_rmdir(struct inode *dir, struct dentry *dentry) {
   int           err;
   struct inode *inode = d_inode(dentry);
@@ -244,16 +228,14 @@ static int bsfs_rmdir(struct inode *dir, struct dentry *dentry) {
   if (err)
     return err;
 
-  inode_dec_link_count(inode); // drop "."          (2 -> 1)
-  inode_dec_link_count(inode); // drop parent entry (1 -> 0) => evict
-  inode_dec_link_count(dir);   // parent loses this dir's ".."
+  inode_dec_link_count(inode); // "."
+  inode_dec_link_count(inode); // parent entry, evicts
+  inode_dec_link_count(dir);   // our ".."
 
   return 0;
 }
 
-// . and .. are synthesized, so moving a directory across parents needs no on-disk ".."
-// rewrite - only the parent link counts change. The single parent-entry link is moved,
-// so old_inode's i_nlink is left untouched.
+// ".." isn't stored, so a cross-parent move only touches parent link counts. old_inode's i_nlink stays
 static int bsfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir,
                        struct dentry *new_dentry, unsigned int flags) {
   struct inode *old_inode = d_inode(old_dentry);
@@ -267,11 +249,10 @@ static int bsfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct de
   bsfs_reclaim_if_low(old_dir);
 
   if (new_inode) {
-    // overwrite an existing target
     if (is_dir && !bsfs_empty_dir(new_inode))
       return -ENOTEMPTY;
 
-    // snapshot for the target that is about to be evicted
+    // target is about to be evicted, stash for its snapshot
     bsfs_i(new_inode)->i_deleted_parent_ino = new_dir->i_ino;
     strscpy(bsfs_i(new_inode)->i_deleted_name, new_dentry->d_name.name, MAX_FILENAME);
 
@@ -281,26 +262,26 @@ static int bsfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct de
 
     err = bsfs_add_link(new_dentry, old_inode);
     if (err) {
-      bsfs_add_link(new_dentry, new_inode); // best-effort restore
+      bsfs_add_link(new_dentry, new_inode); // best effort restore
       return err;
     }
 
     if (is_dir)
-      inode_dec_link_count(new_inode); // target loses "."
-    inode_dec_link_count(new_inode);   // target loses its dir entry => evict
+      inode_dec_link_count(new_inode); // "."
+    inode_dec_link_count(new_inode);   // dir entry, evicts
   } else {
     err = bsfs_add_link(new_dentry, old_inode);
     if (err)
       return err;
     if (is_dir)
-      inode_inc_link_count(new_dir); // new_dir gains this dir's ".."
+      inode_inc_link_count(new_dir); // our ".."
   }
 
   err = bsfs_remove_link(old_dentry);
   mark_inode_dirty(old_inode);
 
   if (is_dir)
-    inode_dec_link_count(old_dir); // old_dir loses this dir's ".."
+    inode_dec_link_count(old_dir); // our ".."
 
   return err;
 }
@@ -332,8 +313,7 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
   if (btree_read_node(sb, handle, node_block, &node) != 0)
     return 0;
 
-  // B+: only leaves hold records. Entries in internal nodes are separators
-  // (copies), so emitting them would list files twice.
+  // internal entries are separator copies, emitting them lists files twice
   if (!node->node->is_leaf) {
     children = bchildren(node, handle);
 
@@ -355,7 +335,7 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
 
     de = (struct bsfs_dentry *)(bentries(node) + (size_t)i * handle->entry_size);
 
-    // . and .. are emitted via dir_emit_dots
+    // dir_emit_dots handles these
     if (de->filename[0] == '.' && (de->filename[1] == '\0' || (de->filename[1] == '.' && de->filename[2] == '\0')))
       continue;
 
@@ -363,7 +343,7 @@ static int bsfs_emit_subtree(struct super_block *sb, btree_handle_t *handle, __u
     entry_pos = *index + 2;
     (*index)++;
 
-    if (entry_pos < ctx->pos) // already delivered on a previous call
+    if (entry_pos < ctx->pos) // already emitted last call
       continue;
 
     ctx->pos = entry_pos;
@@ -397,8 +377,7 @@ static int bsfs_readdir(struct file *file, struct dir_context *ctx) {
   if (!handle)
     return -ENOMEM;
 
-  handle->root_block = bsfs_i(dir)->btree_root; // 0 => empty dir, no-op
-                                                //
+  handle->root_block = bsfs_i(dir)->btree_root; // 0 is an empty dir
   bsfs_emit_subtree(sb, handle, handle->root_block, ctx, &index);
 
   kfree(handle);

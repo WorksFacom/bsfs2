@@ -1,7 +1,6 @@
 /*
- * Lazy allocator using a B+Tree (order 256) of recycled blocks + next_fresh.
- * Port of allocators/scatter/bplustree.py. Leaves are doubly linked; first_leaf
- * caches the smallest recycled index.
+ * lazy allocator, B+tree (order 256) of recycled blocks + next_fresh. port of
+ * allocators/scatter/bplustree.py. leaves are doubly linked, first_leaf caches the smallest recycled index.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -273,7 +272,7 @@ static void bp_delete_key(bp_alloc *a, long key) {
         a->node_count -= 1;
     }
 
-    /* Smart first_leaf update. */
+    /* only recompute first_leaf if the minimum went away */
     if (a->first_leaf && a->first_leaf->nkeys > 0 && key == a->first_leaf->keys[0]) {
         a->first_leaf = a->first_leaf->next ? a->first_leaf->next : a->first_leaf;
     } else if (a->first_leaf && a->first_leaf->nkeys == 0 && a->first_leaf->next) {

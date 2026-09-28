@@ -1,11 +1,11 @@
 # Allocators (`bitmap_test/allocators`)
 
-Implementações das estratégias de alocação de blocos, organizadas em duas
-famílias por **comportamento de alocação**:
+Estratégias de alocação de blocos, separadas em duas famílias pelo
+comportamento de alocação:
 
-- **`scatter/`** — `allocate_blocks(count)` devolve os `count` menores índices
+- `scatter/`: `allocate_blocks(count)` devolve os `count` menores índices
   livres, contíguos ou não. Não tentam manter o pedido em um único extent.
-- **`extent/`** — `allocate_blocks(count)` devolve um **único trecho contíguo**
+- `extent/`: `allocate_blocks(count)` devolve um único trecho contíguo
   quando existe, recorrendo a *scatter* apenas como fallback. O espaço livre é
   modelado como intervalos disjuntos para que a contiguidade possa ser buscada
   diretamente.
@@ -31,8 +31,8 @@ Todos os allocators:
 - `needle_sequential.py` (`needle`): varredura sequencial com agulha (first-free).
 - `avl.py` (`avl`): árvore AVL de blocos reciclados + cursor `next_fresh`.
 - `avl_range.py` (`avl_range`): árvore AVL de intervalos livres, mas drena o
-  intervalo mais à esquerda bloco a bloco — comportamento *scatter* (bitmap
-  idêntico ao `baseline`).
+  intervalo mais à esquerda bloco a bloco, então se comporta como *scatter*
+  (bitmap idêntico ao `baseline`).
 - `rbtree.py` (`rb`): árvore rubro-negra.
 - `heap.py` (`heap`): min-heap.
 - `btree.py` (`btree`): B-Tree.
@@ -44,10 +44,10 @@ Todos os allocators:
 
 ### Extent (`extent/`)
 
-Política comum dos três novos (em `extent_base.py`): **best-fit** de um trecho
-contíguo (menor intervalo com tamanho ≥ `count`), com **fallback de menor
-endereço** (scatter a partir dos intervalos mais baixos) e **coalescência** de
-vizinhos na liberação.
+Os três novos dividem a política de `extent_base.py`: best-fit de um trecho
+contíguo (menor intervalo com tamanho ≥ `count`), fallback de menor endereço
+(scatter a partir dos intervalos mais baixos) e coalescência de vizinhos na
+liberação.
 
 - `extent_base.py`: `RangeExtentAllocator`, a política compartilhada. As
   subclasses implementam apenas as operações da estrutura de dados.
@@ -60,8 +60,8 @@ vizinhos na liberação.
 
 ## Validação
 
-`runners/validator_runner.py` compara bitmaps **dentro de cada grupo de
-consistência** (`BaseAllocator.CONSISTENCY_GROUP`): todos os *scatter* devem
+`runners/validator_runner.py` compara bitmaps dentro de cada grupo de
+consistência (`BaseAllocator.CONSISTENCY_GROUP`): todos os *scatter* devem
 coincidir com o `baseline`; os três extent com fallback de menor endereço devem
 coincidir entre si; o `avl_range_extent` forma seu próprio grupo.
 
@@ -77,5 +77,5 @@ lista ordenada de estratégias com `get_strategy_specs()`, usada pelo `run.py`.
 3. Aplicar `@register("nova-chave", display_name="Nome")`.
 4. Importar a classe em `allocators/__init__.py` e adicionar a chave em
    `preferred_order`.
-5. Garantir semântica consistente de retorno (`[]` para falha de alloc; `False`
+5. Manter a semântica de retorno (`[]` para falha de alloc; `False`
    para dealloc inválido).

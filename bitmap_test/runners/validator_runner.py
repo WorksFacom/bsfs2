@@ -1,14 +1,9 @@
 """
-Cross-allocator consistency validation runner.
+Cross-allocator consistency check.
 
-ValidatorRunner:
-- runs the same deterministic workload (fixed seed) across all allocators and compares the resulting bitmaps.
-- `_run_validation_workload`: simulates a 70/30 alloc/dealloc mix while tracking allocated blocks externally
-  to verify that the allocator's internal state agrees with the external tracker at the end.
-- `run` checks two classes of inconsistency:
-  - *internal*: `count_free_blocks()` disagrees with the actual free count in the bitmap.
-  - *divergence*: a strategy's bitmap differs from the baseline (first strategy in the list).
-- returns `True` if all checks pass, `False` otherwise.
+Runs one deterministic 70/30 alloc/dealloc workload on every allocator, tracking allocated blocks
+outside the allocator. Fails if `count_free_blocks()` disagrees with the bitmap, or if a bitmap
+differs from its consistency group's reference (the group's first member).
 """
 
 from __future__ import annotations
@@ -101,9 +96,8 @@ class ValidatorRunner:
             results.append((key, name, group, state))
             print(f"  ✓ {name}")
 
-        # Bitmaps are only expected to match within a consistency group (scatter
-        # allocators return the N smallest indices; extent allocators differ by
-        # policy). Each group's first member is its reference.
+        # bitmaps only have to match inside a consistency group. the first member of each group
+        # is the reference.
         group_reference = {}  # group -> (name, bitmap)
         for key, name, group, state in results:
             group_reference.setdefault(group, (name, state["bitmap"]))

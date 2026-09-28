@@ -1,16 +1,11 @@
 /*
- * Extent-first allocators with the lowest-address scatter fallback.
- * Port of allocators/extent/extent_base.py (RangeExtentAllocator policy) plus
- * a treap-of-ranges structure (port of treap_range_extent.py).
+ * extent-first allocators with the lowest-address scatter fallback. port of the RangeExtentAllocator
+ * policy in allocators/extent/extent_base.py plus the treap of ranges from treap_range_extent.py.
  *
- * The three Python lowest-address extent allocators (treap_range_extent,
- * rb_range_extent, bplustree_extent) share this exact policy and are defined to
- * be byte-identical (consistency group "extent_bestfit_lowaddr"); they differ
- * only by the internal balanced structure (treap / red-black / B+tree), which
- * affects performance and memory accounting but never the produced bitmap or any
- * metric other than peak_memory/timing. To keep the port tractable, all three
- * factories here are backed by this one faithful treap-of-ranges implementation.
- * (avl_range_extent has a different fallback and is implemented separately.)
+ * treap_range_extent, rb_range_extent and bplustree_extent share this policy and must be
+ * byte-identical (group "extent_bestfit_lowaddr"). the structure underneath only changes timing
+ * and peak_memory, so all three factories here are backed by the one treap implementation.
+ * avl_range_extent falls back differently and lives in its own file.
  */
 #include <stdlib.h>
 
@@ -222,7 +217,7 @@ static int hook_successor(extent_alloc *a, long key, long *s, long *e) {
     return 1;
 }
 
-/* ----- shared policy (extent_base.py) ----- */
+/* ----- shared policy, extent_base.py ----- */
 static void extent_add_free_range(extent_alloc *a, long start, long end) {
     if (start > end) {
         return;

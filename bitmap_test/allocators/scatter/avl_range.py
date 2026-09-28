@@ -1,20 +1,9 @@
 """
-AVL allocator where each node stores a free-index range [start, end].
+AVL tree of free ranges [start, end] keyed by `start`, scatter behavior.
 
-Strategy idea:
-- represent free space as disjoint ranges in an AVL tree keyed by `start`.
-- initialization starts with one range [0, size-1] when bitmap is non-empty.
-- allocation consumes from the leftmost range (smallest free index).
-- deallocation reinserts ranges and merges adjacent/overlapping neighbors.
-
-Allocation:
-- repeatedly takes the minimum free index from the leftmost range.
-- if a range is exhausted, removes the node; otherwise advances range start.
-- marks selected indices as occupied in bitmap.
-
-Deallocation:
-- validates indices, marks them free in bitmap, groups contiguous indices into
-  ranges, and reinserts each range with neighbor merging.
+Allocation drains the leftmost range one index at a time and drops the node once it's empty.
+Deallocation groups freed indices into contiguous ranges and reinserts them, merging with
+adjacent or overlapping neighbors.
 """
 
 from core import BaseAllocator, register
@@ -33,14 +22,12 @@ class AVLRangeNode:
 
 @register("avl_range", display_name="AVL Range Tree")
 class BitmapAVLRange(BaseAllocator):
-    """Bitmap allocator using AVL tree of free ranges."""
-
     def __init__(self, size):
         super().__init__(size)
         self.root = AVLRangeNode(0, size - 1) if size > 0 else None
 
     def allocate_blocks(self, count):
-        """Allocate count blocks by consuming the smallest free indices."""
+        """Take the count smallest free indices."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -59,7 +46,7 @@ class BitmapAVLRange(BaseAllocator):
         return allocated
 
     def deallocate_blocks(self, indices):
-        """Deallocate blocks by reinserting contiguous ranges."""
+        """Reinsert freed indices as merged ranges."""
         if not self.validate_deallocation(indices):
             return False
 

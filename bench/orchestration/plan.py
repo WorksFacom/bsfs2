@@ -1,9 +1,7 @@
 """static description of what a run will execute.
 
-the tables here mirror the explicit control flow in ``run.py``; they exist so a
-total can be computed before the first mkfs, without the executor needing to be
-data-driven. ``test_plan_matches_executed_phases`` pins the two together, so a
-phase added to a matrix and missed in the table fails the tests.
+the tables mirror the control flow in ``run.py`` so totals are known before the first mkfs without
+making the executor data-driven. ``test_plan_matches_executed_phases`` pins the two together.
 """
 from __future__ import annotations
 
@@ -41,8 +39,8 @@ COMMON_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
     "mixed": ("create", "read", "edit", "verify"),
 }
 
-# one tuple per fresh filesystem: old-bsfs retention and restore cannot share a
-# device image, so they are two separate mkfs cycles
+# one tuple per fresh filesystem. old-bsfs retention and restore can't share a device image,
+# so they get separate mkfs cycles
 RECOVERY_PHASES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     **{
         filesystem: (("recovery-pressure", ("run", "verify")),)
@@ -88,7 +86,7 @@ class RunPlan:
 
     @property
     def filesystems(self) -> tuple[str, ...]:
-        """in first-execution order, which is what the progress counter uses."""
+        """in first-execution order, which the progress counter relies on."""
         return tuple(dict.fromkeys(unit.filesystem for unit in self.units))
 
     def phases_for(self, filesystem: str) -> int:

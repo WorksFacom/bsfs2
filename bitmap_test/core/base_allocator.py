@@ -1,15 +1,12 @@
 """
 Base classes for all bitmap allocators.
 
-BitmapBits:
-- compact bitmap storage backed by a bytearray with O(1) free-block accounting.
-- `free_count` is maintained incrementally via __setitem__, avoiding full scans on every query.
-- supports slice assignment with length consistency checks.
+`BitmapBits` is a bytearray bitmap that keeps `free_count` up to date in __setitem__,
+so free-count queries never scan. Slice assignment checks the length matches.
 
-BaseAllocator:
-- abstract contract every allocator must implement: `allocate_blocks`, `deallocate_blocks`, `count_free_blocks`.
-- `validate_deallocation` checks for duplicates, out-of-bounds indices, and double-free before releasing.
-- `rollback_bitmap_allocation` undoes a partial allocation if a multi-block request fails mid-way.
+`BaseAllocator` is the contract: `allocate_blocks`, `deallocate_blocks`, `count_free_blocks`.
+`validate_deallocation` rejects duplicates, out-of-range indices and double frees.
+`rollback_bitmap_allocation` undoes a multi-block request that failed partway.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from abc import ABC, abstractmethod
 
 
 class BitmapBits:
-    """Compact bitmap storage with incremental free-block accounting."""
+    """Bitmap with an incrementally maintained free count."""
 
     __slots__ = ("_data", "size", "free_count")
 
@@ -74,10 +71,9 @@ class BitmapBits:
 class BaseAllocator(ABC):
     """Common contract for bitmap allocators."""
 
-    # Allocators in the same group are expected to produce byte-identical
-    # bitmaps on a fixed workload (used by the consistency validator). Scatter
-    # allocators all return the N smallest free indices, so they share one
-    # layout; extent allocators differ by allocation policy and declare their own.
+    # allocators in one group must produce byte-identical bitmaps on a fixed workload (the validator
+    # checks this). scatter allocators all return the N smallest free indices so they share a group;
+    # extent allocators differ by policy and declare their own.
     CONSISTENCY_GROUP = "scatter"
 
     def __init__(self, size: int):

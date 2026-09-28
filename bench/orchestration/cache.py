@@ -11,7 +11,7 @@ from .filesystems import FilesystemAdapter, OldBsfsAdapter, ZfsAdapter
 
 @contextmanager
 def _reported(adapter: FilesystemAdapter, description: str) -> Iterator[None]:
-    """times the transition and reports it once the device is quiesced again."""
+    """Times the transition and reports it once the device is quiet again."""
     started = time.monotonic()
     try:
         yield

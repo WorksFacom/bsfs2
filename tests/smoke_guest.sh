@@ -43,7 +43,7 @@ insmod "$REPO/bsfs2.ko" 2>&1 || fail "insmod failed"
 LOOP=$(losetup -f) || fail "losetup -f failed"
 losetup "$LOOP" "$IMG" || fail "losetup $LOOP failed"
 
-# 4. Mount — exercises the inode B+ tree search (root inode lookup).
+# 4. Mount, exercises the inode B+ tree search (root inode lookup).
 mkdir -p "$MNT"
 mount -t bsfs "$LOOP" "$MNT" 2>&1 || fail "mount failed (inode tree search regression?)"
 

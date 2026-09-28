@@ -1,10 +1,6 @@
 /*
- * @file bitmap_operations_bsfs.c
- * @brief C file containing functions for bitmap manipulation in the BSFS
- * file system.
- *
- * This file provides functions for loading, saving, and manipulating the bitmap
- * which is used for managing free and allocated blocks in the filesystem.
+ * @file bitmap.c
+ * @brief loads and releases the on-disk block bitmap.
  */
 #include "../include/bitmap.h"
 #include "../bsfs.h"
@@ -18,9 +14,7 @@ int load_bitmap(struct super_block *sb) {
 
   __u32 total = sbi->super->block_bitmap_total;
 
-  // bsfs_is_bit_free() and friends index sbi->bitmap[] straight from a block
-  // number, so a superblock claiming fewer bitmap blocks than it has blocks to
-  // describe turns every allocation into an out-of-bounds access.
+  // bit helpers index sbi->bitmap[] straight from a block number, too few bitmap blocks means OOB
   if (total == 0 || total < DIV_ROUND_UP(sbi->super->total_blocks, BITS_PER_BLOCK)) {
     pr_err("superblock declares %u bitmap blocks, too few for %u blocks\n", total, sbi->super->total_blocks);
     return -EUCLEAN;
@@ -41,15 +35,12 @@ int load_bitmap(struct super_block *sb) {
 
   current_block = sbi->super->block_bitmap_start;
 
-  // next_block comes off the disk, so the walk is bounded by the count the
-  // superblock declares instead of trusting the chain to terminate
+  // next_block is from disk, bound by the declared count instead of trusting the chain
   for (i = 0; i < total; i++) {
     bitmap_block_t     *block;
     struct buffer_head *bh;
 
-    // has to stay inside the region the superblock set aside for the bitmap;
-    // "anywhere on the device" would happily read block 0 or a data block and
-    // then hand out allocations from whatever was in it
+    // otherwise a bad chain reads block 0 or a data block and allocates from whatever is in it
     if (current_block < sbi->super->block_bitmap_start || current_block - sbi->super->block_bitmap_start >= total) {
       pr_err("bitmap chain leaves the bitmap region at block %u (%u of %u loaded)\n", current_block, i, total);
       return -EUCLEAN;
@@ -74,8 +65,7 @@ int load_bitmap(struct super_block *sb) {
 }
 
 /*
- * Counterpart of load_bitmap(): the buffer heads it pinned (one per bitmap
- * block) and the two arrays were never released, so every mount leaked them.
+ * undoes load_bitmap(), partial loads included.
  */
 void release_bitmap(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
@@ -86,8 +76,6 @@ void release_bitmap(struct super_block *sb) {
 
   for (i = 0; i < sbi->super->block_bitmap_total; i++) {
     if (sbi->bitmap_map[i]) {
-      // The bits live inside these buffers, so flush what is still dirty before
-      // letting go of them.
       if (buffer_dirty(sbi->bitmap_map[i]))
         sync_dirty_buffer(sbi->bitmap_map[i]);
 

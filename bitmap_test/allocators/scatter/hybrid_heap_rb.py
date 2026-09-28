@@ -1,26 +1,10 @@
 """
-Hybrid Heap + RB-Tree allocator for free-block recycling.
+Hybrid min-heap + red-black tree allocator.
 
-Strategy idea:
-- heap provides fast minimum selection for recycled-block allocation.
-- RB tree tracks the same recycled set in a balanced structure.
-- `position_map` enables efficient key removal from heap.
-
-How `next_fresh` works:
-- references the next never-used index in fresh range.
-- is used when its value is smaller than heap recycled minimum.
-- advances only when allocation consumes fresh range.
-
-Allocation:
-- chooses the smallest index between heap top (recycled) and `next_fresh`.
-- when selected index comes from heap, removes it from heap (using
-  `position_map`) and RB tree via `_delete_key`; when from fresh, increments
-  `next_fresh`.
-- marks the block as occupied in the bitmap.
-
-Deallocation:
-- validates indices, frees blocks in bitmap, and inserts each index into both
-  structures: RB tree (ordered/balanced index) and heap (fast minimum access).
+Recycled indices are kept in both a min-heap (cheap minimum) and an RB tree. `position_map` tracks
+heap positions so an arbitrary key can be removed. Allocation takes the smaller of heap top and
+`next_fresh`, removing the key from both structures or advancing the cursor. Frees insert into
+both and never move the cursor. The RB tree has no say in which block gets picked.
 """
 
 from core import BaseAllocator, register
@@ -41,8 +25,6 @@ class RBNode:
 
 
 class HybridRBTreeForDealloc:
-    """RB-Tree optimized for deallocation tracking"""
-
     def __init__(self):
         self.root = None
 
@@ -341,14 +323,6 @@ class HybridRBTreeForDealloc:
 
 @register("hybrid", display_name="Hybrid Heap+RB")
 class BitmapHybridHeapRB(BaseAllocator):
-    """Hybrid Heap + RB-Tree Bitmap Allocator
-
-    Strategy:
-    - Min-Heap: Fast allocation O(1) to find minimum
-    - RB-Tree: Fast deallocation O(log n) with balanced structure
-    - Position map: Tracks heap positions for efficient removal
-    """
-
     def __init__(self, size, heap_order=256):
         super().__init__(size)
         self.heap_order = heap_order
@@ -356,11 +330,11 @@ class BitmapHybridHeapRB(BaseAllocator):
         self.position_map = {}
         self.next_fresh = 0
 
-        # Keep RB-Tree instance for API compatibility; no eager preload.
+        # RB tree kept for API compatibility, nothing is preloaded
         self.rbtree = HybridRBTreeForDealloc()
 
     def find_free_block(self):
-        """Find minimum free block via recycled heap or fresh range."""
+        """Smallest free index across the heap and the fresh cursor."""
         recycled_min = self.heap[0] if self.heap else -1
         fresh_min = self.next_fresh if self.next_fresh < self.size else -1
         if recycled_min == -1:
@@ -370,7 +344,6 @@ class BitmapHybridHeapRB(BaseAllocator):
         return min(recycled_min, fresh_min)
 
     def allocate_blocks(self, count):
-        """Allocate blocks using heap for fast finding"""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -393,7 +366,6 @@ class BitmapHybridHeapRB(BaseAllocator):
         return allocated
 
     def deallocate_blocks(self, indices):
-        """Deallocate blocks using RB-Tree for fast insertion"""
         if not self.validate_deallocation(indices):
             return False
 
@@ -403,17 +375,13 @@ class BitmapHybridHeapRB(BaseAllocator):
         return True
 
     def count_free_blocks(self):
-        """Count free blocks"""
         return self.free_blocks_remaining
 
-    # ===== Internal Operations =====
+    # ===== internals =====
 
     def _insert_key(self, key):
-        """Insert into both heap and RB-Tree (for deallocation)"""
-        # Add to RB-Tree for fast deallocation later
         self.rbtree.insert(key)
 
-        # Add to heap for fast allocation
         if key not in self.position_map:
             pos = len(self.heap)
             self.heap.append(key)
@@ -421,11 +389,8 @@ class BitmapHybridHeapRB(BaseAllocator):
             self._sift_up(pos)
 
     def _delete_key(self, key):
-        """Remove from both heap and RB-Tree"""
-        # Remove from RB-Tree
         self.rbtree.delete(key)
 
-        # Remove from heap
         if key in self.position_map:
             pos = self.position_map[key]
             last_key = self.heap[-1]
@@ -434,7 +399,6 @@ class BitmapHybridHeapRB(BaseAllocator):
                 self.heap[pos] = last_key
                 self.position_map[last_key] = pos
 
-                # Restore heap property
                 if pos > 0 and self.heap[pos] < self.heap[(pos - 1) // 2]:
                     self._sift_up(pos)
                 else:
@@ -444,7 +408,6 @@ class BitmapHybridHeapRB(BaseAllocator):
             del self.position_map[key]
 
     def _sift_up(self, pos):
-        """Restore min-heap property upward"""
         key = self.heap[pos]
         while pos > 0:
             parent_pos = (pos - 1) // 2
@@ -461,7 +424,6 @@ class BitmapHybridHeapRB(BaseAllocator):
         self.position_map[key] = pos
 
     def _sift_down(self, pos):
-        """Restore min-heap property downward"""
         key = self.heap[pos]
         size = len(self.heap)
 

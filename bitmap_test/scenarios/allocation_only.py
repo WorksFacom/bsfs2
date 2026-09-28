@@ -1,13 +1,9 @@
 """
-Allocation-only workload scenario with no deallocations.
+Allocation-only workload.
 
-Workload:
-- performs `num_operations` consecutive allocations of `blocks_per_alloc` blocks each.
-- the bitmap fills progressively with no blocks ever freed.
-- useful for measuring pure allocation throughput and behaviour under high occupancy.
-
-Metrics:
-- `dealloc_avg` is always 0; `fragmentation` tends toward 0 since blocks are allocated contiguously.
+`num_operations` allocations of `blocks_per_alloc` blocks each, nothing ever freed, so the bitmap
+just fills up. Measures raw allocation throughput and behavior near full. `dealloc_avg` is always
+0 and fragmentation stays low since blocks come out contiguous.
 """
 
 from __future__ import annotations

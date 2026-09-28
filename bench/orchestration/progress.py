@@ -1,20 +1,15 @@
 """progress and event reporting for a benchmark run.
 
-non-interference contract, because everything here runs inside a measurement
-harness:
+this runs inside the measurement harness, so it must never interfere:
 
-1. output is emitted only from the main thread and only between
-   ``CommandRunner.run`` calls, never while a measured child is alive. the
-   parent sits in ``waitpid`` for the whole measured window, so there's no
-   window where this module can compete with a pinned worker.
-2. no threads, no timers, no signal-driven redraw. a live ticking clock would
-   be the only construct able to do I/O during a phase, so there isn't one.
-3. stderr only. nothing is ever written under ``run_dir/mnt``, the mountpoint
-   of the device under test.
-4. metric readback touches ``run_dir/raw/results.jsonl`` on the host
-   filesystem, after the phase has exited and before the next one starts.
-5. nothing here may raise into the run. a reporting bug degrades output, it
-   doesn't abort a three-hour benchmark.
+1. output only comes from the main thread between ``CommandRunner.run`` calls. the parent sits in
+   ``waitpid`` for the whole measured window, so nothing here competes with a pinned worker.
+2. no threads, no timers, no signal-driven redraw. a ticking clock is the only thing that could do
+   I/O mid-phase, so there isn't one.
+3. stderr only. nothing ever lands under ``run_dir/mnt``, the mountpoint of the device under test.
+4. metric readback reads ``run_dir/raw/results.jsonl`` on the host filesystem, after the phase exits
+   and before the next one starts.
+5. nothing here raises into the run. a reporting bug degrades output, it doesn't kill a three-hour benchmark.
 """
 from __future__ import annotations
 
@@ -83,10 +78,9 @@ def format_nanoseconds(value: float) -> str:
 
 
 def metric_cells(record: dict[str, Any]) -> tuple[str, str]:
-    """the two right-hand columns of a phase line: headline rate, then p99.
+    """headline rate and p99, the two right-hand cells of a phase line. either may be empty.
 
-    kept separate from ``describe_metrics`` so the reporter can pad each cell
-    into its own column; either half may be empty.
+    split from ``describe_metrics`` so the reporter can pad each into its own column.
     """
     if record.get("validation_status") not in (None, "passed"):
         return f"VALIDATION {record['validation_status']}", ""
@@ -186,8 +180,8 @@ def _guarded(method):
 
 
 class RunReporter:
-    # one grid for every line: step lines span the counter, label and worker
-    # cells so their duration lands in the same column as a phase's
+    # one grid for every line. step lines span the counter, label and worker cells so their
+    # duration lands in the same column as a phase's
     INDENT = 2
     LABEL_WIDTH = 26
     WORKERS_WIDTH = 3

@@ -1,9 +1,8 @@
 /*
- * BitmapBits: compact bitmap storage with incremental free-block accounting.
- * Port of core/base_allocator.py::BitmapBits.
+ * BitmapBits, port of core/base_allocator.py::BitmapBits.
  *
- * Faithful to the Python model: one byte per block (value 0/1), NOT packed bits.
- * `free_count` is maintained incrementally so count queries are O(1).
+ * one byte per block (0/1), not packed bits, same as the Python model. `free_count` is kept up to
+ * date on every write so counting is O(1).
  */
 #ifndef BITMAP_H
 #define BITMAP_H
@@ -24,10 +23,10 @@ static inline uint8_t bitmap_get(const bitmap *bm, size_t index) {
     return bm->data[index];
 }
 
-/* Set a single bit, adjusting free_count on 0<->1 transitions. */
+/* set one bit, adjusting free_count on 0<->1 transitions */
 void bitmap_set(bitmap *bm, size_t index, int value);
 
-/* Slice assignment equivalent: set [start, stop) to value, adjusting free_count. */
+/* slice assignment: set [start, stop) to value, adjusting free_count */
 void bitmap_set_range(bitmap *bm, size_t start, size_t stop, int value);
 
 /* count(value): for 0 returns free_count, for 1 returns size-free_count. */

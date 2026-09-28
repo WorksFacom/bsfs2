@@ -1,6 +1,5 @@
 /*
- * Sequential allocator with a first-free needle cursor.
- * Port of allocators/scatter/needle_sequential.py.
+ * sequential allocator with a first-free needle cursor. port of allocators/scatter/needle_sequential.py.
  */
 #include <stdlib.h>
 

@@ -1,21 +1,14 @@
 """
-Red-Black tree allocator with extent-first allocation and max_gap augmentation.
+Red-black extent allocator with max_gap augmentation.
 
-Free space is a set of disjoint ranges held in a red-black tree keyed by `start`.
-Each node stores `max_gap` = the largest range size in its subtree, giving
-O(log n) best-fit and largest-range queries. This mirrors how real systems keep
-an augmented red-black tree of free extents (e.g. Linux VMA management).
+Free ranges live in a red-black tree keyed by `start`. `max_gap` is the largest range in the
+subtree, giving O(log n) best-fit and largest-range queries, the same trick Linux uses for VMAs.
+Policy lives in `RangeExtentAllocator`; this module only implements the structure hooks.
 
-The allocation policy (best-fit extent, then lowest-address scatter fallback,
-with coalescing on free) lives in `RangeExtentAllocator`; this module only
-provides the red-black operations behind the structure hooks.
-
-Augmentation maintenance follows the standard augmented-RB technique:
-- each rotation recomputes the two pivot nodes (their subtree *sets* are the only
-  ones that change shape);
-- every raw structural change (leaf link on insert, splice on delete) propagates
-  `max_gap` up to the root before any rebalancing fixup runs.
-Re-coloring never affects `max_gap`, so the fixups need no augmentation logic.
+Augmentation is the usual augmented-RB approach. A rotation recomputes its two pivots, the only
+nodes whose subtree sets change. Every raw structural change (leaf link on insert, splice on
+delete) propagates `max_gap` to the root before the fixup runs. Recoloring never touches
+`max_gap`, so the fixups don't need to care.
 """
 
 from enum import IntEnum
@@ -30,7 +23,7 @@ class Color(IntEnum):
 
 
 class RBRangeNode:
-    """Red-Black tree node storing one free range [start, end] with max_gap."""
+    """Red-black node holding one free range [start, end]."""
 
     __slots__ = ("start", "end", "color", "left", "right", "parent", "max_gap")
 
@@ -53,8 +46,8 @@ def _node_max_gap(node):
 
 
 def _update(node):
-    # Inlined max over (own size, child gaps): avoids two helper calls and the
-    # max() builtin, which dominate dealloc-heavy workloads (millions of calls).
+    # inlined max over own size and child gaps. the helper calls and max() dominate dealloc-heavy
+    # workloads (millions of calls).
     m = node.end - node.start + 1
     left = node.left
     if left is not None and left.max_gap > m:
@@ -67,8 +60,6 @@ def _update(node):
 
 @register("rb_range_extent", display_name="Red-Black Range Extent-First")
 class BitmapRBRangeExtent(RangeExtentAllocator):
-    """Bitmap allocator using a red-black tree of free ranges (extent-first)."""
-
     def _init_structure(self, size):
         self.root = None
         if size > 0:
@@ -77,7 +68,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             self.root = node
 
     # ------------------------------------------------------------------
-    # Structure hooks
+    # structure hooks
     # ------------------------------------------------------------------
 
     def _find_best_fit(self, count):
@@ -121,7 +112,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         return (succ.start, succ.end) if succ else None
 
     # ------------------------------------------------------------------
-    # Search helpers
+    # search helpers
     # ------------------------------------------------------------------
 
     def _best_fit_node(self, node, count):
@@ -157,16 +148,13 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         return node
 
     def _update_to_root(self, node, force_through=None):
-        """Recompute max_gap from `node` up to the root.
+        """Recompute max_gap from `node` up to the root, stopping once a value doesn't change.
 
-        Stops early once a node's max_gap is unchanged: an ancestor's max_gap is
-        the max over its subtree, so if a node's value didn't change neither can
-        any ancestor's. Freed ranges are mostly size-1 (smaller than existing
-        gaps), so propagation usually stops after one step instead of O(log n).
+        An ancestor's max_gap is a max over its subtree, so if a node didn't change none above it can.
+        Freed ranges are mostly size 1, so this usually stops after one step instead of O(log n).
 
-        `force_through` is the node whose *own* range changed during a two-child
-        delete; we must recompute it before the early-stop can fire, since the
-        change there is not reflected by the spliced child's propagation alone.
+        `force_through` is the node whose own range changed in a two-child delete. It has to be
+        recomputed before the early stop can fire, since the spliced child's walk doesn't see it.
         """
         while node:
             old = node.max_gap
@@ -178,7 +166,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             node = node.parent
 
     # ------------------------------------------------------------------
-    # Insertion
+    # insertion
     # ------------------------------------------------------------------
 
     def _insert_node(self, start, end):
@@ -206,8 +194,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         else:
             parent.right = new_node
 
-        # The new leaf's own max_gap is already correct; only ancestors can
-        # change, so propagate starting from the parent.
+        # the new leaf's max_gap is already right, only ancestors can change
         self._update_to_root(parent)
         self._fix_insert(new_node)
 
@@ -221,8 +208,8 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             successor = self._find_min(node.right)
             node.start = successor.start
             node.end = successor.end
-            # `node` keeps its position but gained the successor's range, so it
-            # must be recomputed even if intermediate nodes are unchanged.
+            # `node` keeps its place but took the successor's range, so it must be recomputed even if
+            # the nodes below it didn't change
             value_changed = node
             node = successor
 
@@ -239,9 +226,8 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
             else:
                 node.parent.right = child
 
-        # Propagate the set change up before rebalancing. Start at the spliced
-        # node's parent (the child subtree is internally unchanged), forcing the
-        # walk through the value-changed node in the two-child case.
+        # propagate before rebalancing, starting at the spliced node's parent (the child subtree is
+        # unchanged) and forcing the walk through the value-changed node in the two-child case
         self._update_to_root(node.parent, value_changed)
 
         if node.color == Color.BLACK:
@@ -251,7 +237,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
                 self._fix_delete_null(node.parent, node == node.parent.left)
 
     # ------------------------------------------------------------------
-    # Rotations (augmentation-aware)
+    # rotations, augmentation aware
     # ------------------------------------------------------------------
 
     def _rotate_left(self, node):
@@ -299,7 +285,7 @@ class BitmapRBRangeExtent(RangeExtentAllocator):
         _update(left_child)
 
     # ------------------------------------------------------------------
-    # Red-Black fixups (unchanged: they only touch color + call rotations)
+    # red-black fixups, colors only plus rotations
     # ------------------------------------------------------------------
 
     def _fix_insert(self, node):

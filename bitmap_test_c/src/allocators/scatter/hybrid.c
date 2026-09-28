@@ -1,10 +1,8 @@
 /*
- * Hybrid Heap + RB-Tree allocator. Port of allocators/scatter/hybrid_heap_rb.py.
+ * hybrid heap + RB tree allocator. port of allocators/scatter/hybrid_heap_rb.py.
  *
- * Allocation uses an indexed min-heap (heap[] + position_map). The RB tree is
- * kept in sync for API compatibility; it does not affect the produced bitmap
- * (selection is purely heap top vs next_fresh), but is included for faithful
- * timing / memory behavior.
+ * allocation uses an indexed min-heap (heap[] + position_map). the RB tree never affects the bitmap
+ * (selection is heap top vs next_fresh), it's kept in sync so timing and memory match Python.
  */
 #include <stdlib.h>
 
@@ -37,7 +35,7 @@ typedef struct {
     hb_rbtree rb;
 } hybrid_alloc;
 
-/* ---------- RB tree (for dealloc tracking) ---------- */
+/* ---------- RB tree, dealloc tracking ---------- */
 static int hb_color(hb_rbnode *n) {
     return n ? n->color : HB_BLACK;
 }
@@ -391,12 +389,10 @@ static void hb_sift_up(hybrid_alloc *a, long pos) {
 }
 
 /*
- * INTENTIONAL DEVIATION from hybrid_heap_rb.py: the Python _sift_down compares
- * children against `heap[smallest]` (which becomes a stale value after the first
- * level), so it can leave the heap property violated and eventually return a
- * non-minimal root. We compare against the carried `key`, implementing the
- * correct min-heap the author intended, so `hybrid` stays consistent with
- * baseline under any RNG.
+ * deliberately differs from hybrid_heap_rb.py. the Python _sift_down compares children against
+ * `heap[smallest]`, which goes stale after the first level, so it can break the heap property and
+ * return a non-minimal root. comparing against the carried `key` is the min-heap that was meant,
+ * and keeps `hybrid` matching baseline under any RNG.
  */
 static void hb_sift_down(hybrid_alloc *a, long pos) {
     long key = a->heap[pos];

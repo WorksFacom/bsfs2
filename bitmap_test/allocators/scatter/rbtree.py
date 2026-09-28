@@ -1,26 +1,9 @@
 """
-Allocator with a lazy model using a Red-Black Tree for recycled blocks.
+Lazy red-black tree allocator.
 
-Strategy idea:
-- combine the fresh cursor (`next_fresh`) with an ordered set of recycled
-  blocks in a RB tree.
-- keep smallest-free-index selection with balanced-tree operations.
-
-How `next_fresh` works:
-- represents the first block not yet consumed in the fresh range.
-- increments only when allocation comes from fresh range.
-- deallocated blocks go to the RB tree and then compete with fresh blocks.
-
-Allocation:
-- computes the smallest free index between `next_fresh` (never-used range) and
-  the RB-tree minimum (deallocated indices).
-- if the selected index comes from RB tree, removes it from the tree; otherwise
-  consumes `next_fresh` by incrementing the cursor.
-- then marks the block as occupied in the bitmap.
-
-Deallocation:
-- validates indices, marks blocks as free in the bitmap, and inserts indices
-  back into the RB tree for ordered reuse.
+Recycled indices live in an RB tree. Allocation takes the smaller of the tree minimum and
+`next_fresh` (first block of the never-used range), removing the node or advancing the cursor.
+Frees go into the tree and never move the cursor.
 """
 
 from enum import IntEnum
@@ -29,14 +12,11 @@ from core import BaseAllocator, register
 
 
 class Color(IntEnum):
-    """Red-Black Tree node color"""
     RED = 0
     BLACK = 1
 
 
 class RBNode:
-    """Red-Black Tree node"""
-    
     def __init__(self, index):
         self.index = index
         self.color = Color.RED
@@ -47,16 +27,13 @@ class RBNode:
 
 @register("rb", display_name="Red-Black Tree")
 class BitmapRB(BaseAllocator):
-    """Red-Black Tree indexed Bitmap Allocator"""
-    
     def __init__(self, size):
-        """Initialize lazy free-tracking state."""
         super().__init__(size)
         self.root = None
         self.next_fresh = 0
     
     def _select_min_free(self):
-        """Select minimum free index from recycled or fresh - O(log n)."""
+        """Smallest free index across the tree and the fresh cursor, O(log n)."""
         recycled_min_node = self._find_min(self.root) if self.root else None
         recycled_min = recycled_min_node.index if recycled_min_node else None
         fresh_min = self.next_fresh if self.next_fresh < self.size else None
@@ -68,7 +45,7 @@ class BitmapRB(BaseAllocator):
         return recycled_min if recycled_min < fresh_min else fresh_min
     
     def allocate_blocks(self, count):
-        """Allocate count free blocks - O(count × log n)"""
+        """O(count log n)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -92,7 +69,7 @@ class BitmapRB(BaseAllocator):
         return allocated
     
     def deallocate_blocks(self, indices):
-        """Deallocate blocks - O(count × log n)"""
+        """O(count log n)."""
         if not self.validate_deallocation(indices):
             return False
 
@@ -102,13 +79,11 @@ class BitmapRB(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks"""
         return self.free_blocks_remaining
     
-    # ===== Red-Black Tree Operations =====
+    # ===== red-black tree =====
     
     def _insert_node(self, index):
-        """Insert index into RB tree"""
         new_node = RBNode(index)
         
         if not self.root:
@@ -137,7 +112,6 @@ class BitmapRB(BaseAllocator):
         self._fix_insert(new_node)
     
     def _delete_node(self, index):
-        """Delete index from RB tree"""
         node = self._find_node(self.root, index)
         if not node:
             return
@@ -167,7 +141,6 @@ class BitmapRB(BaseAllocator):
                 self._fix_delete_null(node.parent, node == node.parent.left)
     
     def _find_node(self, node, index):
-        """Find node with given index"""
         while node:
             if index == node.index:
                 return node
@@ -178,7 +151,7 @@ class BitmapRB(BaseAllocator):
         return None
     
     def _find_min(self, node):
-        """Find minimum node in subtree. Returns None if node is None."""
+        """Leftmost node of the subtree, None if `node` is None."""
         if not node:
             return None
         while node.left:
@@ -186,7 +159,6 @@ class BitmapRB(BaseAllocator):
         return node
     
     def _rotate_left(self, node):
-        """Left rotation"""
         right_child = node.right
         node.right = right_child.left
         
@@ -206,7 +178,6 @@ class BitmapRB(BaseAllocator):
         node.parent = right_child
     
     def _rotate_right(self, node):
-        """Right rotation"""
         left_child = node.left
         node.left = left_child.right
         
@@ -226,7 +197,6 @@ class BitmapRB(BaseAllocator):
         node.parent = left_child
     
     def _fix_insert(self, node):
-        """Fix RB properties after insertion"""
         while node.parent and node.parent.color == Color.RED:
             if not node.parent.parent:
                 break
@@ -266,7 +236,6 @@ class BitmapRB(BaseAllocator):
         self.root.color = Color.BLACK
     
     def _fix_delete(self, node):
-        """Fix RB properties after deletion"""
         while node != self.root and self._get_color(node) == Color.BLACK:
             if node == node.parent.left:
                 sibling = node.parent.right
@@ -332,7 +301,7 @@ class BitmapRB(BaseAllocator):
                     node = self.root
     
     def _fix_delete_null(self, parent, is_left):
-        """Fix when deleted node's child is None"""
+        """Delete fixup for when the removed node's child is None."""
         node = None
         while parent and (node is None or node.color == Color.BLACK):
             if not node or node == parent.left:
@@ -405,5 +374,5 @@ class BitmapRB(BaseAllocator):
                     parent = node.parent
     
     def _get_color(self, node):
-        """Get color, treating None as BLACK"""
+        """None counts as BLACK."""
         return node.color if node else Color.BLACK

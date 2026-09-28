@@ -4,7 +4,7 @@
 #
 # This is the case the plain crash test does not reach. The allocator used to
 # commit the deferred frees inline when it ran dry, and that "commit" only
-# flushed the block device - it could not write back the per-inode extent roots,
+# flushed the block device. It could not write back the per-inode extent roots,
 # which live in dirty VFS inodes until ->write_inode runs. So blocks belonging
 # to a tree that was still the on-disk one got handed straight out and
 # overwritten.
@@ -57,7 +57,7 @@ while [ "$i" -le 12 ]; do
 done
 
 # Now squeeze, all the way to a real refusal. Every one of these allocations is
-# a chance for the allocator to decide the deferred list is fair game - and the
+# a chance for the allocator to decide the deferred list is fair game, and the
 # blocks on it belong to extent trees that are still the ones on disk.
 i=0
 while [ "$i" -lt 8192 ]; do

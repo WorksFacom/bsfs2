@@ -1,6 +1,6 @@
 /*
- * Sparse implicit segment tree of recycled blocks + next_fresh cursor.
- * Port of allocators/scatter/segment_tree.py.
+ * sparse implicit segment tree of recycled blocks + next_fresh cursor.
+ * port of allocators/scatter/segment_tree.py.
  *
  * `recycled` maps node-index -> recycled-free count in that interval.
  */

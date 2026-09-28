@@ -1,11 +1,9 @@
 /*
- * AVL tree of free ranges with extent-first allocation and a *largest-range*
- * fallback. Port of allocators/extent/avl_range_extent.py.
+ * AVL tree of free ranges, extent-first with a *largest-range* fallback. port of
+ * allocators/extent/avl_range_extent.py. own consistency group, "extent_bestfit_largest".
  *
- * Forms its own consistency group "extent_bestfit_largest" (the lowest-address
- * extent allocators differ by fallback policy). The Python `changed` short-
- * circuit is a pure performance optimization; recomputing height/max_gap and
- * rebalancing to the root yields the identical tree, so it is omitted here.
+ * the Python `changed` short-circuit is only a speedup. recomputing height/max_gap and rebalancing
+ * all the way to the root gives the same tree, so it's left out.
  */
 #include <stdlib.h>
 

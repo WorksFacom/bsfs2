@@ -9,8 +9,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../include/bsfs_shared.h"
-
 #ifndef BLKGETSIZE64
 #define BLKGETSIZE64 _IOR(0x12, 114, uint64_t)
 #endif
@@ -26,10 +24,8 @@ static uint64_t ceil_div_u64(uint64_t a, uint64_t b) {
 }
 
 /*
- * Writes `len` bytes of `data` as block `block_num`, zero-padding up to the
- * block size. `data` may be smaller than a block (e.g. the 48-byte superblock);
- * reading BSFS_BLOCK_SIZE bytes straight from such an object walks off the end
- * of it and can make the write fail with EFAULT.
+ * zero-pads `data` to a full block. writing BSFS_BLOCK_SIZE straight from something smaller (the
+ * 48 byte superblock) reads past its end and can EFAULT.
  */
 static int write_block_len(FILE *disk, uint32_t block_num, const void *data, size_t len) {
   uint8_t block[BSFS_BLOCK_SIZE] = {0};
@@ -98,7 +94,7 @@ static int get_fs_size_bytes(FILE *disk, uint64_t *out_size) {
   return -1;
 }
 
-int mkfs_bsfs_format_open(FILE *disk) {
+static int mkfs_bsfs_format_open(FILE *disk) {
   if (!disk)
     return -1;
 
@@ -140,7 +136,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     return -1;
   }
 
-  /* Allocate btree root blocks from the data region */
+  /* btree roots take the first data blocks */
   uint32_t dir_root_block   = data_start;
   uint32_t inode_root_block = data_start + 1;
 
@@ -157,7 +153,6 @@ int mkfs_bsfs_format_open(FILE *disk) {
     }
   }
 
-  //  Write superblock at block 1
   bsfs_super_block sb;
   memset(&sb, 0, sizeof(sb));
   sb.magic_number       = MAGIC_NUMBER;
@@ -176,13 +171,12 @@ int mkfs_bsfs_format_open(FILE *disk) {
     return -1;
   }
 
-  //  Initialize bitmap linked list
   if (init_bitmap_list(disk, sb.block_bitmap_start, sb.block_bitmap_total) != 0) {
     die("failed to initialize bitmap list");
     return -1;
   }
 
-  // Reserve all metadata blocks in bitmap
+  // mark metadata and both roots used
   {
     size_t   bitmap_bytes = (size_t)bitmap_blocks * BITMAP_BLOCK_BYTES;
     uint8_t *bitmap       = calloc(1, bitmap_bytes);
@@ -211,7 +205,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     free(bitmap);
   }
 
-  // Create directory entry B-tree root (leaf, 2 entries: "." and "..")
+  // root dentry tree, one leaf with "." and ".."
   {
     btree_node_t node;
     memset(&node, 0, sizeof(node));
@@ -239,7 +233,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
     }
   }
 
-  // Create inode B-tree root (leaf, 1 entry: root inode)
+  // inode tree, one leaf with the root inode
   {
     btree_node_t node;
     memset(&node, 0, sizeof(node));
@@ -284,7 +278,7 @@ int mkfs_bsfs_format_open(FILE *disk) {
   return 0;
 }
 
-int mkfs_bsfs_format_path(const char *path) {
+static int mkfs_bsfs_format_path(const char *path) {
   if (!path)
     return -1;
   FILE *disk = fopen(path, "rb+");

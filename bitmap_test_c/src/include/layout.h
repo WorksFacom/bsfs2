@@ -1,8 +1,6 @@
 /*
- * Bitmap layout constants derived from the simulated disk configuration.
- * Port of core/bitmap_layout.py.
- *
- * 250 GiB disk / 4 KiB page => 65,536,000 pages (1 bit per page).
+ * bitmap layout constants for the simulated disk. port of core/bitmap_layout.py.
+ * 250 GiB disk / 4 KiB page => 65,536,000 pages, 1 bit each.
  */
 #ifndef LAYOUT_H
 #define LAYOUT_H

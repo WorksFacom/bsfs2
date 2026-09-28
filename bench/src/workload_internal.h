@@ -18,8 +18,8 @@ struct bench_phase_state {
 void bench_phase_start(struct bench_run_config *config,
                        struct bench_phase_state *state);
 /*
- * Times the durability barrier and marks the phase as covering one, so the
- * analyzer knows its device counters correspond to data that actually landed.
+ * times the durability barrier and flags the phase as covering one, so the analyzer
+ * knows its device counters reflect data that actually landed
  */
 int bench_phase_flush(struct bench_run_config *config,
                       struct bench_result *result);

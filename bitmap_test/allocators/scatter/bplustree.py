@@ -1,27 +1,10 @@
 """
-Allocator with a lazy model using a B+Tree for recycled blocks.
+Lazy B+tree allocator.
 
-Strategy idea:
-- use a B+Tree to keep recycled blocks ordered, with fast minimum access via
-  `first_leaf`.
-- combine this recycled minimum with fresh range (`next_fresh`).
-
-How `next_fresh` works:
-- indicates the smallest index still never used.
-- is consumed in increasing order when it wins against recycled minimum.
-- deallocations return to B+Tree and do not move cursor backwards.
-
-Allocation:
-- compares `next_fresh` with the recycled minimum in `first_leaf` (first B+Tree
-  leaf) and chooses the smallest index.
-- when consuming recycled index, removes it from B+Tree; when consuming fresh,
-  advances cursor.
-- marks selected indices as occupied in the bitmap.
-
-Deallocation:
-- validates indices, frees blocks in the bitmap, and reinserts into B+Tree.
-- keeps `first_leaf` consistent after removals/insertions to preserve fast
-  access to the smallest recycled index.
+Recycled indices live in a B+tree and `first_leaf` gives cheap access to the smallest one.
+Allocation takes the smaller of that and `next_fresh` (smallest never-used index), removing the
+key or advancing the cursor. Frees go into the tree, never back to the cursor, and `first_leaf`
+is kept valid across inserts and deletes.
 """
 
 import bisect
@@ -29,8 +12,6 @@ from core import BaseAllocator, register
 
 
 class BPNode:
-    """B+Tree node"""
-    
     def __init__(self, order, is_leaf=True):
         self.order = order
         self.is_leaf = is_leaf
@@ -46,10 +27,7 @@ class BPNode:
 
 @register("bplustree", display_name="B+Tree")
 class BitmapBPlusTree(BaseAllocator):
-    """B+Tree indexed Bitmap Allocator"""
-    
     def __init__(self, size, order=256):
-        """Initialize bitmap with B+Tree indexing"""
         super().__init__(size)
         self.order = order
         self.root = BPNode(order, is_leaf=True)
@@ -57,7 +35,7 @@ class BitmapBPlusTree(BaseAllocator):
         self.next_fresh = 0
     
     def find_free_block(self):
-        """Find minimum free index among recycled B+Tree and fresh range."""
+        """Smallest free index across the tree and the fresh cursor."""
         tree_min = -1
         leaf = self.first_leaf
         if leaf and leaf.keys:
@@ -70,7 +48,6 @@ class BitmapBPlusTree(BaseAllocator):
         return min(tree_min, fresh_min)
     
     def allocate_blocks(self, count):
-        """Allocate count free blocks"""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -93,7 +70,6 @@ class BitmapBPlusTree(BaseAllocator):
         return allocated
     
     def deallocate_blocks(self, indices):
-        """Deallocate blocks"""
         if not self.validate_deallocation(indices):
             return False
 
@@ -103,13 +79,11 @@ class BitmapBPlusTree(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks."""
         return self.free_blocks_remaining
     
-    # ===== B+Tree Operations =====
+    # ===== B+tree =====
     
     def _insert_key(self, key):
-        """Insert key into B+Tree"""
         if self.root.is_full():
             new_root = BPNode(self.order, is_leaf=False)
             new_root.children.append(self.root)
@@ -120,7 +94,6 @@ class BitmapBPlusTree(BaseAllocator):
         self._insert_non_full(self.root, key)
     
     def _insert_non_full(self, node, key):
-        """Insert into non-full node"""
         if node.is_leaf:
             i = bisect.bisect_left(node.keys, key)
             node.keys.insert(i, key)
@@ -137,7 +110,6 @@ class BitmapBPlusTree(BaseAllocator):
             self._insert_non_full(child, key)
     
     def _split_child(self, parent, index):
-        """Split full child"""
         full_child = parent.children[index]
         new_child = BPNode(self.order, full_child.is_leaf)
         
@@ -171,14 +143,13 @@ class BitmapBPlusTree(BaseAllocator):
         new_child.parent = parent
     
     def _delete_key(self, key):
-        """Delete key from B+Tree"""
         self._delete_from_node(self.root, key)
 
         if not self.root.keys and self.root.children:
             self.root = self.root.children[0]
             self.root.parent = None
 
-        # Smart first_leaf update: only recalculate if minimum was deleted
+        # only recompute first_leaf if the minimum was deleted
         if self.first_leaf and self.first_leaf.keys and key == self.first_leaf.keys[0]:
             self.first_leaf = self.first_leaf.next if self.first_leaf.next else self.first_leaf
         elif self.first_leaf and not self.first_leaf.keys and self.first_leaf.next:
@@ -190,7 +161,6 @@ class BitmapBPlusTree(BaseAllocator):
             self.first_leaf = curr
     
     def _delete_from_node(self, node, key):
-        """Delete key from node"""
         i = bisect.bisect_left(node.keys, key)
         
         if node.is_leaf:
@@ -231,7 +201,7 @@ class BitmapBPlusTree(BaseAllocator):
                     self._delete_from_node(node.children[i], key)
     
     def _fill(self, node, index):
-        """Fill child with minimum keys"""
+        """Top up a child that dropped below minimum keys."""
         if index > 0 and len(node.children[index - 1].keys) >= self.order:
             self._borrow_from_prev(node, index)
         elif index < len(node.children) - 1 and len(node.children[index + 1].keys) >= self.order:
@@ -243,7 +213,6 @@ class BitmapBPlusTree(BaseAllocator):
                 self._merge(node, index - 1)
     
     def _borrow_from_prev(self, node, child_index):
-        """Borrow from previous sibling"""
         child = node.children[child_index]
         sibling = node.children[child_index - 1]
         
@@ -256,7 +225,6 @@ class BitmapBPlusTree(BaseAllocator):
         node.keys[child_index - 1] = child.keys[0]
     
     def _borrow_from_next(self, node, child_index):
-        """Borrow from next sibling"""
         child = node.children[child_index]
         sibling = node.children[child_index + 1]
         
@@ -269,7 +237,6 @@ class BitmapBPlusTree(BaseAllocator):
         node.keys[child_index] = sibling.keys[0]
     
     def _merge(self, node, index):
-        """Merge child with sibling"""
         child = node.children[index]
         sibling = node.children[index + 1]
         

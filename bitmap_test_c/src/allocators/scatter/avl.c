@@ -1,6 +1,5 @@
 /*
- * Lazy allocator using an AVL tree of recycled blocks + next_fresh cursor.
- * Port of allocators/scatter/avl.py.
+ * lazy allocator, AVL tree of recycled blocks + next_fresh cursor. port of allocators/scatter/avl.py.
  */
 #include <stdlib.h>
 

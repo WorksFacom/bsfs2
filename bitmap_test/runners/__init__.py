@@ -1,4 +1,4 @@
-"""Runner classes for benchmark, validation and reporting."""
+"""Runners for benchmark, validation and reporting."""
 
 from .benchmark_runner import BenchmarkRunner
 from .report_runner import ReportRunner

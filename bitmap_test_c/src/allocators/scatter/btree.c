@@ -1,6 +1,5 @@
 /*
- * Lazy allocator using a B-Tree (order 256) of recycled blocks + next_fresh.
- * Port of allocators/scatter/btree.py.
+ * lazy allocator, B-tree (order 256) of recycled blocks + next_fresh. port of allocators/scatter/btree.py.
  */
 #include <stdlib.h>
 #include <string.h>

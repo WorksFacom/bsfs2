@@ -7,9 +7,8 @@ import re
 from typing import Any
 
 
-# (field, title, unit, direction, description, lower_is_better). the trailing
-# flag is what value-ordered charts sort on; the chart script must not have to
-# parse the human-facing direction text to learn which end is better.
+# (field, title, unit, direction, description, lower_is_better). charts sort on the trailing flag
+# so the script never has to parse the human-facing direction text
 REPORT_METRICS = (
     (
         "durable_throughput_mib_s",
@@ -226,11 +225,10 @@ def _phase_descriptions(
 
 
 def _json_for_html(value: Any) -> str:
-    """Serialize data without allowing it to terminate the script element.
+    """Serializes data so it can't close the script element.
 
-    allow_nan is off because NaN/Infinity aren't valid JSON. one slipping
-    through would make JSON.parse throw and blank the whole report, and
-    failing loud here beats shipping an empty page.
+    allow_nan is off because NaN/Infinity aren't valid JSON. one slipping through makes JSON.parse
+    throw and blanks the report, so fail loud here instead.
     """
     return (
         json.dumps(
@@ -245,9 +243,10 @@ def _json_for_html(value: Any) -> str:
 def _failed_by_phase(
     failures: list[dict[str, Any]],
 ) -> dict[str, dict[str, list[str]]]:
-    """a filesystem missing from a chart because it failed shouldn't read as
-    "not run". failures with no phase apply to every phase in the scenario,
-    so they land under the empty key."""
+    """so a filesystem missing from a chart reads as failed, not "not run".
+
+    failures with no phase cover the whole scenario and land under the empty key.
+    """
     collected: dict[str, dict[str, set[str]]] = {}
     for failure in failures:
         scenario = failure.get("scenario")
@@ -359,7 +358,7 @@ def render_report(
     context, schedule, overrides = _manifest_context(manifest)
 
     replacements = {
-        "__TITLE__": escape(f"BSFS benchmark report — {run_id}"),
+        "__TITLE__": escape(f"BSFS benchmark report: {run_id}"),
         "__RUN_ID__": escape(run_id),
         "__STATUS__": escape(status),
         "__STATUS_CLASS__": status_class,
@@ -374,8 +373,7 @@ def render_report(
         "__OVERRIDES__": escape(overrides),
         "__REPORT_DATA__": payload,
     }
-    # single pass so a substituted value never gets rescanned for a later
-    # marker; longest first so no marker gets shadowed by a prefix of itself
+    # single pass so substituted values never get rescanned, longest first so no marker is shadowed by a prefix
     pattern = "|".join(
         re.escape(marker)
         for marker in sorted(replacements, key=len, reverse=True)
@@ -566,7 +564,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     <div>
       <div class="eyebrow">BSFS benchmark analysis</div>
       <h1>__RUN_ID__</h1>
-      <p class="muted">A self-contained view of the run’s derived results.</p>
+      <p class="muted">A self-contained view of the run's derived results.</p>
     </div>
     <div class="hero-actions">
       <div class="__STATUS_CLASS__">__STATUS__</div>
@@ -601,13 +599,13 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
 
   <section aria-labelledby="comparisons-title">
     <h2 id="comparisons-title">Metric comparisons</h2>
-    <p class="muted">Bars show medians and whiskers show the observed minimum–maximum range. Durable measurements include the final flush. No combined filesystem score is calculated.</p>
+    <p class="muted">Bars show medians and whiskers show the observed minimum to maximum range. Durable measurements include the final flush. No combined filesystem score is calculated.</p>
     <div class="chart-tools">
       <div class="segmented">
         <span id="sort-label">Bar order</span>
         <span class="segmented-track" role="group" aria-labelledby="sort-label">
           <button id="sort-value" type="button" aria-pressed="true">By value</button>
-          <button id="sort-name" type="button" aria-pressed="false">A–Z</button>
+          <button id="sort-name" type="button" aria-pressed="false">A-Z</button>
         </span>
       </div>
       <div class="tool-actions">
@@ -674,7 +672,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   }
 
   function formatValue(value) {
-    if (value === null || value === undefined || value === "") return "—";
+    if (value === null || value === undefined || value === "") return "-";
     if (typeof value !== "number") return String(value);
     // pinned to en-US so a decimal comma doesn't get misread as a thousands separator
     const magnitude = Math.abs(value);
@@ -788,8 +786,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     );
     const maximum = observed > 0 ? observed : 1;
     const percent = (value) => `${Math.min(100, Math.max(0, (value / maximum) * 100))}%`;
-    // w1 · aggregate on every row of a non-concurrency chart is pure noise, so
-    // the qualifier only appears when it actually distinguishes the bars
+    // "w1 · aggregate" on every row of a non-concurrency chart is noise, so only show it when it tells bars apart
     const qualified = new Set(values.map((row) => `${row.worker_count}/${row.worker_id}`)).size > 1;
 
     const list = element("ol", "bars");
@@ -798,7 +795,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       const minimum = Number.isFinite(row[minimumField]) ? row[minimumField] : median;
       const observedMaximum = Number.isFinite(row[maximumField]) ? row[maximumField] : median;
       const item = element("li", "bar-row");
-      item.title = `${row.filesystem} · workers=${row.worker_count} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)}–${formatValue(observedMaximum)} ${unit}`;
+      item.title = `${row.filesystem} · workers=${row.worker_count} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)} to ${formatValue(observedMaximum)} ${unit}`;
 
       const label = element("span", "bar-name", String(row.filesystem));
       if (qualified) {
@@ -808,8 +805,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       const fill = element("span", "bar-fill");
       fill.style.width = percent(median);
       track.append(fill);
-      // a single-repetition row has min == max == median, and a zero-width
-      // whisker there is a smudge on the bar rather than a range
+      // single repetition means min == max == median, and a zero-width whisker is just a smudge
       if (observedMaximum > minimum) {
         const range = element("span", "bar-range");
         range.style.left = percent(minimum);
@@ -933,8 +929,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   }
 
   function setAllOpen(open) {
-    // both levels at once: a scenario opened with its phases still shut would
-    // make "expand all" look like it did nothing
+    // both levels at once, or a scenario opening with its phases shut makes "expand all" look broken
     document.querySelectorAll("#scenario-groups details").forEach((node) => {
       node.open = open;
     });

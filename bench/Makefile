@@ -1,6 +1,6 @@
 CC ?= cc
 
-# Only targets that link the old userspace implementation need its source tree.
+# only targets linking the old userspace code need its source tree
 ifeq ($(strip $(OLD_BSFS_DIR)),)
 ifneq ($(filter-out clean bin/bench-posix,$(or $(MAKECMDGOALS),all)),)
 $(error OLD_BSFS_DIR is required; pass OLD_BSFS_DIR=/absolute/path/to/bsfs_old)

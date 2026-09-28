@@ -1,14 +1,9 @@
 """
-Default random mixed workload scenario: 70% allocation / 30% deallocation.
+Default mixed workload, 70% alloc / 30% dealloc.
 
-Workload:
-- each operation the RNG decides with probability 0.7 whether to allocate or deallocate.
-- deallocations randomly select blocks from the currently allocated list.
-- when the bitmap is nearly full, deallocation is forced to keep the cycle going.
-
-Usage:
-- used by `BenchmarkRunner.run_stress` with a fixed seed of 42 and `blocks_per_alloc=2560`.
-- `show_summary=True` prints a detailed results table; `show_progress=True` shows a progress indicator.
+Each op allocates with p=0.7, otherwise frees random blocks from the allocated list. Near full,
+dealloc is forced so the loop keeps going. `BenchmarkRunner.run_stress` uses it with seed 42 and
+`blocks_per_alloc=2560`. `show_summary` prints a results table, `show_progress` a progress line.
 """
 
 from __future__ import annotations

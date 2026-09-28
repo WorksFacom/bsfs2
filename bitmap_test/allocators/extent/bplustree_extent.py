@@ -1,20 +1,13 @@
 """
-B+tree allocator with extent-first allocation and max_size augmentation.
+B+tree extent allocator with max_size augmentation.
 
-Free space is a set of disjoint ranges held in a B+tree keyed by `start`. Data
-(the `(start, end)` ranges) lives only in the leaves, which are doubly linked for
-O(1) in-order traversal; internal nodes hold separator keys only. Each node is
-augmented with `max_size` = the largest range size in its subtree, enabling
-contiguous-fit search. This mirrors the general-purpose-filesystem design (e.g.
-XFS keeps free extents in B+trees) — shallow high-fanout trees with linked leaves
-give good cache behavior and locality-friendly scans.
+Free ranges `(start, end)` live only in the leaves of a B+tree keyed by `start`. Leaves are doubly
+linked and internal nodes hold separators only. Every node carries `max_size`, the largest range
+in its subtree, for contiguous-fit search. Same shape XFS uses for free extents: shallow, high
+fanout, linked leaves, so it is cache friendly and scans well.
 
-The allocation policy (best-fit extent, then lowest-address scatter fallback,
-with coalescing on free) lives in `RangeExtentAllocator`; this module only
-provides the B+tree operations behind the structure hooks.
-
-`max_size` is maintained by recomputing affected nodes on each split / borrow /
-merge and propagating up to the root after every insert and delete.
+Policy lives in `RangeExtentAllocator`; this module only implements the structure hooks.
+`max_size` is recomputed on each split/borrow/merge and propagated up after every insert and delete.
 """
 
 import bisect
@@ -24,7 +17,7 @@ from .extent_base import RangeExtentAllocator
 
 
 class BPRangeNode:
-    """B+tree node. Leaves store parallel keys/ends; internals store keys/children."""
+    """Leaves hold parallel keys/ends, internal nodes hold keys/children."""
 
     __slots__ = ("is_leaf", "keys", "ends", "children", "parent", "next", "prev", "max_size")
 
@@ -41,8 +34,6 @@ class BPRangeNode:
 
 @register("bplustree_extent", display_name="B+Tree Extent-First")
 class BitmapBPlusTreeExtent(RangeExtentAllocator):
-    """Bitmap allocator using a B+tree of free ranges (extent-first)."""
-
     ORDER = 64  # max keys/entries per node (even); min fill = ORDER // 2
 
     def _init_structure(self, size):
@@ -56,14 +47,13 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         self.root = root
 
     # ------------------------------------------------------------------
-    # Augmentation helpers
+    # augmentation helpers
     # ------------------------------------------------------------------
 
     @staticmethod
     def _recompute_node(node):
-        # Manual loops instead of max(generator): this is the hottest call on
-        # dealloc-heavy workloads, and the generator + max() builtin overhead
-        # dominated the profile.
+        # manual loops instead of max(generator). hottest call on dealloc-heavy workloads and the
+        # generator + max() overhead dominated the profile.
         if node.is_leaf:
             keys = node.keys
             ends = node.ends
@@ -81,11 +71,10 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
             node.max_size = m
 
     def _recompute_path(self, node):
-        """Propagate up, stopping once a node's max_size is unchanged.
+        """Propagate up, stopping at the first node whose max_size didn't change.
 
-        Correct only when `node` has *not* been pre-recomputed (otherwise the
-        change is masked); callers on the structural-rebalance path that
-        pre-recompute their start node use `_recompute_path_full` instead.
+        Only correct if `node` wasn't recomputed beforehand, since that hides the change. Rebalance
+        paths that pre-recompute their start node use `_recompute_path_full`.
         """
         while node:
             old = node.max_size
@@ -95,7 +84,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
             node = node.parent
 
     def _recompute_path_full(self, node):
-        """Unconditional propagation to the root (used after rebalancing)."""
+        """Propagate all the way to the root, used after rebalancing."""
         while node:
             self._recompute_node(node)
             node = node.parent
@@ -108,7 +97,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         raise ValueError("child not found in parent")
 
     # ------------------------------------------------------------------
-    # Navigation
+    # navigation
     # ------------------------------------------------------------------
 
     def _find_leaf(self, start):
@@ -125,7 +114,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         return node
 
     # ------------------------------------------------------------------
-    # Structure hooks
+    # structure hooks
     # ------------------------------------------------------------------
 
     def _find_best_fit(self, count):
@@ -184,7 +173,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         return None
 
     # ------------------------------------------------------------------
-    # Insertion
+    # insertion
     # ------------------------------------------------------------------
 
     def _insert_range(self, start, end):
@@ -193,10 +182,9 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         leaf.keys.insert(i, start)
         leaf.ends.insert(i, end)
 
-        # max_size can only grow on insert, so propagate the new size up,
-        # stopping at the first ancestor that already covers it (size-1 frees
-        # stop at the leaf). A split preserves the subtree's range set, so it
-        # only needs the local recomputes done in `_split_if_needed`.
+        # max_size only grows on insert, so push the new size up and stop at the first ancestor that
+        # already covers it (size-1 frees stop at the leaf). a split keeps the subtree's range set, so
+        # the local recomputes in `_split_if_needed` are enough.
         sz = end - start + 1
         node = leaf
         while node is not None and sz > node.max_size:
@@ -255,7 +243,7 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         self._split_if_needed(parent)
 
     # ------------------------------------------------------------------
-    # Deletion
+    # deletion
     # ------------------------------------------------------------------
 
     def _delete_range(self, start):
@@ -268,14 +256,13 @@ class BitmapBPlusTreeExtent(RangeExtentAllocator):
         leaf.ends.pop(i)
 
         if len(leaf.keys) >= self.min_keys or leaf is self.root:
-            # No structural change. max_size can only have shrunk, and only if
-            # we removed a maximal entry; otherwise nothing changes anywhere.
+            # no structural change. max_size can only shrink, and only if we removed a maximal entry.
             if removed_sz >= leaf.max_size:
                 self._recompute_node(leaf)
                 self._recompute_path(leaf.parent)
             return
 
-        # Underflow: borrow/merge, then propagate unconditionally to the root.
+        # underflow: borrow/merge, then propagate all the way to the root
         self._recompute_node(leaf)
         self._rebalance_after_delete(leaf)
 

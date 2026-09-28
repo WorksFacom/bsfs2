@@ -1,11 +1,6 @@
 /**
- * @file file_operations_bsfs.c
- * @brief Implementation of file-level operations in the BSFS file system.
- *
- * This file provides functions to manipulate files, including opening,
- * closing, reading, writing, and seeking, by utilizing inodes and
- * B-tree-based address mapping. Files are loaded into memory as `file_t`
- * structures which manage stateful access.
+ * @file file.c
+ * @brief regular file operations, fsync and setattr.
  */
 #include "../include/file.h"
 #include "../include/inode.h"
@@ -14,21 +9,18 @@
 #include <linux/mm.h>
 #include <linux/writeback.h>
 
-// generic_file_fsync won't cut it.
-// btree nodes, the bitmap and the superblock are dirtied with mark_buffer_dirty.
-// they live in the bdev mapping rather than the inode's private buffer list.
-// sync_mapping_buffers never sees them
-// see `bsfs_write_inode`
+// not generic_file_fsync. btree nodes, bitmap and superblock live in the bdev mapping, not the
+// inode's buffer list, so sync_mapping_buffers never sees them. see bsfs_write_inode
 int bsfs_fsync(struct file *file, loff_t start, loff_t end, int datasync) {
   int ret, err;
 
   struct inode       *inode = file->f_mapping->host;
   struct super_block *sb    = inode->i_sb;
 
-  // data pages first. writeback allocates delalloc blocks, which dirties btree node BHs, the bitmap and the inode
+  // data first, delalloc writeback dirties btree nodes, the bitmap and the inode
   ret = file_write_and_wait_range(file, start, end);
 
-  // -> eventually calls `bsfs_write_inode` with WB_SYNC_ALL
+  // ends up in bsfs_write_inode with WB_SYNC_ALL
   err = sync_inode_metadata(inode, 1);
 
   if (!ret)
@@ -54,9 +46,8 @@ const struct file_operations bsfs_file_operations = {
     .fsync        = bsfs_fsync,
 };
 
-// VFS default truncate only updates i_size and the page cache. The on-disk extents
-// past the cut point survive, leak their blocks and read back as stale data once
-// the file is extended again. bsfs_truncate works off i_size, so set it first.
+// the default only touches i_size and the page cache, so old spans leak and read back as stale data
+// on extend. bsfs_truncate works off i_size, so set it first.
 static int bsfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *attr) {
   struct inode *inode = d_inode(dentry);
   int           error;

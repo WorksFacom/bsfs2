@@ -22,9 +22,8 @@ static void bsfs_put_super(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
   bsfs_reclaim_stats_unmount(sb);
-  // sbi->super points inside sbi->bh; there is nothing to free separately.
-  // The commit does the writing, in the right order - dirtying the buffer and
-  // syncing it here first would push the roots out ahead of their trees.
+  // sbi->super lives inside sbi->bh, nothing to free. the commit writes it after the trees;
+  // syncing here first would push the roots out ahead of the trees they point at.
   mark_buffer_dirty(sbi->bh);
   (void)bsfs_commit_deferred_frees(sb);
 
@@ -39,28 +38,20 @@ static void bsfs_put_super(struct super_block *sb) {
 }
 
 /*
- * The superblock buffer carries the tree roots (inode_root, recovery_root), so
- * a sync(2) has to push it out; without this it only reached the disk at
- * unmount time.
+ * the superblock holds the tree roots, so sync(2) has to write it. otherwise it only hits disk at unmount.
  */
 static int bsfs_sync_fs(struct super_block *sb, int wait) {
   if (!wait)
     return 0;
 
-  // A commit point: the VFS has already written the inodes back, so the barrier
-  // inside the commit covers every root and the blocks copy-on-write replaced
-  // can finally be reused. It writes sbi->bh itself, after the trees.
+  // commit point. vfs already wrote the inodes back, so the commit barrier covers every root
+  // and cow-replaced blocks can be reused. writes sbi->bh itself, after the trees.
   return bsfs_commit_deferred_frees(sb);
 }
 
 /*
- * Without this, df(1) and statfs(2) report nothing for a bsfs mount, which also
- * makes it awkward to test running out of space. Blocks still parked as
- * deferred frees are counted as used, since that is what they are until the
- * next commit point.
- *
- * f_bavail excludes the metadata reserve: that is space unprivileged writes
- * genuinely cannot have.
+ * deferred frees count as used, they are until the next commit point.
+ * f_bavail leaves out the metadata reserve since unprivileged writes can't have it.
  */
 static int bsfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
   struct super_block     *sb  = dentry->d_sb;
@@ -123,21 +114,19 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
     goto out_bad_sb;
   }
 
-  // sbi->super points DIRECTLY at the superblock buffer: whoever changes a
-  // field (e.g. inode_root after a split) only needs mark_buffer_dirty(sbi->bh).
-  // With a kzalloc'd copy those changes never reached the disk.
+  // sbi->super points straight into the buffer, so changing a field (say inode_root after a
+  // split) only needs mark_buffer_dirty(sbi->bh). a kzalloc'd copy never reached disk.
   bsfs_super = (struct bsfs_super_block *)bh->b_data;
   sbi->super = bsfs_super;
   sbi->bh    = bh;
   s->s_magic = bsfs_super->magic_number;
 
-  // check exact data location - magic_number is first member
+  // magic_number is the first member
   if (*(__u32 *)(bh->b_data) != MAGIC_NUMBER) {
     pr_err("magic number doesn't match");
     goto out_no_fs;
   }
 
-  // Allocate bitmap to keep the superblock small
   ret = load_bitmap(s);
 
   if (ret)
@@ -154,7 +143,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   bsfs_rec_tree_mount_init(s);
 
-  /* set up enough so that it can read an inode */
+  /* just enough to read an inode */
   s->s_op       = &bsfs_sops;
   s->s_time_min = 0;
   s->s_time_max = U32_MAX;
@@ -179,9 +168,7 @@ out_no_root:
     printk("BSFS: get root inode failed\n");
 
 out_freemap:
-  // load_bitmap() pins one buffer head per bitmap block and can fail halfway
-  // through; release_bitmap() copes with a partial load. Without this every
-  // failed mount leaked all of them.
+  // load_bitmap() pins a bh per bitmap block and can fail halfway, release_bitmap() handles a partial load
   bsfs_alloc_strategy_destroy(s);
   release_bitmap(s);
   goto out_release;
@@ -214,8 +201,7 @@ static int bsfs_get_tree(struct fs_context *fc) {
 
 static const struct fs_context_operations bsfs_context_ops = {
     .get_tree = bsfs_get_tree,
-    // TODO
-    // .reconfigure = bsfs_reconfigure
+    // TODO: .reconfigure = bsfs_reconfigure
 };
 
 static int bsfs_init_fs_context(struct fs_context *fc) {

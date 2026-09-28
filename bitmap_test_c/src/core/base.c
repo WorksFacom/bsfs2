@@ -29,7 +29,7 @@ static int cmp_long(const void *a, const void *b) {
 
 bool allocator_validate_deallocation(allocator *self, const long *indices, long n) {
     if (n <= 0) {
-        return true; /* empty set: len(set)==len==0, loop body never rejects */
+        return true; /* empty: nothing to reject */
     }
 
     /* duplicate check: len(set(indices)) != len(indices) */

@@ -1,11 +1,11 @@
-# Bitmap Allocators Benchmark Suite — C port
+# Bitmap allocators benchmark suite em C
 
-Port em C do framework Python `km/bitmap_test/`: uma suíte de benchmark que
-compara estratégias de alocação de blocos sobre um bitmap (modelo: disco
-250 GiB / página 4 KiB → 65.536.000 blocos, 1 bit por página).
+Port em C do benchmark Python `km/bitmap_test/`, que compara estratégias de
+alocação de blocos sobre um bitmap (modelo: disco 250 GiB / página 4 KiB →
+65.536.000 blocos, 1 bit por página).
 
-A implementação segue fielmente a lógica do Python (`core`, `allocators`,
-`scenarios`, `runners`). As divergências intencionais estão listadas no fim.
+Segue a lógica do Python (`core`, `allocators`, `scenarios`, `runners`). As
+divergências intencionais estão no fim.
 
 ## Build
 
@@ -66,29 +66,29 @@ Cada alocador embute `allocator base;` como primeiro membro e preenche a vtable
 - `scatter`: todas as 12 estratégias scatter produzem bitmap idêntico ao
   `baseline` (sempre os N menores índices livres).
 - `extent_bestfit_lowaddr`: `treap_range_extent`, `rb_range_extent`,
-  `bplustree_extent` — best-fit + fallback de menor endereço.
+  `bplustree_extent`, best-fit + fallback de menor endereço.
 - `extent_bestfit_largest`: `avl_range_extent` (fallback de maior intervalo).
 
 ## Divergências intencionais em relação ao Python
 
-1. **RNG.** Em vez do Mersenne Twister do CPython, usa-se um PRNG determinístico
+1. RNG: em vez do Mersenne Twister do CPython, usa-se um PRNG determinístico
    próprio (SplitMix64) preservando a *estrutura* das cargas (thresholds
    0.7/0.8/0.95, amostragem sem reposição, ordem das chamadas). Números
    absolutos e os CSVs diferem do Python, mas, para uma mesma seed, todas as
    estratégias veem a mesma carga, mantendo válida a comparação entre elas.
    Consequência: o `peak_memory_kib` e os tempos não são comparáveis ao Python.
 
-2. **peak_memory_kib.** O Python usa `sys.getsizeof` (específico de objetos
+2. `peak_memory_kib`: o Python usa `sys.getsizeof` (específico de objetos
    Python). Aqui calcula-se a memória auxiliar real em C (nº de nós × `sizeof`).
 
-3. **hybrid (sift_down).** O `_sift_down` do `hybrid_heap_rb.py` tem um bug
+3. `hybrid` (`_sift_down`): o `_sift_down` do `hybrid_heap_rb.py` tem um bug
    latente (compara contra um valor obsoleto do heap em vez da chave que
    desce), que pode quebrar a propriedade do heap e, sob certas cargas, retornar
-   um mínimo incorreto. O port implementa o min-heap **correto** que o autor
+   um mínimo incorreto. O port implementa o min-heap correto que o autor
    pretendia, para que `hybrid` permaneça consistente com o `baseline` em
    qualquer RNG. Ver o comentário em `src/allocators/scatter/hybrid.c`.
 
-4. **Extents lowaddr.** Os três alocadores `*_range_extent`/`*_extent` de menor
+4. Extents lowaddr: os três alocadores `*_range_extent`/`*_extent` de menor
    endereço são definidos para produzir bitmaps idênticos (mesma política; só
    muda a estrutura interna: treap/RB/B+tree). Para manter o port tratável, os
    três compartilham uma única implementação fiel de *treap de ranges com

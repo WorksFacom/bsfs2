@@ -1,6 +1,5 @@
 /*
- * Factory declarations for every allocator. Each concrete allocator module
- * provides a `*_create(long size)` returning an `allocator *`.
+ * one `*_create(long size)` factory per allocator, each returning an `allocator *`.
  */
 #ifndef ALLOCATORS_H
 #define ALLOCATORS_H

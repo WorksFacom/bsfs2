@@ -1,8 +1,8 @@
 # BSFS
 
-BSFS (Basic Solution File System) is an educational, userspace file system that stores its data inside a regular file or directly on a block device. The project ships a formatter (`mkfs.bsfs`) that initializes the on-disk layout and an interactive browser that exposes a shell-like interface for exercising core file, directory, recovery, and permission operations. Its standout capability is a built-in recovery subsystem that retains deleted files and lets you restore them selectively.
+BSFS (Basic Solution File System) is an educational, userspace file system that stores its data in a regular file or directly on a block device. It comes with a formatter (`mkfs.bsfs`) that writes the on-disk layout and an interactive browser with a shell-like interface for file, directory, recovery and permission operations. Deleted files go into a recovery tree and can be restored one by one.
 
-A more comprehensive documentation about the code is online [here](https://facom.ufms.br/~brivaldo/bsfs/).
+More detailed code documentation is online [here](https://facom.ufms.br/~brivaldo/bsfs/).
 
 ## Requirements
 
@@ -10,19 +10,19 @@ A more comprehensive documentation about the code is online [here](https://facom
 - `gcc` (or compatible C compiler)
 - `make`
 
-## Instalation
+## Installation
 
 1. Clone the repository and enter the project directory.
 2. Clean any previous build artifacts: `make clean`
 3. Build the formatter and browser binaries: `make`
 
-Build outputs are placed in `bin/`. `make` produces `bin/mkfs_bsfs`, creates a convenience alias `bin/mkfs.bsfs`, and emits the interactive `bin/browser` binary.
+Binaries go in `bin/`. `make` builds `bin/mkfs_bsfs`, an alias `bin/mkfs.bsfs`, and the interactive `bin/browser`.
 
 ## Usage
 
-After compiling the project you can format a file-backed image (or even a block device) and explore it through the BSFS browser. The sections below walk through both steps.
+Format a file-backed image (or a block device), then explore it with the BSFS browser.
 
-### Formating
+### Formatting
 
 1. Create an empty image whose size is a multiple of 4096 bytes. Example for an 8 MiB image:
    ```sh
@@ -32,26 +32,26 @@ After compiling the project you can format a file-backed image (or even a block 
    ```sh
    ./bin/mkfs.bsfs bsfs.img
    ```
-   The formatter writes the superblock, initializes the block bitmap, seeds inode and directory B-trees, and creates the root directory entries.
-3. Alternatively, you may format a raw block device (for example a disk partition such as `/dev/sdaX`). Make sure the target device is unmounted and that you have selected the correct path before running:
+   This writes the superblock, the block bitmap, the inode and directory B-trees, and the root directory entries.
+3. You can also format a raw block device, such as a partition like `/dev/sdaX`. Check that it is unmounted and that the path is right first:
    ```sh
    sudo ./bin/mkfs.bsfs /dev/sdaX
    ```
-   This performs the same initialization in-place on the device.
+   This does the same thing in place on the device.
 
 ### Browser
 
-Launch the interactive browser, pointing it at the formatted image or device:
+Start the browser on the formatted image or device:
 ```sh
 ./bin/browser bsfs.img
 ```
 
-To inspect a formatted partition directly, pass the device path instead of a file:
+For a partition, pass the device path instead of a file:
 ```sh
 sudo ./bin/browser /dev/sdaX
 ```
 
-While inside the browser you can use the commands listed below (this matches the built-in `help` output). The recovery flow (`rm`, `recovery`, `restore`, `purge`) showcases the filesystem's flagship feature: deleted entries are staged into a recovery B-tree and can be restored by name or ID.
+The browser accepts the commands below, the same list `help` prints. `rm` moves entries into a recovery B-tree, `recovery` lists them, `restore` brings one back by name or ID, and `purge` drops them for good.
 ```text
 BSFS Browser Commands:
 ======================
@@ -96,7 +96,7 @@ Recovery:
   exit               - Exit the BSFS browser
 ```
 
-Exit the browser with `exit`. For automated demos you can pipe commands through `stdin`, for example:
+Leave with `exit`. For scripted demos, pipe commands through `stdin`:
 ```sh
 cat <<'CMDS' | ./bin/browser bsfs.img
 info
@@ -113,4 +113,4 @@ exit
 CMDS
 ```
 
-To generate API documentation with Doxygen, run `doxygen Doxyfile` from the project root. The HTML output is written to `docs/html` and LaTeX sources to `docs/latex`.
+For API docs, run `doxygen Doxyfile` from the project root. HTML goes to `docs/html` and LaTeX to `docs/latex`.

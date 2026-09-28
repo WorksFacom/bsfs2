@@ -1,15 +1,9 @@
 """
-Pareto workload scenario: 80% allocation / 20% deallocation.
+Pareto workload, 80% alloc / 20% dealloc.
 
-Workload:
-- each operation the RNG decides with probability 0.8 whether to allocate or deallocate.
-- allocated blocks are tracked in a list; deallocations pick a random sample from that list.
-- when the bitmap is nearly full (free blocks ≤ `blocks_per_alloc`), deallocation is forced.
-
-Parameters:
-- `blocks_per_alloc`: fixed block count for both allocations and deallocations.
-- `num_operations`: total operation count (alloc + dealloc mix).
-- `seed`: RNG seed for reproducibility across strategies.
+Each op allocates with p=0.8, otherwise frees a random sample of the allocated list. Once free
+blocks drop to `blocks_per_alloc` or below, the op is forced to dealloc. `blocks_per_alloc` is
+the size of both allocs and deallocs; `seed` keeps the workload identical across strategies.
 """
 
 from __future__ import annotations

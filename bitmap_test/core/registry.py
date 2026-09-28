@@ -1,15 +1,10 @@
 """
-Global strategy registry for allocator classes.
+Global strategy registry.
 
-Design:
-- each allocator registers itself via the `@register(key, display_name)` decorator in its own module.
-- the registry is a module-level dict `_REGISTRY` mapping `key → StrategySpec`.
-- `list_strategies` and `iter_strategies` return strategies sorted by key,
-  ensuring deterministic ordering in listings and reports.
-
-Typical usage:
-- `allocators/__init__.py` imports all strategy modules (triggering their decorators),
-  then calls `iter_strategies()` to build `STRATEGY_SPECS`.
+Each allocator module registers itself with `@register(key, display_name)`, which fills
+`_REGISTRY` (key -> StrategySpec). `list_strategies` and `iter_strategies` sort by key so
+listings and reports are deterministic. `allocators/__init__.py` imports every strategy
+module to trigger the decorators, then builds `STRATEGY_SPECS` from `iter_strategies()`.
 """
 
 from __future__ import annotations
@@ -29,7 +24,7 @@ _REGISTRY: Dict[str, StrategySpec] = {}
 
 
 def register(key: str, display_name: str | None = None):
-    """Decorator to register allocator classes by strategy key."""
+    """Register an allocator class under a strategy key."""
 
     def _decorator(cls):
         spec = StrategySpec(

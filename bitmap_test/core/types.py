@@ -1,11 +1,10 @@
 """
-Lightweight shared types used by scenarios and runners.
+Small shared types for scenarios and runners.
 
-Exported types:
-- `AllocatorFactory` — callable `(int) → allocator`, used to instantiate allocators by bitmap size.
-- `MetricsDict` — alias for `Dict[str, float]`, the result type of any scenario run.
-- `ScenarioResult` — immutable wrapper around the metrics dict.
-- `StrategyDescriptor` — named tuple with `key`, `allocator_class`, and `name` as used by the registry.
+- `AllocatorFactory`: `(int) -> allocator`, builds an allocator for a bitmap size.
+- `MetricsDict`: `Dict[str, float]`, what every scenario run returns.
+- `ScenarioResult`: immutable wrapper around a metrics dict.
+- `StrategyDescriptor`: named tuple of `key`, `allocator_class`, `name`, as the registry uses.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@
 # The strategy is a compile-time choice (see BSFS_ALLOC in the Makefile), so
 # "does the new allocator break anything" cannot be answered by one boot: the
 # module has to be rebuilt per strategy and the suite replayed. That is all this
-# does - rebuild, run every guest script, and print the grid.
+# does: rebuild, run every guest script, and print the grid.
 #
 # Counters are compiled in (BSFS_ALLOC_STATS=y) so tests/alloc_guest.sh can
 # check that the strategy is actually engaged. Pass BSFS_ALLOC_STATS= to
@@ -98,7 +98,7 @@ run_cell() {
   esac
 
   # A memory error can leave every assertion passing, so the log is checked
-  # separately - a KASAN report is a failure whatever the test concluded.
+  # separately. A KASAN report is a failure whatever the test concluded.
   if [ -f "$log" ] && grep -qE 'BUG: KASAN|general protection fault|kernel BUG at|Unable to handle kernel' "$log"; then
     results["$strategy/$name"]=KASAN
     notes["$strategy/$name"]=$(grep -m1 -E 'BUG: KASAN|general protection fault|kernel BUG at|Unable to handle kernel' "$log" | tr -d '\r')

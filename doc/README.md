@@ -1,20 +1,20 @@
 # Documentation
 
-The source code documentation is configured for use with Doxygen.
+The source documentation is built with Doxygen.
 
-## Generate Documentation
+## Generate documentation
 
-Make sure Doxygen is installed, them run:
+With Doxygen installed, run:
 
 ```bash
 $ doxygen
 ```
 
-(This command assumes the configuration file is named `Doxyfile`)
+This assumes the config file is named `Doxyfile`.
 
-## View the Documentation
+## View the documentation
 
-After generation, open the following file in your web browser:
+Open this file in a browser:
 
 ```
 docs/html/index.html

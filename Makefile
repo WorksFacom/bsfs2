@@ -1,15 +1,13 @@
-# Which block-allocation strategy to compile in. Exactly one src/alloc_<name>.c
-# is linked; see include/alloc_strategy.h for the interface they implement.
+# picks the allocator. exactly one src/alloc_<name>.c gets linked, interface in include/alloc_strategy.h.
 #
-#   make                            # linear scan, the historical behaviour
-#   make BSFS_ALLOC=heap            # min-heap of recycled blocks
-#   make BSFS_ALLOC=heap BSFS_ALLOC_STATS=y   # ... plus the unmount counters
+#   make                                      # linear scan, the original
+#   make BSFS_ALLOC=heap                      # min-heap of recycled blocks
+#   make BSFS_ALLOC=heap BSFS_ALLOC_STATS=y   # plus the unmount counters
 #
-# Changing either flag changes -D on every object, so kbuild rebuilds the whole
-# module on its own - no `make clean` needed to switch strategies.
+# either flag changes -D on every object, so kbuild rebuilds by itself. no `make clean` needed.
 
 ifneq ($(KERNELRELEASE),)
-# kbuild pass: BSFS_ALLOC and BSFS_ALLOC_STATS arrive exported from the pass below.
+# kbuild pass, BSFS_ALLOC and BSFS_ALLOC_STATS are exported by the pass below
 
 BSFS_ALLOC ?= linear
 
@@ -17,7 +15,6 @@ bsfs2-src-objs := \
 	alloc.o \
 	alloc_$(BSFS_ALLOC).o \
 	bitmap.o \
-	bspan_queue.o \
 	btree.o \
 	dir.o \
 	dirent.o \
@@ -35,10 +32,9 @@ ccflags-y += -DBSFS_ALLOC_STRATEGY_NAME=\"$(BSFS_ALLOC)\"
 ccflags-y += $(if $(BSFS_ALLOC_STATS),-DBSFS_ALLOC_STATS)
 
 else
-# KDIR comes from local.mk (the same file start_qemu.sh / tests/smoke.sh source),
-# falling back to the running kernel's build tree. BSFS_ALLOC can be pinned
-# there too, so the QEMU flow does not have to repeat it on every build.
-# it must parse as both sh and make: plain VAR=value, no quotes, ${HOME} not $HOME.
+# KDIR and optionally BSFS_ALLOC come from local.mk (also sourced by start_qemu.sh and tests/smoke.sh),
+# else the running kernel's build tree. local.mk must parse as sh and make, so plain VAR=value,
+# no quotes, ${HOME} not $HOME.
 -include local.mk
 KDIR ?= /lib/modules/$(shell uname -r)/build
 export KDIR
@@ -47,7 +43,7 @@ BSFS_ALLOC ?= linear
 export BSFS_ALLOC BSFS_ALLOC_STATS
 
 ifeq ($(wildcard src/alloc_$(BSFS_ALLOC).c),)
-  $(error unknown BSFS_ALLOC='$(BSFS_ALLOC)' - no src/alloc_$(BSFS_ALLOC).c. \
+  $(error unknown BSFS_ALLOC='$(BSFS_ALLOC)', no src/alloc_$(BSFS_ALLOC).c. \
     Available: $(patsubst src/alloc_%.c,%,$(wildcard src/alloc_*.c)))
 endif
 

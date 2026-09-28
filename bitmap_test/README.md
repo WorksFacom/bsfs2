@@ -1,6 +1,6 @@
-# Bitmap Allocators Benchmark Suite
+# Bitmap allocators benchmark suite
 
-Suíte de benchmark para comparar estratégias de alocação de blocos em bitmap com arquitetura modular (`core`, `allocators`, `scenarios`, `runners`).
+Benchmark que compara estratégias de alocação de blocos em bitmap. Dividido em `core`, `allocators`, `scenarios` e `runners`.
 
 ## Quick start
 
@@ -63,7 +63,7 @@ python run.py --validate
 python run.py --validate --validate-bitmap-size 1000000
 ```
 
-## Benchmark estatístico (robusto)
+## Benchmark estatístico
 
 Dois modos separados:
 
@@ -75,10 +75,10 @@ Cenário médio padrão:
 - bloco = 4 KiB
 - 2560 blocos por arquivo
 - 256.000 blocos alvo
-- bitmap fixo (simulação de disco) = **65.536.000 páginas/bits**
-  - disco: **250 GiB**
-  - página: **4 KiB**
-  - mapeamento: **1 bit por página**
+- bitmap fixo (simulação de disco) = 65.536.000 páginas/bits
+  - disco: 250 GiB
+  - página: 4 KiB
+  - mapeamento: 1 bit por página
 
 Exemplos:
 
@@ -112,11 +112,11 @@ Artefatos gerados:
   - fórmula: `(total_occupied_blocks - contiguous_segments) / total_occupied_blocks`
   - `total_occupied_blocks`: total de bits `1` no bitmap
   - `contiguous_segments`: número de sequências contíguas de bits `1`
-  - interpretação: **quanto maior, melhor** (mais contíguo, menos fragmentado); valores menores indicam maior fragmentação.
+  - interpretação: quanto maior, melhor (mais contíguo, menos fragmentado).
 
 ## Estratégias disponíveis
 
-As estratégias são registradas automaticamente por decorator (`@register`) em `allocators/` e expostas no CLI:
+Cada estratégia se registra via `@register` em `allocators/` e aparece no CLI:
 
 `baseline`, `needle`, `avl`, `avl_range`, `rb`, `heap`, `btree`, `bplustree`, `hybrid`, `segtree`, `twolevel`, `treap`.
 
@@ -124,7 +124,7 @@ As estratégias são registradas automaticamente por decorator (`@register`) em 
 
 1. Novo allocator: implementar classe em `allocators/` herdando `BaseAllocator` e usar `@register("chave")`.
 2. Novo cenário: criar classe em `scenarios/` implementando `BenchmarkScenario`.
-3. Nova saída/fluxo: evoluir runners em `runners/`.
+3. Nova saída ou fluxo: mexer nos runners em `runners/`.
 
 ## Documentação por pasta
 

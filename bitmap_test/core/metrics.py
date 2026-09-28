@@ -1,15 +1,9 @@
 """
-Metrics aggregation helpers for benchmark results.
+Metrics aggregation for benchmark results.
 
-`build_stress_metrics`:
-- takes lists of allocation and deallocation times in microseconds and builds a dict with
-  ops/sec, average times, counts, and final bitmap state.
-- `fragmentation` is computed as `(total_frags - total_files) / total_frags`, where each
-  contiguous run of occupied blocks counts as one "file".
-
-`_calculate_fragmentation`:
-- linearly scans the bitmap counting contiguous occupied fragments.
-- returns 0.0 when no blocks are allocated.
+`build_stress_metrics` turns per-op alloc/dealloc times (us) into ops/sec, averages, counts
+and final bitmap state. Fragmentation is `(occupied - runs) / occupied`, where `runs` is the
+number of contiguous occupied runs. Closer to 1 is more contiguous; an empty bitmap is 0.0.
 """
 
 from __future__ import annotations
@@ -18,7 +12,7 @@ import sys
 
 
 def _calculate_fragmentation(bitmap):
-    """Calculate fragmentation ratio: (TotalFrag - TotalFiles) / TotalFrag"""
+    """(occupied - runs) / occupied. total_frags counts occupied blocks, total_files counts runs."""
     if not bitmap or bitmap.count(1) == 0:
         return 0.0
 
@@ -69,7 +63,7 @@ def build_stress_metrics(name, alloc_times_us, dealloc_times_us, bitmap_size, fr
 
 
 def measure_allocator_memory_kib(allocator):
-    """Measure auxiliary memory of allocator structures (excludes bitmap)."""
+    """Approximate aux memory of the allocator's structures via sys.getsizeof, bitmap excluded."""
     SKIP = {"bitmap", "size", "free_blocks_remaining"}
     total = 0
     for attr, val in vars(allocator).items():

@@ -1,26 +1,9 @@
 """
-Allocator with a lazy model using a min-heap for recycled blocks.
+Lazy min-heap allocator.
 
-Strategy idea:
-- use a min-heap for fast access to the smallest recycled block.
-- combine heap with fresh range (`next_fresh`) to avoid preloading all free
-  blocks into the heap.
-
-How `next_fresh` works:
-- points to the smallest index never allocated.
-- when the selected minimum free block is fresh, the cursor advances.
-- deallocated blocks do not return to fresh range; they go into the heap.
-
-Allocation:
-- picks the smallest free index between heap top (recycled) and
-  `next_fresh` (never-used blocks).
-- when using `next_fresh`, advances cursor; when using recycled block, pops
-  from heap.
-- marks each selected index as occupied in the bitmap.
-
-Deallocation:
-- validates indices, marks blocks as free in the bitmap, and pushes indices
-  into the min-heap for reuse.
+Recycled indices go into a min-heap. `next_fresh` covers never-used blocks, so the heap never has
+to be preloaded with every free block. Allocation takes the smaller of heap top and `next_fresh`,
+popping or advancing. Frees push onto the heap and never move the cursor.
 """
 
 import heapq
@@ -30,10 +13,7 @@ from core import BaseAllocator, register
 
 @register("heap", display_name="Min-Heap")
 class BitmapHeap(BaseAllocator):
-    """Min-Heap indexed Bitmap Allocator"""
-    
     def __init__(self, size):
-        """Initialize lazy free-tracking structures."""
         super().__init__(size)
         self.heap = []
         self.next_fresh = 0
@@ -52,7 +32,7 @@ class BitmapHeap(BaseAllocator):
         return idx
     
     def allocate_blocks(self, count):
-        """Allocate count free blocks - O(count × log n)"""
+        """O(count log n)."""
         if count <= 0:
             return []
         if self.free_blocks_remaining < count:
@@ -68,7 +48,7 @@ class BitmapHeap(BaseAllocator):
         return allocated
     
     def deallocate_blocks(self, indices):
-        """Deallocate blocks - O(count × log n)"""
+        """O(count log n)."""
         if not self.validate_deallocation(indices):
             return False
 
@@ -78,5 +58,4 @@ class BitmapHeap(BaseAllocator):
         return True
     
     def count_free_blocks(self):
-        """Count free blocks"""
         return self.free_blocks_remaining

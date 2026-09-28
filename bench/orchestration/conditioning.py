@@ -29,7 +29,7 @@ class DeviceConditioner:
             ["wipefs", "--all", self.device], label="condition-wipe-signatures"
         )
         if self.discard_enabled:
-            # A failed discard aborts the run instead of mixing conditions.
+            # a failed discard aborts the run rather than mixing conditions
             self.runner.run(
                 ["blkdiscard", self.device], label="condition-discard-device"
             )

@@ -1,26 +1,18 @@
 /*
- * recovery.bsfs - userspace tool to inspect the BSFS recovery tree.
+ * recovery.bsfs, offline inspect/restore for the bsfs recovery tree.
  *
- * opens an unmounted BSFS image or block device and parses the on-disk recovery
- * B-tree of rec_entry_t records (keyed by recovery_id) defined in
- * include/bsfs_shared.h. that header is dual-mode (#ifdef __KERNEL__), so the same
- * struct layout the kernel and mkfs use gets reused here, and the whole thing runs
- * on the host with no kernel build or qemu reboot needed.
+ * reads an unmounted image or block device. include/bsfs_shared.h is dual-mode (#ifdef __KERNEL__) so the
+ * on-disk layout is shared with the kernel and mkfs, no kernel build or qemu needed.
+ * the kernel fills the tree with snapshots of deleted files at evict time.
  *
- * the kernel snapshots deleted files into the recovery tree during
- * unlink -> evict_inode. this lets an operator inspect those snapshots on an
- * UNMOUNTED image.
- *
- * subcommands:
  *   recovery.bsfs <img> list [name]   list recovery entries (optional name filter)
  *   recovery.bsfs <img> show <id>     show all fields of one entry by recovery_id
  *   recovery.bsfs <img> stats         summary: count, reclaimable size, age range
  *   recovery.bsfs <img> restore <id> [absolute-destination-directory]
  *
- * restore stays offline. it copy-on-writes metadata, makes allocations durable
- * before publishing the new roots in the superblock, then releases the replaced
- * metadata. the recovered data extent tree transfers straight to the new inode;
- * its blocks are never copied or freed.
+ * restore cow's the metadata, syncs allocations before publishing the new roots in the superblock,
+ * then frees what it replaced. the snapshot's span tree moves to the new inode as is, data blocks
+ * are never copied or freed.
  */
 #include "../include/bsfs_shared.h"
 #include <errno.h>
@@ -45,7 +37,7 @@ _Static_assert(sizeof(btree_node_t) == BSFS_BLOCK_SIZE, "B+ tree node layout mus
 #define BLKGETSIZE64 _IOR(0x12, 114, uint64_t)
 #endif
 
-/* every walk is bounded by this: a child pointer aimed at an ancestor is otherwise unbounded */
+/* bounds every walk, a child pointer aimed at an ancestor would loop forever */
 #define MAX_TREE_DEPTH 64
 
 /* ----- low level block IO ------------------------------------------------ */
@@ -97,7 +89,7 @@ static int validate_backing_size(FILE *img, const bsfs_super_block *sb) {
 
 /* ----- node layout helpers (must match kernel src/btree.c) --------------- */
 
-/* replicated from src/btree.c:compute_min_degree(), pure, no kernel deps. */
+/* copy of src/btree.c:compute_min_degree() */
 static int compute_min_degree(uint64_t entry_size) {
   int t = 2;
   while (1) {
@@ -357,8 +349,7 @@ static void txn_release_new(struct restore_txn *tx, uint32_t block) {
 }
 
 static int txn_retire(struct restore_txn *tx, uint32_t block) {
-  // a corrupt tree root pointing into the metadata region would otherwise get the superblock or a
-  // bitmap block handed back to the allocator at commit
+  // a corrupt root pointing at metadata would free the superblock or a bitmap block at commit
   if (block < tx->sb->data_block_start || block >= tx->sb->total_blocks) {
     fprintf(stderr, "refusing to release block %u from outside the data region\n", block);
     return -1;
@@ -381,8 +372,8 @@ static int tree_read(struct restore_txn *tx, const struct tree_desc *d, uint32_t
   uint32_t          max_entries = (uint32_t)(2 * d->min_degree - 1);
 
   *out = NULL;
-  // nodes only ever live in the data region; without the lower bound a corrupt btree_root would let
-  // the superblock or a bitmap block be parsed as a node, cloned, and then freed
+  // nodes only live in the data region. without the lower bound a corrupt btree_root gets the
+  // superblock or a bitmap block parsed, cloned and freed
   if (block < tx->sb->data_block_start || block >= tx->sb->total_blocks || !bitmap_is_set(tx->bitmap, block)) {
     fprintf(stderr, "%s tree references invalid/unallocated block %u\n", d->name, block);
     return -1;
@@ -560,8 +551,8 @@ static int tree_split_child(struct restore_txn *tx, const struct tree_desc *d, s
   uint32_t          left_block;
   size_t            size = d->entry_size;
 
-  // tree_read only bounds num_entries, not the fill invariant, so a corrupt node can reach this with
-  // no room for the separator; the shifts below would then write past the entry area
+  // tree_read only bounds num_entries, so a corrupt node may have no room for the separator and the
+  // shifts below would write past the entry area
   if (parent->raw.num_entries >= (uint32_t)(2 * d->min_degree - 1) || index >= parent->raw.num_entries + 1) {
     fprintf(stderr, "corrupt %s node block %u (cannot split child %u of %u)\n", d->name, parent->block, index,
             parent->raw.num_entries);
@@ -621,8 +612,7 @@ static int tree_insert_nonfull(struct restore_txn *tx, const struct tree_desc *d
     return -1;
   entries = tree_entries(node);
   if (node->raw.is_leaf) {
-    // the caller's pre-emptive split guarantees room, but a corrupt leaf can arrive already full and
-    // the shift below would run off the end of the entry area
+    // the pre-emptive split should leave room, but a corrupt leaf can already be full
     if (node->raw.num_entries >= (uint32_t)(2 * d->min_degree - 1)) {
       fprintf(stderr, "corrupt %s node block %u (insert into a full leaf)\n", d->name, block);
       goto out;
@@ -972,7 +962,7 @@ static int txn_commit(struct restore_txn *tx, const bsfs_super_block *new_sb) {
 
 /* ----- formatting -------------------------------------------------------- */
 
-/* format a POSIX timestamp as "YYYY-mm-dd HH:MM:SS", or "-" when zero. */
+/* "YYYY-mm-dd HH:MM:SS", "-" for zero */
 static void fmt_time(uint64_t ts, char *buf, size_t cap) {
   if (!buf || cap == 0)
     return;
@@ -982,17 +972,17 @@ static void fmt_time(uint64_t ts, char *buf, size_t cap) {
   }
   time_t    t = (time_t)ts;
   struct tm tm;
-  // a garbage timestamp off a damaged image makes localtime_r fail, which would leave tm uninitialised
+  // a garbage timestamp makes localtime_r fail and leaves tm uninitialised
   if (!localtime_r(&t, &tm) || strftime(buf, cap, "%Y-%m-%d %H:%M:%S", &tm) == 0)
     snprintf(buf, cap, "?");
 }
 
-/* file_type uses the kernel's live convention (src/inode.c): 0=DIR, 1=FILE. */
+/* kernel convention from src/inode.c, 0 is DIR and 1 is FILE */
 static const char *type_str(uint8_t file_type) {
   return file_type == 0 ? "DIR" : "FILE";
 }
 
-/* original_name comes straight off disk and a damaged record need not be NUL-terminated */
+/* off disk, may not be NUL terminated */
 static int name_len(const rec_entry_t *e) {
   return (int)strnlen(e->original_name, sizeof(e->original_name));
 }
@@ -1000,14 +990,12 @@ static int name_len(const rec_entry_t *e) {
 /* ----- recovery tree traversal ------------------------------------------- */
 
 /*
- * visitor invoked once per recovery entry, in ascending recovery_id order.
- * return nonzero to stop the traversal early (used by 'show').
+ * called per entry in recovery_id order, nonzero stops the walk.
  */
 typedef int (*rec_visit_fn)(const rec_entry_t *e, void *ctx);
 
 /*
- * recursive in-order walk of the recovery B-tree rooted at @block. returns 0
- * on success (full traversal or visitor-requested stop), -1 on a read error.
+ * returns 0 on a full walk or a visitor stop, -1 on a read error.
  */
 static int walk_rec(FILE *img, const bsfs_super_block *sb, uint32_t block, int t, rec_visit_fn visit, void *ctx,
                     unsigned depth) {
@@ -1042,11 +1030,11 @@ static int walk_rec(FILE *img, const bsfs_super_block *sb, uint32_t block, int t
   if (n->is_leaf) {
     for (uint32_t i = 0; i < n->num_entries; i++)
       if (visit(&ents[i], ctx))
-        return 0; /* visitor asked to stop */
+        return 0;
     return 0;
   }
 
-  /* internal entries are B+ separator copies, not authoritative records. */
+  /* internal entries are separator copies */
   for (uint32_t i = 0; i <= n->num_entries; i++)
     if (walk_rec(img, sb, kids[i], t, visit, ctx, depth + 1) != 0)
       return -1;
@@ -1139,7 +1127,7 @@ static int visit_show(const rec_entry_t *e, void *vctx) {
   if (e->recovery_id == c->id) {
     c->entry = *e;
     c->found = 1;
-    return 1; /* stop traversal */
+    return 1;
   }
   return 0;
 }
@@ -1247,7 +1235,7 @@ static int validate_recovery_file(struct restore_txn *tx, const struct tree_desc
     return -1;
   }
   if (!rec->btree_root)
-    return 0; /* a non-empty sparse file may legitimately have no extents. */
+    return 0; /* a sparse file can have no spans at all */
   rc = validate_extent_node(tx, bspan_tree, rec->btree_root, &check, 0);
   free(check.nodes.items);
   return rc;
@@ -1519,12 +1507,9 @@ static int parse_id(const char *text, uint32_t *out) {
 }
 
 /*
- * O_EXCL keeps us off a mounted block device, but an image file is mounted through a loop device and
- * neither O_EXCL nor flock() sees that - the loop driver just holds the file open. So walk the mount
- * table, and for every mounted device sysfs describes as loop-backed compare its backing file with
- * the target. Attached-but-unmounted is fine and stays allowed.
- *
- * Sets *checked to 0 when the mount table could not be read, i.e. the answer is "don't know".
+ * O_EXCL catches a mounted block device but not an image mounted through loop, the loop driver just
+ * holds the file open. so compare the backing file of every mounted loop device with the target.
+ * attached but unmounted is fine. *checked = 0 means the mount table couldn't be read.
  */
 static int image_is_mounted_via_loop(const char *path, int *checked) {
   struct stat target, backing;

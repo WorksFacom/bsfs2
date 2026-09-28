@@ -1,5 +1,5 @@
 /*
- * Statistical benchmark configuration. Port of core/stats_config.py.
+ * statistical benchmark config, port of core/stats_config.py.
  */
 #ifndef STATS_CONFIG_H
 #define STATS_CONFIG_H
@@ -27,7 +27,7 @@ long stat_config_target_blocks(const stat_config *c);
 long stat_config_bitmap_size(const stat_config *c);
 long stat_config_resolved_num_operations(const stat_config *c);
 
-/* Returns NULL on success or a static error string describing the violation. */
+/* NULL on success, otherwise a static error string */
 const char *stat_config_validate(const stat_config *c);
 
 #endif /* STATS_CONFIG_H */

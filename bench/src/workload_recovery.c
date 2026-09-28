@@ -316,9 +316,8 @@ static int recovery_refill_cycle(struct bench_run_config *config,
       error = bench_latency_add(&latencies, elapsed);
     }
     /*
-     * space() is a full bitmap scan on the userspace backend, so sampling it
-     * every iteration would pollute the page cache and the device counters
-     * this phase is measuring.
+     * space() is a full bitmap scan on the userspace backend, sampling it every iteration
+     * would pollute the page cache and the device counters this phase measures
      */
     if (i % SPACE_SAMPLE_INTERVAL == 0 &&
         config->backend.ops->space(&config->backend, &space) == 0)

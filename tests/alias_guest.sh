@@ -3,7 +3,7 @@
 # file data it becomes.
 #
 # Freed metadata blocks keep a dirty buffer_head in the block device's page
-# cache - merges, root collapses and rolled-back transactions all leave one
+# cache. Merges, root collapses and rolled-back transactions all leave one
 # behind. File data goes through the inode's own mapping instead, so once the
 # allocator hands such a block to a file there are two dirty aliases for the
 # same disk block and whichever writeback runs last wins. bsfs_get_block() now

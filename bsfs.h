@@ -34,21 +34,17 @@ struct bsfs_reclaim_stats {
 
 #ifdef BSFS_ALLOC_STATS
 /*
- * What the allocation strategy actually did, for the tests and the benchmarks.
- *
- * Compiled in only with BSFS_ALLOC_STATS=y - see include/alloc_strategy.h. The
- * index/cursor split is the interesting one: every strategy so far is some
- * structure of recycled blocks plus a cursor over the never-yet-handed-out ones,
- * and the ratio between them is what says whether the structure is earning its
- * memory.
+ * allocator counters for tests and benchmarks, only with BSFS_ALLOC_STATS=y (see include/alloc_strategy.h).
+ * every strategy is an index of recycled blocks plus a cursor over never-used ones. from_index vs
+ * from_cursor says whether the index earns its memory.
  */
 struct bsfs_alloc_stats {
-  __u64 allocs;         // blocks handed out
-  __u64 frees;          // blocks returned (real 1->0 transitions only)
-  __u64 from_index;     // ... of the allocs, how many came from the strategy's structure
-  __u64 from_cursor;    // ... and how many from the sequential cursor
-  __u64 fallback_scans; // times the strategy had to fall back to a full scan
-  __u64 index_peak;     // most entries the structure ever held at once
+  __u64 allocs;
+  __u64 frees;          // real 1->0 transitions only
+  __u64 from_index;     // allocs served by the strategy's index
+  __u64 from_cursor;    // allocs served by the sequential cursor
+  __u64 fallback_scans; // full bitmap scans
+  __u64 index_peak;
 };
 #endif
 
@@ -64,33 +60,25 @@ struct bsfs_super_info {
   __u32        next_recovery_id;
   __u32        cached_recovery_root;
 
-  // Counted once at mount and maintained by the allocator, so statfs and the
-  // reserve check don't have to rescan the whole bitmap. Both under bitmap_lock.
-  //
-  // reserved_blocks is what keeps a full filesystem recoverable: under
-  // copy-on-write even *freeing* a span has to allocate first, so data
-  // allocations stop at the reserve while metadata ones may spend it.
+  // counted at mount, kept current by the allocator. under bitmap_lock.
+  // reserved_blocks keeps a full fs recoverable. under cow even freeing a span allocates first,
+  // so data allocs stop at the reserve and metadata allocs may spend it.
   __u32 free_blocks;
   __u32 reserved_blocks;
 
-  // Whatever index the compiled-in allocation strategy keeps over the bitmap.
-  // Owned entirely by src/alloc_<strategy>.c, built at mount, dropped at
-  // unmount, never written to disk. Also under bitmap_lock.
+  // owned by src/alloc_<strategy>.c, built at mount, never on disk. under bitmap_lock.
   void *alloc_private;
 
 #ifdef BSFS_ALLOC_STATS
   struct bsfs_alloc_stats alloc_stats;
 #endif
 
-  // errno from the last ->write_inode that could not persist an inode, which
-  // means some per-inode root is still only in memory. while it is non-zero no
-  // deferred block may be released, since we cannot tell which ones that root
-  // replaced. -ENOSPC here is routine, not a device problem.
+  // errno from the last ->write_inode that failed, so some inode root is memory-only. while set
+  // no deferred block may be released, we can't tell which ones that root replaced. -ENOSPC is routine.
   int writeback_error;
 
-  // Blocks that copy-on-write replaced. They are only handed back to the
-  // allocator at a commit point, once the shadow tree and the roots pointing at
-  // it are on disk - see bsfs_commit_deferred_frees().
+  // cow-replaced blocks, released at a commit point once the shadow tree and its roots are on
+  // disk. see bsfs_commit_deferred_frees().
   __u32       *pending_free;
   size_t       pending_free_count;
   size_t       pending_free_cap;
@@ -114,8 +102,8 @@ struct bsfs_inode {
   // serializes bspan-tree ops on the inode (get_block vs truncate vs concurrent writers)
   struct mutex truncate_mutex;
 
-  // stashed by bsfs_unlink so bsfs_evict_inode can build the recovery snapshot once the inode is truly gone (i_nlink == 0)
-  // a non-zero parent ino doubles as a "snapshot pending" flag (valid inos are >= 1)
+  // stashed by bsfs_unlink for the recovery snapshot evict builds at i_nlink == 0.
+  // non-zero parent ino means a snapshot is pending (valid inos are >= 1).
   __u32 i_deleted_parent_ino;
   char  i_deleted_name[MAX_FILENAME];
 
@@ -129,17 +117,14 @@ static inline struct bsfs_inode *bsfs_i(struct inode *inode) {
 typedef enum { BTREE_TYPE_INODE, BTREE_TYPE_BSPAN, BTREE_TYPE_RECOVERY, BTREE_TYPE_DIR_ENTRY } btree_data_type_t;
 
 /*
- * How far an allocation may eat into the metadata reserve.
+ * how far an allocation may dig into the metadata reserve.
  *
- * Copy-on-write inverts the usual order of things: releasing space requires
- * allocating first, so a filesystem that lets ordinary growth consume the last
- * block can never be emptied again. The reserve exists to keep the shrinking
- * paths working, so they are the ones that outrank everybody.
+ * under cow, freeing space allocates first, so if growth can eat the last block the fs can never be
+ * emptied again. the reserve is there for the shrinking paths.
  *
- *   GROW      creates, links, extending a file - stops at the whole reserve
- *   WRITEBACK ->write_inode - may take half of it, since persisting a root is
- *             what makes deferred blocks releasable
- *   SHRINK    truncate, unlink, evict, recovery purge - may take all of it
+ *   GROW      creates, links, file extension. stops at the reserve
+ *   WRITEBACK ->write_inode. may take half, persisting a root is what frees deferred blocks
+ *   SHRINK    truncate, unlink, evict, recovery purge. may take all of it
  */
 typedef enum { BSFS_ALLOC_GROW = 0, BSFS_ALLOC_WRITEBACK, BSFS_ALLOC_SHRINK } bsfs_alloc_prio_t;
 
@@ -155,9 +140,7 @@ typedef struct {
   __u32             root_block;
   __u8              min_degree;
 
-  // How deep into the reserve this handle's mutations may dig. See
-  // bsfs_alloc_prio_t: the whole point is that shrinking the tree outranks
-  // growing it, because under copy-on-write shrinking is also an allocation.
+  // bsfs_alloc_prio_t for this handle's mutations
   __u8 prio;
 } btree_handle_t;
 

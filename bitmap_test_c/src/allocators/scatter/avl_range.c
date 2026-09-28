@@ -1,6 +1,6 @@
 /*
- * AVL tree of free ranges [start, end], drained block-by-block (scatter).
- * Port of allocators/scatter/avl_range.py. Bitmap is baseline-identical.
+ * AVL tree of free ranges [start, end], drained block by block so it scatters and matches baseline.
+ * port of allocators/scatter/avl_range.py.
  */
 #include <stdlib.h>
 

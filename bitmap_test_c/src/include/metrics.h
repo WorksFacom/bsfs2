@@ -1,5 +1,5 @@
 /*
- * Metrics aggregation. Port of core/metrics.py.
+ * metrics aggregation, port of core/metrics.py.
  */
 #ifndef METRICS_H
 #define METRICS_H
@@ -24,7 +24,7 @@ typedef struct {
  * 0.0 when bm is NULL or empty. */
 double calculate_fragmentation(const bitmap *bm);
 
-/* Pass bm = NULL to force fragmentation = 0.0 (Python bitmap=None default). */
+/* bm = NULL forces fragmentation 0.0, like Python's bitmap=None default */
 stress_metrics build_stress_metrics(const char *name,
                                      const double *alloc_us, long n_alloc,
                                      const double *dealloc_us, long n_dealloc,

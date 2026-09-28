@@ -1,4 +1,4 @@
-"""Core building blocks for bitmap benchmark architecture."""
+"""Core pieces shared by allocators, scenarios and runners."""
 
 from .base_allocator import BaseAllocator
 from .bitmap_layout import (

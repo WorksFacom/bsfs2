@@ -28,8 +28,7 @@ class RunConfig:
 
 
 def _resolve_cpus(run: dict) -> tuple[int, tuple[int, ...]]:
-    """"auto" picks distinct physical cores away from CPU 0; explicit lists are
-    honoured but still checked for SMT siblings."""
+    """"auto" picks distinct physical cores off CPU 0. explicit lists still get the SMT check."""
     requested = run["concurrency_cpus"]
     common = run["common_cpu"]
     if requested == "auto" or common == "auto":

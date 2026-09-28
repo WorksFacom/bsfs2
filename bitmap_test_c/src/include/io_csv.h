@@ -1,15 +1,13 @@
 /*
- * CSV writer. Port of core/io_csv.py::write_csv.
+ * CSV writer, port of core/io_csv.py::write_csv.
  *
- * Emits CRLF line endings and minimal quoting (matching Python's csv module),
- * UTF-8, header row from labels. Cells are pre-formatted strings; a NULL cell
- * is written as empty. Creates parent directories as needed.
+ * CRLF line endings and minimal quoting like Python's csv module, UTF-8, header row from labels.
+ * cells are preformatted strings, NULL means empty. creates parent dirs as needed.
  */
 #ifndef IO_CSV_H
 #define IO_CSV_H
 
-/* cells is row-major with `ncols` columns: cell (r,c) = cells[r*ncols + c].
- * Returns 0 on success, non-zero on I/O error. */
+/* cells is row-major, cell (r,c) = cells[r*ncols + c]. nonzero on I/O error. */
 int csv_write(const char *path,
               const char *const *headers, long ncols,
               const char *const *cells, long nrows);
