@@ -89,6 +89,7 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
 
   struct buffer_head      *bh;
   struct bsfs_super_block *bsfs_super;
+  const char              *bad;
 
   struct inode           *root_inode;
   struct bsfs_super_info *sbi;
@@ -125,6 +126,14 @@ static int bsfs_fill_super(struct super_block *s, struct fs_context *fc) {
   if (*(__u32 *)(bh->b_data) != MAGIC_NUMBER) {
     pr_err("magic number doesn't match");
     goto out_no_fs;
+  }
+
+  // same check mkfs and recovery.bsfs run, everything below indexes off these fields
+  bad = bsfs_super_check(bsfs_super);
+  if (bad) {
+    pr_err("corrupt superblock: %s\n", bad);
+    ret = -EUCLEAN;
+    goto out_release;
   }
 
   ret = load_bitmap(s);

@@ -609,7 +609,7 @@ void bsfs_evict_inode(struct inode *inode) {
         strscpy(rec.original_name, bi->i_deleted_name, sizeof(rec.original_name));
 
         rec.inode_number    = inode->i_ino;
-        rec.file_type       = S_ISDIR(inode->i_mode) ? 0 : 1;
+        rec.file_type       = S_ISDIR(inode->i_mode) ? BSFS_REC_TYPE_DIR : BSFS_REC_TYPE_FILE;
         rec.uid             = fs_high2lowuid(i_uid_read(inode));
         rec.gid             = fs_high2lowgid(i_gid_read(inode));
         rec.permissions     = inode->i_mode;

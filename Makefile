@@ -53,16 +53,22 @@ RECOVERY = recovery.bsfs
 all: $(MKFS) $(RECOVERY)
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 
-$(MKFS): tools/mkfs.c include/bsfs_shared.h
-	$(CC) -Wall -o $@ $<
+TOOLS_CFLAGS = -Wall -Wextra -O2
+TOOLS_HDRS = tools/libbsfs.h include/bsfs_shared.h
 
-$(RECOVERY): tools/recovery.c include/bsfs_shared.h
-	$(CC) -Wall -o $@ $<
+tools/%.o: tools/%.c $(TOOLS_HDRS)
+	$(CC) $(TOOLS_CFLAGS) -c -o $@ $<
+
+$(MKFS): tools/mkfs.o tools/libbsfs.o
+	$(CC) -o $@ $^
+
+$(RECOVERY): tools/recovery.o tools/libbsfs.o
+	$(CC) -o $@ $^
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
 	$(MAKE) -C bench clean
-	rm -f $(MKFS) $(RECOVERY)
+	rm -f $(MKFS) $(RECOVERY) tools/*.o
 
 bench:
 	$(MAKE) -C bench

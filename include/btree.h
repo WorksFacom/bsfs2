@@ -29,8 +29,7 @@
  *
  * The handle starts empty: root_block 0, prio BSFS_ALLOC_GROW. Callers point
  * root_block at an existing tree and lower prio for paths that shrink it.
- * min_degree t is the largest that fits a node in one block, i.e.
- * entry_size * (2t - 1) + 4 * 2t + 5 <= BSFS_BLOCK_SIZE.
+ * min_degree t comes from bsfs_min_degree().
  *
  * @param cmp orders whole entries. NULL compares the first __u32 of each.
  * @param get_key extracts the numeric key btree_search() and btree_remove() use.
@@ -38,29 +37,9 @@
  */
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key);
 
-/** @brief Inode tree key: the inode number. */
-static inline __u32 get_inode_key(const void *entry) {
-  return ((struct disk_mapped_inode_t *)entry)->ino;
-}
-
-/** @brief Orders inode entries by ino. */
-static inline int compare_inode(const void *a, const void *b) {
-  return (get_inode_key(a) > get_inode_key(b)) - (get_inode_key(a) < get_inode_key(b));
-}
-
 /** @brief Handle for the inode tree, holding disk_mapped_inode_t. NULL on OOM. */
 static inline btree_handle_t *btree_create_inode_handle(void) {
   return btree_create_handle(BTREE_TYPE_INODE, sizeof(struct disk_mapped_inode_t), compare_inode, get_inode_key);
-}
-
-/** @brief Extent tree key: the first file block of the span. */
-static inline __u32 get_bspan_key(const void *entry) {
-  return ((const bspan_t *)entry)->file_blk;
-}
-
-/** @brief Orders extents by file_blk. */
-static inline int compare_bspan(const void *a, const void *b) {
-  return (get_bspan_key(a) > get_bspan_key(b)) - (get_bspan_key(a) < get_bspan_key(b));
 }
 
 /** @brief Handle for a file's extent tree, holding bspan_t. NULL on OOM. */
@@ -80,49 +59,17 @@ static inline __u8 *bentries(struct btree_node *node) {
  * depends on the handle.
  */
 static inline __u32 *bchildren(struct btree_node *node, btree_handle_t *handle) {
-
-  size_t children_start = (2 * handle->min_degree - 1) * handle->entry_size;
-  return (__u32 *)(node->node->data + children_start);
+  return bsfs_node_children(node->node, handle->min_degree, handle->entry_size);
 }
 
 /**
- * @brief Directory tree key: hash_filename() of the name.
+ * @brief Handle for a directory's entry tree, holding bsfs_dentry. NULL on OOM.
  *
- * Not unique. Look entries up with btree_search_entry(), which compares names
- * too.
+ * The key is a name hash, so not unique. Look entries up with
+ * btree_search_entry(), which compares names too.
  */
-static inline __u32 get_dir_entry_key(const void *entry) {
-  return hash_filename(((const struct bsfs_dentry *)entry)->filename);
-}
-
-/** @brief Orders dentries by name hash, then by name. */
-static inline int compare_dir_entry(const void *a, const void *b) {
-  __u32 ha = get_dir_entry_key(a);
-  __u32 hb = get_dir_entry_key(b);
-
-  if (ha < hb)
-    return -1;
-  if (ha > hb)
-    return 1;
-
-  const struct bsfs_dentry *ea = (const struct bsfs_dentry *)a;
-  const struct bsfs_dentry *eb = (const struct bsfs_dentry *)b;
-  return strcmp(ea->filename, eb->filename);
-}
-
-/** @brief Handle for a directory's entry tree, holding bsfs_dentry. NULL on OOM. */
 static inline btree_handle_t *btree_create_dir_entry_handle(void) {
   return btree_create_handle(BTREE_TYPE_DIR_ENTRY, sizeof(struct bsfs_dentry), compare_dir_entry, get_dir_entry_key);
-}
-
-/** @brief Recovery tree key: the snapshot's recovery_id. */
-static inline __u32 get_rec_entry_key(const void *entry) {
-  return ((const rec_entry_t *)entry)->recovery_id;
-}
-
-/** @brief Orders snapshots by recovery_id. */
-static inline int compare_rec_entry(const void *a, const void *b) {
-  return (get_rec_entry_key(a) > get_rec_entry_key(b)) - (get_rec_entry_key(a) < get_rec_entry_key(b));
 }
 
 /** @brief Handle for the recovery tree, holding rec_entry_t. NULL on OOM. */

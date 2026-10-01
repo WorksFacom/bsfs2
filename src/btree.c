@@ -23,21 +23,6 @@ static inline int default_compare(const void *a, const void *b) {
   return (ka < kb) ? -1 : (ka > kb);
 }
 
-static int compute_min_degree(__u64 entry_size) {
-  int t = 2;
-
-  while (1) {
-    __u64 entry_area    = entry_size * (2 * t - 1);
-    __u64 pointer_area  = sizeof(__u32) * (2 * t);
-    __u64 node_overhead = sizeof(__u8) + sizeof(__u32);
-
-    if (entry_area + pointer_area + node_overhead > BSFS_BLOCK_SIZE)
-      return t - 1;
-
-    t++;
-  }
-}
-
 btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, btree_compare_fn cmp, btree_key_fn get_key) {
   // NOFS everywhere, this runs under ->writepages (via bsfs_get_block) and ->write_inode
   btree_handle_t *handle = kmalloc(sizeof(btree_handle_t), GFP_NOFS);
@@ -51,7 +36,7 @@ btree_handle_t *btree_create_handle(btree_data_type_t type, size_t entry_size, b
   handle->get_key    = get_key;
   handle->root_block = 0;
   handle->prio       = BSFS_ALLOC_GROW;
-  handle->min_degree = compute_min_degree(entry_size);
+  handle->min_degree = bsfs_min_degree(entry_size);
   return handle;
 }
 

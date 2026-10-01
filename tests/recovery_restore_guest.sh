@@ -72,7 +72,7 @@ printf 'current conflict\n' >"$MNT/original/conflict" || fail "recreate conflict
 rmdir "$MNT/gone" || fail "remove fallback parent failed"
 sync
 MOUNTED_OUT=$("$REPO/recovery.bsfs" "$LOOP" restore 4294967295 2>&1)
-echo "$MOUNTED_OUT" | grep -q 'open image for exclusive restore' || fail "mounted block device was not rejected"
+echo "$MOUNTED_OUT" | grep -q 'open for exclusive access' || fail "mounted block device was not rejected"
 # O_EXCL only covers the block device; the backing file has to be refused through the mount table.
 BACKING_OUT=$("$REPO/recovery.bsfs" "$IMG" restore 4294967295 2>&1)
 echo "$BACKING_OUT" | grep -q 'mounted through a loop device' || fail "mounted loop backing file was not rejected"

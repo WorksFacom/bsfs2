@@ -17,9 +17,13 @@
 #define BSFS_FORMAT_H
 
 #ifdef __KERNEL__
+#include <linux/stddef.h>
+#include <linux/string.h>
 #include <linux/types.h>
 #else
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 typedef uint32_t __u32;
 typedef uint64_t __u64;
 typedef uint16_t __u16;
@@ -125,7 +129,7 @@ typedef struct bsfs_dentry {
  * @brief A recovery snapshot of an unlinked file, keyed by recovery_id.
  *
  * The snapshot owns the tree at btree_root until it is restored or purged.
- * file_type is 0 for a directory and 1 for anything else, and permissions
+ * file_type is BSFS_REC_TYPE_DIR or BSFS_REC_TYPE_FILE, and permissions
  * holds the whole i_mode. deleted_at and retention_until are seconds since the
  * epoch. Purging drops expired entries first, then the oldest.
  */
@@ -145,13 +149,16 @@ typedef struct rec_entry_t {
   __u64 retention_until;
 } rec_entry_t;
 
+#define BSFS_REC_TYPE_DIR 0
+#define BSFS_REC_TYPE_FILE 1 // anything that isn't a directory
+
 /**
  * @brief One tree node, exactly one block.
  *
  * data holds up to 2t-1 entries back to back, then 2t __u32 child block
  * numbers. The minimum degree t depends on the entry size (see
- * btree_create_handle()), so index it through bentries() and bchildren() in
- * btree.h.
+ * bsfs_min_degree()), so index it through bsfs_node_children(), or bentries()
+ * and bchildren() in btree.h.
  */
 typedef struct btree_node_t {
   __u32 num_entries;
@@ -160,6 +167,17 @@ typedef struct btree_node_t {
   // must match the size btree_create_handle() assumes when it computes min_degree
   __u8 data[BSFS_BLOCK_SIZE - sizeof(__u32) - sizeof(__u8)];
 } btree_node_t;
+
+// host order and unpacked, so kernel and tools only agree while both lay these out the way x86_64 does
+_Static_assert(sizeof(bsfs_super_block) == 48, "bsfs_super_block layout changed");
+_Static_assert(sizeof(bitmap_block_t) == BSFS_BLOCK_SIZE, "bitmap_block_t must be exactly one block");
+_Static_assert(sizeof(bspan_t) == 12, "bspan_t layout changed");
+_Static_assert(sizeof(disk_mapped_inode_t) == 76, "disk_mapped_inode_t layout changed");
+_Static_assert(offsetof(disk_mapped_inode_t, block_count) == 12, "disk_mapped_inode_t padding changed");
+_Static_assert(sizeof(bsfs_dentry) == 264, "bsfs_dentry layout changed");
+_Static_assert(sizeof(rec_entry_t) == 312, "rec_entry_t layout changed");
+_Static_assert(offsetof(rec_entry_t, deleted_at) == 8, "rec_entry_t padding changed, i386 aligns __u64 to 4");
+_Static_assert(sizeof(btree_node_t) == BSFS_BLOCK_SIZE, "btree_node_t must be exactly one block");
 
 /**
  * @brief djb2 over a NUL-terminated name. The primary key of a dentry.
@@ -176,6 +194,124 @@ static inline __u32 hash_filename(const char *name) {
     hash = ((hash << 5) + hash) + (unsigned char)c;
 
   return hash;
+}
+
+/**
+ * @brief Largest minimum degree t whose node fits one block, i.e.
+ *        entry_size * (2t - 1) + 4 * 2t + 5 <= BSFS_BLOCK_SIZE.
+ *
+ * Decides where bsfs_node_children() starts, so every reader of a tree has to
+ * get the same answer for the same entry size.
+ */
+static inline int bsfs_min_degree(__u64 entry_size) {
+  int t = 2;
+
+  while (1) {
+    __u64 entry_area    = entry_size * (2 * t - 1);
+    __u64 pointer_area  = sizeof(__u32) * (2 * t);
+    __u64 node_overhead = sizeof(__u8) + sizeof(__u32);
+
+    if (entry_area + pointer_area + node_overhead > BSFS_BLOCK_SIZE)
+      return t - 1;
+
+    t++;
+  }
+}
+
+/**
+ * @brief A node's 2t child block numbers.
+ *
+ * They sit after the full entry area, not after num_entries, so the offset only
+ * depends on t and the entry size.
+ */
+static inline __u32 *bsfs_node_children(btree_node_t *node, int t, size_t entry_size) {
+  return (__u32 *)(node->data + (size_t)(2 * t - 1) * entry_size);
+}
+
+/** @brief Inode tree key: the inode number. */
+static inline __u32 get_inode_key(const void *entry) {
+  return ((const disk_mapped_inode_t *)entry)->ino;
+}
+
+/** @brief Orders inode entries by ino. */
+static inline int compare_inode(const void *a, const void *b) {
+  return (get_inode_key(a) > get_inode_key(b)) - (get_inode_key(a) < get_inode_key(b));
+}
+
+/** @brief Extent tree key: the first file block of the span. */
+static inline __u32 get_bspan_key(const void *entry) {
+  return ((const bspan_t *)entry)->file_blk;
+}
+
+/** @brief Orders extents by file_blk. */
+static inline int compare_bspan(const void *a, const void *b) {
+  return (get_bspan_key(a) > get_bspan_key(b)) - (get_bspan_key(a) < get_bspan_key(b));
+}
+
+/**
+ * @brief Directory tree key: hash_filename() of the name.
+ *
+ * Not unique. Recomputed rather than read from name_hash so a stale stored hash
+ * can't send a lookup down the wrong subtree.
+ */
+static inline __u32 get_dir_entry_key(const void *entry) {
+  return hash_filename(((const bsfs_dentry *)entry)->filename);
+}
+
+/** @brief Orders dentries by name hash, then by name. */
+static inline int compare_dir_entry(const void *a, const void *b) {
+  __u32 ha = get_dir_entry_key(a);
+  __u32 hb = get_dir_entry_key(b);
+
+  if (ha != hb)
+    return (ha > hb) - (ha < hb);
+  return strcmp(((const bsfs_dentry *)a)->filename, ((const bsfs_dentry *)b)->filename);
+}
+
+/** @brief Recovery tree key: the snapshot's recovery_id. */
+static inline __u32 get_rec_entry_key(const void *entry) {
+  return ((const rec_entry_t *)entry)->recovery_id;
+}
+
+/** @brief Orders snapshots by recovery_id. */
+static inline int compare_rec_entry(const void *a, const void *b) {
+  return (get_rec_entry_key(a) > get_rec_entry_key(b)) - (get_rec_entry_key(a) < get_rec_entry_key(b));
+}
+
+/**
+ * @brief Checks superblock geometry.
+ *
+ * Shared by mount, mkfs (on what it is about to write) and recovery.bsfs, so
+ * they can't disagree on what a sane image is. Only looks at the superblock,
+ * not at whether the device is big enough to hold it.
+ *
+ * @return NULL if sane, else a static string naming the first bad field.
+ */
+static inline const char *bsfs_super_check(const bsfs_super_block *sb) {
+  __u64 bitmap_end = (__u64)sb->block_bitmap_start + sb->block_bitmap_total;
+
+  if (sb->magic_number != MAGIC_NUMBER)
+    return "bad magic";
+  if (sb->block_size != BSFS_BLOCK_SIZE)
+    return "block_size is not 4096";
+  if (sb->fs_size != (__u64)sb->total_blocks * BSFS_BLOCK_SIZE)
+    return "fs_size does not match total_blocks";
+  if (sb->block_bitmap_start < 2)
+    return "bitmap overlaps the superblock";
+  if (sb->block_bitmap_total == 0 ||
+      sb->block_bitmap_total < ((__u64)sb->total_blocks + BITS_PER_BLOCK - 1) / BITS_PER_BLOCK)
+    return "too few bitmap blocks for total_blocks";
+  if (bitmap_end > sb->data_block_start)
+    return "bitmap runs into the data region";
+  if (sb->data_block_start >= sb->total_blocks)
+    return "no data region";
+  if (sb->inode_root < sb->data_block_start || sb->inode_root >= sb->total_blocks)
+    return "inode_root outside the data region";
+  if (sb->recovery_root && (sb->recovery_root < sb->data_block_start || sb->recovery_root >= sb->total_blocks))
+    return "recovery_root outside the data region";
+  if (sb->root_inode != BSFS_ROOT_INO)
+    return "root_inode is not BSFS_ROOT_INO";
+  return NULL;
 }
 
 #endif
