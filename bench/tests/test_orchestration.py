@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import io
 import json
 from pathlib import Path
@@ -21,7 +22,11 @@ from bench.orchestration.analyze import (
     load_records,
 )
 from bench.orchestration.report import render_report
-from bench.orchestration.command import CommandResult, CommandRunner
+from bench.orchestration.command import (
+    CommandError,
+    CommandResult,
+    CommandRunner,
+)
 from bench.orchestration.config import load_config
 from bench.orchestration.preflight import (
     BenchmarkBinaryError,
@@ -53,7 +58,7 @@ from bench.orchestration.filesystems import (
     bsfs_targets_by_strategy,
     create_adapter,
 )
-from bench.orchestration.plan import build_plan
+from bench.orchestration.plan import COLD, REOPEN, SCENARIOS, build_plan
 from bench.orchestration.progress import (
     Level,
     PhaseMetricsReader,
@@ -73,16 +78,18 @@ BUILD_ARGV = build_module_argv(REPOSITORY)
 
 
 class ConfigTests(unittest.TestCase):
-    def test_quick_profile_is_valid(self) -> None:
-        config = load_config(REPOSITORY / "bench/config/quick.toml")
+    def test_default_config_is_valid(self) -> None:
+        config = load_config(REPOSITORY / "bench/config/default.toml")
 
-        self.assertEqual(config.profile, "quick")
-        self.assertEqual(config.seeds, (1234,))
-        self.assertIn("old-bsfs", config.filesystems)
+        self.assertEqual(config.repetitions, 3)
+        self.assertEqual(len(config.seeds), 3)
+        self.assertEqual(config.filesystems, ("bsfs", "ext4", "btrfs", "zfs"))
+        self.assertFalse(config.recovery)
+        self.assertGreater(config.phase_timeout_s, 0)
         self.assertGreaterEqual(len(config.concurrency_cpus), 4)
 
     def test_worker_cpus_land_on_distinct_physical_cores(self) -> None:
-        config = load_config(REPOSITORY / "bench/config/publication.toml")
+        config = load_config(REPOSITORY / "bench/config/default.toml")
 
         self.assertEqual(sibling_conflicts(config.concurrency_cpus), [])
         self.assertNotIn(config.common_cpu, config.concurrency_cpus)
@@ -140,6 +147,24 @@ class CommandTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0)
             self.assertFalse(run_dir.exists())
+
+    def test_a_command_past_its_timeout_is_killed_and_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory))
+            with self.assertRaisesRegex(CommandError, "timed out") as raised:
+                runner.run(["sleep", "30"], label="hang", timeout=0.2)
+
+            self.assertTrue(raised.exception.result.timed_out)
+            self.assertIn(
+                "timed out after 0.2 s",
+                (Path(directory) / "logs/00001-hang.stderr").read_text(),
+            )
+
+    def test_the_default_timeout_applies_when_none_is_passed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner = CommandRunner(Path(directory), default_timeout=0.2)
+            with self.assertRaises(CommandError):
+                runner.run(["sleep", "30"], check=False, label="hang")
 
 
 class ResultOwnershipTests(unittest.TestCase):
@@ -231,36 +256,26 @@ class BenchmarkBinaryTests(unittest.TestCase):
         binary.touch(mode=0o755)
         return binary
 
-    def test_posix_selection_requires_only_posix_runner(self) -> None:
+    def test_an_executable_runner_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
             self.create_binary(repository, "bench-posix")
 
-            validate_benchmark_binaries(repository, ("bsfs", "ext4"))
+            validate_benchmark_binaries(repository)
 
-    def test_old_bsfs_selection_requires_its_runner_and_formatter(self) -> None:
+    def test_missing_runner_is_rejected_with_build_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            repository = Path(directory)
-            self.create_binary(repository, "bench-old")
+            with self.assertRaisesRegex(BenchmarkBinaryError, "make -C bench"):
+                validate_benchmark_binaries(Path(directory))
 
-            with self.assertRaisesRegex(
-                BenchmarkBinaryError,
-                "make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old",
-            ):
-                validate_benchmark_binaries(repository, ("old-bsfs",))
-
-    def test_non_executable_runner_is_rejected_with_posix_build_command(
-        self,
-    ) -> None:
+    def test_non_executable_runner_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
             binary = self.create_binary(repository, "bench-posix")
             binary.chmod(0o644)
 
-            with self.assertRaisesRegex(
-                BenchmarkBinaryError, "make -C bench bin/bench-posix"
-            ):
-                validate_benchmark_binaries(repository, ("ext4",))
+            with self.assertRaisesRegex(BenchmarkBinaryError, "make -C bench"):
+                validate_benchmark_binaries(repository)
 
 
 class BsfsModulePreflightTests(unittest.TestCase):
@@ -704,10 +719,6 @@ class CustomBsfsArtifactTests(unittest.TestCase):
         self.assertEqual(
             adapter.version(), f"custom module={'a' * 16} mkfs={'b' * 16}"
         )
-        self.assertEqual(
-            adapter.configuration()["correctness_gate_coverage"],
-            "publication-validation-only",
-        )
 
     def test_manifest_records_custom_sources_and_only_requested_extras(
         self,
@@ -730,10 +741,6 @@ class CustomBsfsArtifactTests(unittest.TestCase):
                 custom["bsfs-maple"]["source_module"]["sha256"],
                 artifacts.module_sha256,
             )
-            self.assertEqual(
-                custom["bsfs-maple"]["correctness_gate_coverage"],
-                "publication-validation-only",
-            )
             self.assertTrue(
                 built["bench/build/custom/bsfs-maple/bsfs2.ko"]["present"]
             )
@@ -753,8 +760,6 @@ class AllocStrategyTargetTests(unittest.TestCase):
             BSFS_FILESYSTEMS,
             ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY))),
         )
-        # old-bsfs is not an allocator variant
-        self.assertNotIn("old-bsfs", BSFS_FILESYSTEMS)
 
     def test_plain_bsfs_still_means_the_default_build(self) -> None:
         self.assertEqual(ADAPTERS["bsfs"].alloc_strategy, "linear")
@@ -795,7 +800,7 @@ class AllocStrategyTargetTests(unittest.TestCase):
         # "bsfs" and "bsfs-linear" are the same module
         self.assertEqual(
             bsfs_targets_by_strategy(
-                ("bsfs", "bsfs-linear", "bsfs-heap", "ext4", "old-bsfs")
+                ("bsfs", "bsfs-linear", "bsfs-heap", "ext4")
             ),
             {"linear": ("bsfs", "bsfs-linear"), "heap": ("bsfs-heap",)},
         )
@@ -833,7 +838,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
         return custom_artifacts_stub("bsfs-maple")
 
     def test_module_preflight_failure_creates_no_run_directory(self) -> None:
-        config = REPOSITORY / "bench/config/quick.toml"
+        config = REPOSITORY / "bench/config/default.toml"
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "results"
             loop_image = Path(directory) / "bench.img"
@@ -847,7 +852,6 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 run_dir=run_dir,
                 filesystems=("bsfs",),
                 dry_run=False,
-                skip_correctness_gates=False,
                 verbose=False,
                 quiet=True,
                 no_color=True,
@@ -870,7 +874,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
 
     def test_selected_custom_name_requires_a_cli_definition(self) -> None:
         args = argparse.Namespace(
-            config=REPOSITORY / "bench/config/quick.toml",
+            config=REPOSITORY / "bench/config/default.toml",
             device=None,
             loop_image=Path("/tmp/unused-custom-bench.img"),
             confirm=None,
@@ -880,7 +884,6 @@ class BsfsSetupFailureTests(unittest.TestCase):
             filesystems=("bsfs-maple",),
             custom_bsfs=None,
             dry_run=True,
-            skip_correctness_gates=False,
             verbose=False,
             quiet=True,
             no_color=True,
@@ -890,7 +893,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 main()
 
     def test_non_bsfs_selection_skips_module_preflight(self) -> None:
-        config = REPOSITORY / "bench/config/quick.toml"
+        config = REPOSITORY / "bench/config/default.toml"
         with tempfile.TemporaryDirectory() as directory:
             args = argparse.Namespace(
                 config=config,
@@ -902,7 +905,6 @@ class BsfsSetupFailureTests(unittest.TestCase):
                 run_dir=Path(directory) / "results",
                 filesystems=("ext4",),
                 dry_run=False,
-                skip_correctness_gates=False,
                 verbose=False,
                 quiet=True,
                 no_color=True,
@@ -923,7 +925,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
             module.assert_not_called()
 
     def test_custom_preflight_failure_creates_no_run_directory(self) -> None:
-        config = REPOSITORY / "bench/config/quick.toml"
+        config = REPOSITORY / "bench/config/default.toml"
         artifacts = self.custom_artifacts()
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "results"
@@ -941,7 +943,6 @@ class BsfsSetupFailureTests(unittest.TestCase):
                     ["bsfs-maple", "/source/bsfs2.ko", "/source/mkfs.bsfs"]
                 ],
                 dry_run=False,
-                skip_correctness_gates=False,
                 verbose=False,
                 quiet=True,
                 no_color=True,
@@ -967,7 +968,7 @@ class BsfsSetupFailureTests(unittest.TestCase):
             runner.assert_not_called()
 
     def test_unselected_custom_definition_is_not_staged(self) -> None:
-        config = REPOSITORY / "bench/config/quick.toml"
+        config = REPOSITORY / "bench/config/default.toml"
         artifacts = self.custom_artifacts()
         with tempfile.TemporaryDirectory() as directory:
             args = argparse.Namespace(
@@ -983,7 +984,6 @@ class BsfsSetupFailureTests(unittest.TestCase):
                     ["bsfs-maple", "/source/bsfs2.ko", "/source/mkfs.bsfs"]
                 ],
                 dry_run=False,
-                skip_correctness_gates=False,
                 verbose=False,
                 quiet=True,
                 no_color=True,
@@ -1065,9 +1065,8 @@ class AnalysisTests(unittest.TestCase):
             skipped=["results.jsonl:2: bad <record>"],
             manifest={
                 "run_id": "run-1",
-                "publication_eligible": False,
                 "hostname": "test-host",
-                "config": {"profile": "quick", "repetitions": 1},
+                "config": {"repetitions": 1},
                 "kernel": {"release": "test-kernel"},
                 "filesystem_schedule": [
                     {"repetition": 0, "order": ["bsfs", "ext4"]}
@@ -1076,7 +1075,6 @@ class AnalysisTests(unittest.TestCase):
         )
 
         self.assertIn("BSFS benchmark report: run-1", report)
-        self.assertIn("Not publication eligible", report)
         self.assertIn("Complete derived data", report)
         self.assertIn("durable_throughput_mib_s_median", report)
         self.assertIn("scaling_ratio", report)
@@ -1156,7 +1154,6 @@ class AnalysisTests(unittest.TestCase):
         )
 
         self.assertIn("interrupted-run", report)
-        self.assertIn("Eligibility not recorded", report)
         self.assertIn('"summary":[]', report)
 
     def test_a_manifest_value_cannot_expand_into_another_marker(self) -> None:
@@ -1228,7 +1225,6 @@ class AnalysisTests(unittest.TestCase):
                 "cycle-1-native-namespace-removal",
                 None,
             ),
-            ("old-recovery", "restore-fixed-subset", None),
             ("future-workload", "novel-phase", None),
         )
         summary = [
@@ -1272,10 +1268,6 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn(
             "preceding refill files",
             descriptions["recovery-pressure"]["cycle-1-native-namespace-removal"],
-        )
-        self.assertIn(
-            "fixed subset",
-            descriptions["old-recovery"]["restore-fixed-subset"],
         )
         self.assertEqual(
             descriptions["future-workload"]["novel-phase"],
@@ -1400,21 +1392,35 @@ class StubAdapter(FilesystemAdapter):
 
 
 class PlanTests(unittest.TestCase):
-    def _executed_phases(
-        self,
-        config_name: str,
-        *,
-        filesystems: tuple[str, ...] | None = None,
-        custom_bsfs: tuple[str, ...] = (),
-    ) -> tuple[list, Any]:
-        config = load_config(REPOSITORY / f"bench/config/{config_name}.toml")
-        selected = config.filesystems if filesystems is None else filesystems
-        executed: list[tuple[str, str, str, int]] = []
+    def _config(self, name: str = "default", **changes: Any) -> Any:
+        config = load_config(REPOSITORY / f"bench/config/{name}.toml")
+        return dataclasses.replace(config, **changes)
 
-        def record(
-            self, adapter, scenario, phase, repetition, seed, workers=1, **kwargs
-        ):
+    def _walk(
+        self,
+        config: Any,
+        selected: tuple[str, ...],
+        *,
+        custom_bsfs: tuple[str, ...] = (),
+        fail: tuple[str, str] | None = None,
+    ) -> tuple[list[tuple[str, str, str, int]], BenchmarkRun]:
+        """Runs the plan offline and returns every step in execution order."""
+        executed: list[tuple[str, str, str, int]] = []
+        current: dict[str, Any] = {}
+
+        def phase(self, adapter, scenario, phase, repetition, seed, workers=1):
+            current.update(scenario=scenario, workers=workers)
+            if fail == (adapter.name, scenario):
+                raise RuntimeError("phase failed")
             executed.append((adapter.name, scenario, phase, workers))
+
+        def transition(marker: str):
+            def record(adapter):
+                executed.append(
+                    (adapter.name, current["scenario"], marker, current["workers"])
+                )
+
+            return record
 
         with tempfile.TemporaryDirectory() as directory:
             reporter = RunReporter(stream=io.StringIO(), level=Level.QUIET)
@@ -1430,7 +1436,6 @@ class PlanTests(unittest.TestCase):
                 stable_device="/dev/loop-test",
                 device_info=None,
                 run_id="test",
-                publication_eligible=False,
                 reporter=reporter,
                 custom_bsfs={
                     name: custom_artifacts_stub(name) for name in custom_bsfs
@@ -1444,84 +1449,105 @@ class PlanTests(unittest.TestCase):
                     ),
                 ),
                 patch.object(
-                    BenchmarkRun, "run_phase", autospec=True, side_effect=record
+                    BenchmarkRun, "run_phase", autospec=True, side_effect=phase
+                ),
+                patch(
+                    "bench.orchestration.run.cold_reset",
+                    side_effect=transition(COLD),
+                ),
+                patch(
+                    "bench.orchestration.run.reopen",
+                    side_effect=transition(REOPEN),
                 ),
             ):
-                if config.publication:
-                    benchmark.validation_matrix(selected)
-                benchmark.common_matrix(selected)
-                benchmark.recovery_matrix(selected)
-                benchmark.concurrency_matrix(selected)
-        return executed, config
+                benchmark.run_plan(
+                    build_plan(config, selected, custom_bsfs=custom_bsfs)
+                )
+        return executed, benchmark
 
-    def test_quick_plan_matches_executed_phases(self) -> None:
-        executed, config = self._executed_phases("quick")
+    def test_default_plan_size(self) -> None:
+        config = self._config()
         plan = build_plan(config, config.filesystems)
 
-        self.assertEqual(len(executed), plan.total_phases)
-        for filesystem in config.filesystems:
-            self.assertEqual(
-                sum(1 for row in executed if row[0] == filesystem),
-                plan.phases_for(filesystem),
-                filesystem,
-            )
-
-    def test_publication_plan_matches_executed_phases(self) -> None:
-        executed, config = self._executed_phases("publication")
-        plan = build_plan(config, config.filesystems)
-
-        self.assertEqual(len(executed), plan.total_phases)
-
-    def test_plan_names_the_phases_the_matrices_run(self) -> None:
-        executed, config = self._executed_phases("quick")
-        plan = build_plan(config, config.filesystems)
-        planned = sorted(
-            (unit.filesystem, unit.scenario, phase, unit.workers)
-            for unit in plan.units
-            for phase in unit.phases
+        # 4 filesystems x 3 repetitions x (3 common + 2 concurrency x 2 worker counts)
+        self.assertEqual(plan.total_units, 84)
+        self.assertEqual(
+            {unit.matrix for unit in plan.units}, {"common", "concurrency"}
         )
 
-        self.assertEqual(sorted(executed), planned)
-
-    def test_alloc_plan_matches_executed_phases(self) -> None:
-        """Every allocator variant runs the BSFS recovery path."""
-        executed, config = self._executed_phases("alloc")
+    def test_recovery_adds_one_trailing_unit_per_bsfs_target(self) -> None:
+        config = self._config(recovery=True)
         plan = build_plan(config, config.filesystems)
 
-        self.assertEqual(sorted(executed), sorted(
-            (unit.filesystem, unit.scenario, phase, unit.workers)
-            for unit in plan.units
-            for phase in unit.phases
-        ))
-        for filesystem in config.filesystems:
-            self.assertIn(
-                (filesystem, "recovery-pressure", "run", 1), executed, filesystem
-            )
+        self.assertEqual(plan.total_units, 85)
+        last = plan.units[-1]
+        self.assertEqual(
+            (last.matrix, last.filesystem, last.scenario, last.repetition),
+            ("recovery", "bsfs", "recovery-pressure", 0),
+        )
+        self.assertEqual(last.phases, ("run", "verify"))
+
+    def test_every_scenario_ends_verified_and_starts_with_a_phase(self) -> None:
+        for scenario, steps in SCENARIOS.items():
+            self.assertFalse(steps[0].startswith("@"), scenario)
+            self.assertFalse(steps[-1].startswith("@"), scenario)
+
+    def test_the_run_executes_the_planned_steps_in_order(self) -> None:
+        config = self._config(recovery=True)
+        executed, benchmark = self._walk(config, config.filesystems)
+        plan = build_plan(config, config.filesystems)
+
+        self.assertEqual(
+            executed,
+            [
+                (unit.filesystem, unit.scenario, step, unit.workers)
+                for unit in plan.units
+                for step in unit.steps
+            ],
+        )
+        self.assertEqual(benchmark.failures, [])
+
+    def test_cold_phases_follow_a_cache_drop(self) -> None:
+        config = self._config()
+        executed, _ = self._walk(config, ("ext4",))
+        steps = [row[2] for row in executed if row[1] == "bulk"][:3]
+
+        self.assertEqual(steps, ["prepare", COLD, "cold-read"])
+
+    def test_a_failed_unit_is_recorded_and_the_run_continues(self) -> None:
+        config = self._config(repetitions=1)
+        executed, benchmark = self._walk(
+            config, ("ext4", "btrfs"), fail=("ext4", "bulk")
+        )
+
+        self.assertEqual(
+            [(f["filesystem"], f["scenario"]) for f in benchmark.failures],
+            [("ext4", "bulk")],
+        )
+        self.assertNotIn("bulk", {row[1] for row in executed if row[0] == "ext4"})
+        self.assertIn(("btrfs", "bulk", "verify", 1), executed)
+        self.assertIn(("ext4", "metadata", "verify", 1), executed)
 
     def test_every_allocator_variant_gets_a_recovery_unit(self) -> None:
-        config = load_config(REPOSITORY / "bench/config/alloc.toml")
-        plan = build_plan(config, ("bsfs-heap", "ext4"))
+        config = self._config("alloc", recovery=True)
+        plan = build_plan(config, config.filesystems)
 
-        recovery = [unit for unit in plan.units if unit.matrix == "recovery"]
         self.assertEqual(
-            [(unit.filesystem, unit.scenario) for unit in recovery],
-            [("bsfs-heap", "recovery-pressure")],
+            [unit.filesystem for unit in plan.units if unit.matrix == "recovery"],
+            [name for name in BSFS_FILESYSTEMS if name in config.filesystems],
         )
 
-    def test_a_filesystem_only_in_the_config_is_still_planned(self) -> None:
-        config = load_config(REPOSITORY / "bench/config/quick.toml")
-        plan = build_plan(config, ("ext4",))
+    def test_other_filesystems_never_get_recovery(self) -> None:
+        plan = build_plan(self._config(recovery=True), ("ext4",))
 
         self.assertEqual(plan.filesystems, ("ext4",))
-        # ext4 is a kernel filesystem, so it has no recovery units
         self.assertEqual(
             {unit.matrix for unit in plan.units}, {"common", "concurrency"}
         )
 
     def test_custom_bsfs_gets_common_recovery_and_concurrency_units(self) -> None:
-        config = load_config(REPOSITORY / "bench/config/quick.toml")
         plan = build_plan(
-            config,
+            self._config(recovery=True),
             ("bsfs-maple", "ext4"),
             custom_bsfs=("bsfs-maple",),
         )
@@ -1534,47 +1560,14 @@ class PlanTests(unittest.TestCase):
             {"common", "recovery", "concurrency"},
         )
         self.assertEqual(
-            [
-                (unit.scenario, unit.phases)
-                for unit in custom_units
-                if unit.matrix == "recovery"
-            ],
-            [("recovery-pressure", ("run", "verify"))],
-        )
-        self.assertEqual(
             {unit.workers for unit in custom_units if unit.matrix == "concurrency"},
             {1, 4},
         )
 
-    def test_custom_bsfs_plan_matches_executed_phases(self) -> None:
-        selected = ("bsfs-maple", "bsfs", "old-bsfs", "ext4")
-        executed, config = self._executed_phases(
-            "quick", filesystems=selected, custom_bsfs=("bsfs-maple",)
-        )
-        plan = build_plan(config, selected, custom_bsfs=("bsfs-maple",))
-
-        self.assertEqual(
-            sorted(executed),
-            sorted(
-                (unit.filesystem, unit.scenario, phase, unit.workers)
-                for unit in plan.units
-                for phase in unit.phases
-            ),
-        )
-        # the recovery order is the one place the two disagreed
-        self.assertEqual(
-            [
-                row[0]
-                for row in executed
-                if row[1] in {"recovery-pressure", "old-recovery"}
-            ],
-            [
-                unit.filesystem
-                for unit in plan.units
-                if unit.matrix == "recovery"
-                for _ in unit.phases
-            ],
-        )
+    def test_an_unknown_scenario_is_rejected_before_anything_runs(self) -> None:
+        config = self._config(common_scenarios=("bulk", "nope"))
+        with self.assertRaisesRegex(ValueError, "unknown scenario: nope"):
+            build_plan(config, ("ext4",))
 
 
 class PhaseReportingTests(unittest.TestCase):
@@ -1589,13 +1582,12 @@ class PhaseReportingTests(unittest.TestCase):
             benchmark = BenchmarkRun(
                 repository=REPOSITORY,
                 run_dir=run_dir,
-                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                config=load_config(REPOSITORY / "bench/config/default.toml"),
                 runner=runner,
                 device="/dev/loop-test",
                 stable_device="/dev/loop-test",
                 device_info=None,
                 run_id="test",
-                publication_eligible=False,
                 reporter=reporter,
             )
             adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
@@ -1625,13 +1617,12 @@ class PhaseReportingTests(unittest.TestCase):
             benchmark = BenchmarkRun(
                 repository=REPOSITORY,
                 run_dir=run_dir,
-                config=load_config(REPOSITORY / "bench/config/quick.toml"),
+                config=load_config(REPOSITORY / "bench/config/default.toml"),
                 runner=runner,
                 device="/dev/loop-test",
                 stable_device="/dev/loop-test",
                 device_info=None,
                 run_id="test",
-                publication_eligible=False,
                 reporter=reporter,
             )
             adapter = StubAdapter(benchmark.context_for("ext4"), "ext4")
@@ -1653,7 +1644,7 @@ class ReporterTests(unittest.TestCase):
     def test_output_has_no_escape_sequences_without_color(self) -> None:
         reporter, stream = self._reporter()
         reporter.announce_plan(
-            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+            build_plan(load_config(REPOSITORY / "bench/config/default.toml"), ("ext4",))
         )
         reporter.unit_start(
             matrix="common", filesystem="ext4", scenario="bulk", repetition=0
@@ -1673,7 +1664,7 @@ class ReporterTests(unittest.TestCase):
     def test_every_line_puts_its_duration_in_one_column(self) -> None:
         reporter, stream = self._reporter()
         reporter.announce_plan(
-            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+            build_plan(load_config(REPOSITORY / "bench/config/default.toml"), ("ext4",))
         )
         reporter.unit_start(
             matrix="common", filesystem="ext4", scenario="bulk", repetition=0
@@ -1761,7 +1752,6 @@ class ReporterTests(unittest.TestCase):
             run_id="test",
             failures=[],
             kernel_findings=0,
-            publication_eligible=False,
             run_dir=Path("/tmp"),
         )
 
@@ -1782,7 +1772,7 @@ class ReporterTests(unittest.TestCase):
     def test_summary_reports_the_phases_that_were_reached(self) -> None:
         reporter, stream = self._reporter()
         reporter.announce_plan(
-            build_plan(load_config(REPOSITORY / "bench/config/quick.toml"), ("ext4",))
+            build_plan(load_config(REPOSITORY / "bench/config/default.toml"), ("ext4",))
         )
         reporter.unit_start(
             matrix="common", filesystem="ext4", scenario="bulk", repetition=0
@@ -1795,12 +1785,11 @@ class ReporterTests(unittest.TestCase):
             run_id="test",
             failures=[],
             kernel_findings=2,
-            publication_eligible=False,
             run_dir=Path("/tmp/run"),
         )
 
         text = stream.getvalue()
-        self.assertIn("1/30 planned phases were reached", text)
+        self.assertIn("1/90 planned phases were reached", text)
         self.assertIn("kernel log: 2 relevant findings", text)
         self.assertIn("analyze /tmp/run", text)
 
@@ -1825,7 +1814,6 @@ class ReporterTests(unittest.TestCase):
             run_id="test",
             failures=[],
             kernel_findings=0,
-            publication_eligible=False,
             run_dir=Path("/tmp/run"),
         )
 
@@ -1848,7 +1836,6 @@ class ReporterTests(unittest.TestCase):
             run_id="test",
             failures=[],
             kernel_findings=0,
-            publication_eligible=False,
             run_dir=Path("/tmp/run"),
         )
 
@@ -1870,7 +1857,6 @@ class ReporterTests(unittest.TestCase):
             run_id="test",
             failures=[],
             kernel_findings=0,
-            publication_eligible=False,
             run_dir=Path("/tmp/run"),
         )
 

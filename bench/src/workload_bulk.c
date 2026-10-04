@@ -19,16 +19,11 @@ struct bulk_parameters {
 
 static struct bulk_parameters bulk_parameters(
     const struct bench_run_config *config) {
-  if (config->profile == BENCH_PROFILE_PUBLICATION)
-    return (struct bulk_parameters){
-        .file_size = 1024ULL * 1024ULL * 1024ULL,
-        .random_reads = 20000,
-        .random_writes = 10000,
-    };
+  (void)config;
   return (struct bulk_parameters){
-      .file_size = 16ULL * 1024ULL * 1024ULL,
-      .random_reads = 256,
-      .random_writes = 128,
+      .file_size = 128ULL * 1024ULL * 1024ULL,
+      .random_reads = 4000,
+      .random_writes = 2000,
   };
 }
 

@@ -16,13 +16,25 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
 
 class CommandError(RuntimeError):
     def __init__(self, result: CommandResult):
         self.result = result
         rendered = " ".join(result.argv)
-        super().__init__(f"command failed ({result.returncode}): {rendered}")
+        if result.timed_out:
+            super().__init__(f"command timed out: {rendered}")
+        else:
+            super().__init__(f"command failed ({result.returncode}): {rendered}")
+
+
+def _text(captured: str | bytes | None) -> str:
+    if captured is None:
+        return ""
+    if isinstance(captured, bytes):
+        return captured.decode("utf-8", errors="replace")
+    return captured
 
 
 class CommandRunner:
@@ -31,10 +43,12 @@ class CommandRunner:
         run_dir: Path,
         dry_run: bool = False,
         reporter: Any | None = None,
+        default_timeout: float | None = None,
     ):
         self.run_dir = run_dir
         self.dry_run = dry_run
         self.reporter = reporter
+        self.default_timeout = default_timeout
         self.command_log = run_dir / "commands.jsonl"
         # where a failing command's stderr landed, for the progress reporter
         self.last_error_log: Path | None = None
@@ -77,6 +91,7 @@ class CommandRunner:
         label: str = "command",
         env: Mapping[str, str] | None = None,
         input_text: str | None = None,
+        timeout: float | None = None,
     ) -> CommandResult:
         normalized = tuple(os.fspath(item) for item in argv)
         if self.dry_run:
@@ -85,19 +100,34 @@ class CommandRunner:
 
         self._counter += 1
         started = time.monotonic()
-        completed = subprocess.run(
-            normalized,
-            cwd=cwd,
-            env=dict(env) if env else None,
-            input=input_text,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        limit = self.default_timeout if timeout is None else timeout
+        try:
+            completed = subprocess.run(
+                normalized,
+                cwd=cwd,
+                env=dict(env) if env else None,
+                input=input_text,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=limit,
+            )
+            result = CommandResult(
+                normalized,
+                completed.returncode,
+                completed.stdout,
+                completed.stderr,
+            )
+        except subprocess.TimeoutExpired as expired:
+            # subprocess.run already killed and reaped the child
+            result = CommandResult(
+                normalized,
+                -9,
+                _text(expired.stdout),
+                _text(expired.stderr) + f"\ntimed out after {limit:g} s\n",
+                timed_out=True,
+            )
         duration = time.monotonic() - started
-        result = CommandResult(
-            normalized, completed.returncode, completed.stdout, completed.stderr
-        )
         log_path = self.run_dir / "logs"
         log_path.mkdir(exist_ok=True)
         safe_label = "".join(
@@ -105,18 +135,18 @@ class CommandRunner:
         )
         stem = f"{self._counter:05d}-{safe_label}"
         (log_path / f"{stem}.stdout").write_text(
-            completed.stdout, encoding="utf-8"
+            result.stdout, encoding="utf-8"
         )
         (log_path / f"{stem}.stderr").write_text(
-            completed.stderr, encoding="utf-8"
+            result.stderr, encoding="utf-8"
         )
         self.last_error_log = log_path / f"{stem}.stderr"
         self._record(normalized, cwd, result, label, duration)
         if self.reporter is not None:
             self.reporter.command(
-                label, normalized, completed.returncode, duration
+                label, normalized, result.returncode, duration
             )
-        if check and completed.returncode != 0:
+        if result.timed_out or (check and result.returncode != 0):
             raise CommandError(result)
         return result
 

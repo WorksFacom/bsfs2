@@ -97,9 +97,8 @@ static void start_gate_release(struct start_gate *gate, int aborted) {
 }
 
 static uint64_t concurrency_size(const struct bench_run_config *config) {
-  return config->profile == BENCH_PROFILE_PUBLICATION
-             ? 256ULL * 1024ULL * 1024ULL
-             : 8ULL * 1024ULL * 1024ULL;
+  (void)config;
+  return 32ULL * 1024ULL * 1024ULL;
 }
 
 static void *sequential_worker(void *opaque) {
@@ -340,30 +339,24 @@ struct concurrent_mixed_plan {
 
 static uint32_t concurrent_mixed_files(
     const struct bench_run_config *config) {
-  return config->profile == BENCH_PROFILE_PUBLICATION ? 2000 : 100;
+  (void)config;
+  return 250;
 }
 
 static uint32_t concurrent_mixed_directories(
     const struct bench_run_config *config) {
-  return config->profile == BENCH_PROFILE_PUBLICATION ? 100 : 10;
+  (void)config;
+  return 20;
 }
 
 static uint64_t concurrent_mixed_size(
     const struct bench_run_config *config, uint32_t file) {
-  if (config->profile == BENCH_PROFILE_PUBLICATION) {
-    if (file < 1000)
-      return 4096;
-    if (file < 1600)
-      return 16384;
-    if (file < 1900)
-      return 65536;
-    return 1024 * 1024;
-  }
-  if (file < 50)
+  (void)config;
+  if (file < 125)
     return 4096;
-  if (file < 80)
+  if (file < 200)
     return 16384;
-  if (file < 95)
+  if (file < 238)
     return 65536;
   return 1024 * 1024;
 }

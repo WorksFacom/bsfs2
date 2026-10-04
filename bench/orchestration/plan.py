@@ -1,7 +1,6 @@
-"""static description of what a run will execute.
+"""what a run executes: one step table per scenario, expanded into the ordered list of units.
 
-the tables mirror the control flow in ``run.py`` so totals are known before the first mkfs without
-making the executor data-driven. ``test_plan_matches_executed_phases`` pins the two together.
+``run.py`` walks the same units, so the totals shown before the first mkfs can't drift from what runs.
 """
 from __future__ import annotations
 
@@ -12,49 +11,43 @@ from .filesystems import BSFS_FILESYSTEMS
 from .safety import cyclic_schedule
 
 
-COMMON_FILESYSTEMS = (
-    *BSFS_FILESYSTEMS, "old-bsfs", "ext4", "btrfs", "zfs", "zfs-4k"
-)
-KERNEL_FILESYSTEMS = (*BSFS_FILESYSTEMS, "ext4", "btrfs", "zfs", "zfs-4k")
+FILESYSTEMS = (*BSFS_FILESYSTEMS, "ext4", "btrfs", "zfs", "zfs-4k")
 
-COMMON_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
+# cache transitions between phases, see cache.py
+COLD = "@cold-reset"
+REOPEN = "@reopen"
+
+# without a drop before the cold phases, reads and lookups hit the page and dentry caches
+# and every filesystem looks the same
+SCENARIOS: dict[str, tuple[str, ...]] = {
     "bulk": (
         "prepare",
+        COLD,
         "cold-read",
         "warm-read",
+        COLD,
         "random-read",
         "random-write",
+        REOPEN,
         "verify",
     ),
     "metadata": (
         "create",
+        COLD,
         "stat-cold",
         "stat-warm",
+        COLD,
         "iterate",
         "rename",
         "unlink",
         "rmdir",
+        REOPEN,
         "verify",
     ),
-    "mixed": ("create", "read", "edit", "verify"),
-}
-
-# one tuple per fresh filesystem. old-bsfs retention and restore can't share a device image,
-# so they get separate mkfs cycles
-RECOVERY_PHASES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
-    **{
-        filesystem: (("recovery-pressure", ("run", "verify")),)
-        for filesystem in BSFS_FILESYSTEMS
-    },
-    "old-bsfs": (
-        ("old-recovery", ("prepare", "retention")),
-        ("old-recovery", ("prepare", "restore", "purge")),
-    ),
-}
-
-CONCURRENCY_SCENARIO_PHASES: dict[str, tuple[str, ...]] = {
-    "concurrency-seq": ("write", "read"),
-    "concurrency-mixed": ("create", "read", "edit", "verify"),
+    "mixed": ("create", COLD, "read", "edit", REOPEN, "verify"),
+    "concurrency-seq": ("write", COLD, "read"),
+    "concurrency-mixed": ("create", COLD, "read", "edit", REOPEN, "verify"),
+    "recovery-pressure": ("run", REOPEN, "verify"),
 }
 
 CONCURRENCY_WORKERS = (1, 4)
@@ -62,14 +55,18 @@ CONCURRENCY_WORKERS = (1, 4)
 
 @dataclass(frozen=True)
 class PlannedUnit:
-    """one fresh_filesystem cycle: condition, mkfs, mount, phases, unmount."""
+    """one fresh_filesystem cycle: condition, mkfs, mount, steps, unmount."""
 
     matrix: str
     filesystem: str
     scenario: str
     repetition: int
     workers: int
-    phases: tuple[str, ...]
+    steps: tuple[str, ...]
+
+    @property
+    def phases(self) -> tuple[str, ...]:
+        return tuple(step for step in self.steps if not step.startswith("@"))
 
 
 @dataclass(frozen=True)
@@ -100,6 +97,13 @@ class RunPlan:
         return sum(1 for unit in self.units if unit.filesystem == filesystem)
 
 
+def _steps(scenario: str) -> tuple[str, ...]:
+    try:
+        return SCENARIOS[scenario]
+    except KeyError as error:
+        raise ValueError(f"unknown scenario: {scenario}") from error
+
+
 def build_plan(
     config: RunConfig,
     filesystems: tuple[str, ...],
@@ -107,62 +111,18 @@ def build_plan(
     custom_bsfs: tuple[str, ...] = (),
 ) -> RunPlan:
     units: list[PlannedUnit] = []
-    kernel_filesystems = (*KERNEL_FILESYSTEMS, *custom_bsfs)
-    # order mirrors recovery_matrix: every bsfs variant, then old-bsfs
-    recovery_filesystems = (*BSFS_FILESYSTEMS, *custom_bsfs, "old-bsfs")
-    recovery_phases = {
-        **RECOVERY_PHASES,
-        **{
-            filesystem: (("recovery-pressure", ("run", "verify")),)
-            for filesystem in custom_bsfs
-        },
-    }
-
-    if config.publication:
-        for filesystem in filesystems:
-            units.append(
-                PlannedUnit(
-                    "validation",
-                    filesystem,
-                    "bulk",
-                    0,
-                    1,
-                    COMMON_SCENARIO_PHASES["bulk"],
-                )
-            )
 
     for repetition in range(config.repetitions):
         for filesystem in cyclic_schedule(filesystems, repetition):
             for scenario in config.common_scenarios:
                 units.append(
                     PlannedUnit(
-                        "common",
-                        filesystem,
-                        scenario,
-                        repetition,
-                        1,
-                        COMMON_SCENARIO_PHASES.get(scenario, ()),
+                        "common", filesystem, scenario, repetition, 1, _steps(scenario)
                     )
                 )
 
     for repetition in range(config.repetitions):
-        for filesystem in recovery_filesystems:
-            if filesystem not in filesystems:
-                continue
-            for scenario, phases in recovery_phases[filesystem]:
-                units.append(
-                    PlannedUnit(
-                        "recovery", filesystem, scenario, repetition, 1, phases
-                    )
-                )
-
-    kernel = tuple(
-        filesystem
-        for filesystem in filesystems
-        if filesystem in kernel_filesystems
-    )
-    for repetition in range(config.repetitions):
-        for filesystem in cyclic_schedule(kernel, repetition):
+        for filesystem in cyclic_schedule(filesystems, repetition):
             for scenario in config.concurrency_scenarios:
                 for workers in CONCURRENCY_WORKERS:
                     if len(config.concurrency_cpus) < workers:
@@ -174,8 +134,24 @@ def build_plan(
                             scenario,
                             repetition,
                             workers,
-                            CONCURRENCY_SCENARIO_PHASES.get(scenario, ()),
+                            _steps(scenario),
                         )
                     )
+
+    # last and once per target: it rewrites the whole device several times and has nothing to compare against
+    if config.recovery:
+        for filesystem in (*BSFS_FILESYSTEMS, *custom_bsfs):
+            if filesystem not in filesystems:
+                continue
+            units.append(
+                PlannedUnit(
+                    "recovery",
+                    filesystem,
+                    "recovery-pressure",
+                    0,
+                    1,
+                    _steps("recovery-pressure"),
+                )
+            )
 
     return RunPlan(tuple(units))

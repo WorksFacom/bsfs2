@@ -8,11 +8,6 @@
 #define BENCH_PATH_MAX 4096
 #define BENCH_ID_MAX 128
 
-enum bench_profile {
-  BENCH_PROFILE_QUICK,
-  BENCH_PROFILE_PUBLICATION,
-};
-
 struct bench_run_config {
   struct bench_backend backend;
   const char *target;
@@ -26,13 +21,11 @@ struct bench_run_config {
   const char *filesystem_version;
   const char *filesystem_options;
   const char *run_id;
-  enum bench_profile profile;
   uint64_t seed;
   unsigned int repetition;
   unsigned int worker_count;
   unsigned int cpu_count;
   unsigned int cpus[256];
-  int publication_eligible;
 };
 
 int bench_run_workload(struct bench_run_config *config);

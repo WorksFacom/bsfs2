@@ -22,13 +22,6 @@ struct bench_space {
 
 typedef int (*bench_dir_callback)(const char *name, void *opaque);
 
-#define BENCH_RECOVERY_NAME_MAX 256
-
-struct bench_recovery_entry {
-  uint32_t id;
-  char name[BENCH_RECOVERY_NAME_MAX];
-};
-
 struct bench_backend;
 
 struct bench_backend_ops {
@@ -58,15 +51,6 @@ struct bench_backend_ops {
   int (*rmdir)(struct bench_backend *backend, const char *path);
   int (*flush)(struct bench_backend *backend);
   int (*space)(struct bench_backend *backend, struct bench_space *out);
-
-  /* optional, -EOPNOTSUPP when the backend has no native equivalent */
-  int (*recovery_list)(struct bench_backend *backend,
-                       struct bench_recovery_entry *entries, size_t capacity,
-                       size_t *count);
-  int (*recovery_restore)(struct bench_backend *backend, uint32_t id,
-                          const char *destination);
-  int (*recovery_purge)(struct bench_backend *backend, uint64_t blocks,
-                        uint64_t *blocks_reclaimed);
 };
 
 struct bench_backend {
@@ -75,7 +59,6 @@ struct bench_backend {
   void *private_data;
 };
 
-/* each runner binary links exactly one implementation */
 int bench_backend_create(struct bench_backend *backend);
 void bench_backend_destroy(struct bench_backend *backend);
 

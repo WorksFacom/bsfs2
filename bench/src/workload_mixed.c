@@ -28,20 +28,13 @@ struct mixed_plan {
 
 static struct mixed_parameters mixed_parameters(
     const struct bench_run_config *config) {
-  if (config->profile == BENCH_PROFILE_PUBLICATION)
-    return (struct mixed_parameters){
-        .directories = 100,
-        .files = 2000,
-        .small_4k = 1000,
-        .small_16k = 600,
-        .small_64k = 300,
-    };
+  (void)config;
   return (struct mixed_parameters){
-      .directories = 10,
-      .files = 100,
-      .small_4k = 50,
-      .small_16k = 30,
-      .small_64k = 15,
+      .directories = 20,
+      .files = 500,
+      .small_4k = 250,
+      .small_16k = 150,
+      .small_64k = 75,
   };
 }
 

@@ -23,16 +23,11 @@ struct iteration_context {
 
 static struct metadata_parameters metadata_parameters(
     const struct bench_run_config *config) {
-  if (config->profile == BENCH_PROFILE_PUBLICATION)
-    return (struct metadata_parameters){
-        .directories = 100,
-        .files = 5000,
-        .renames = 1000,
-    };
+  (void)config;
   return (struct metadata_parameters){
-      .directories = 10,
-      .files = 100,
-      .renames = 20,
+      .directories = 20,
+      .files = 1000,
+      .renames = 200,
   };
 }
 

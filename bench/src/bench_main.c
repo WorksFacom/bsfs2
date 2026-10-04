@@ -14,10 +14,8 @@
 
 static void usage(FILE *output, const char *program) {
   fprintf(output,
-          "Usage: %s (--root PATH | --device PATH) --scenario NAME "
-          "[options]\n"
+          "Usage: %s --root PATH --scenario NAME [options]\n"
           "  --phase NAME                phase or all (default: all)\n"
-          "  --profile quick|publication\n"
           "  --seed N                    deterministic seed\n"
           "  --repetition N              measured repetition number\n"
           "  --workers N                 worker count\n"
@@ -30,8 +28,7 @@ static void usage(FILE *output, const char *program) {
           "  --filesystem-options TEXT\n"
           "  --run-id ID\n"
           "  --cpu N                     pin runner to one CPU\n"
-          "  --cpu-list N[,N...]         one configured CPU per worker\n"
-          "  --publication-eligible\n",
+          "  --cpu-list N[,N...]         one configured CPU per worker\n",
           program);
 }
 
@@ -101,7 +98,6 @@ int main(int argc, char **argv) {
       .filesystem_version = "unknown",
       .filesystem_options = "",
       .run_id = "manual",
-      .profile = BENCH_PROFILE_QUICK,
       .seed = 1234,
       .worker_count = 1,
   };
@@ -110,10 +106,8 @@ int main(int argc, char **argv) {
   int error;
   static const struct option options[] = {
       {"root", required_argument, NULL, 'r'},
-      {"device", required_argument, NULL, 'd'},
       {"scenario", required_argument, NULL, 's'},
       {"phase", required_argument, NULL, 'p'},
-      {"profile", required_argument, NULL, 'P'},
       {"seed", required_argument, NULL, 'S'},
       {"repetition", required_argument, NULL, 'R'},
       {"workers", required_argument, NULL, 'w'},
@@ -127,7 +121,6 @@ int main(int argc, char **argv) {
       {"run-id", required_argument, NULL, 'i'},
       {"cpu", required_argument, NULL, 'C'},
       {"cpu-list", required_argument, NULL, 'L'},
-      {"publication-eligible", no_argument, NULL, 'e'},
       {"help", no_argument, NULL, 'h'},
       {NULL, 0, NULL, 0},
   };
@@ -136,7 +129,6 @@ int main(int argc, char **argv) {
     uint64_t value;
     switch (option) {
     case 'r':
-    case 'd':
       config.target = optarg;
       break;
     case 's':
@@ -144,16 +136,6 @@ int main(int argc, char **argv) {
       break;
     case 'p':
       config.phase = optarg;
-      break;
-    case 'P':
-      if (strcmp(optarg, "publication") == 0)
-        config.profile = BENCH_PROFILE_PUBLICATION;
-      else if (strcmp(optarg, "quick") == 0)
-        config.profile = BENCH_PROFILE_QUICK;
-      else {
-        fprintf(stderr, "invalid profile: %s\n", optarg);
-        return 2;
-      }
       break;
     case 'S':
       if (parse_u64(optarg, &config.seed))
@@ -199,9 +181,6 @@ int main(int argc, char **argv) {
     case 'L':
       if (parse_cpu_list(optarg, &config) != 0)
         return 2;
-      break;
-    case 'e':
-      config.publication_eligible = 1;
       break;
     case 'h':
       usage(stdout, argv[0]);

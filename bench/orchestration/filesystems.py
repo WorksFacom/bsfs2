@@ -34,7 +34,6 @@ class FilesystemContext:
 
 class FilesystemAdapter:
     name = ""
-    mounted = True
     required_tools: tuple[str, ...] = ()
     mount_options = ""
 
@@ -58,8 +57,6 @@ class FilesystemAdapter:
         raise NotImplementedError
 
     def unmount(self) -> None:
-        if not self.mounted:
-            return
         self.context.runner.run(
             ["umount", str(self.context.mountpoint)],
             check=False,
@@ -100,10 +97,6 @@ class FilesystemAdapter:
             "format_command": " ".join(self.format_argv()),
             "mount_options": self.mount_options,
         }
-
-    @property
-    def target_argument(self) -> tuple[str, str]:
-        return "--root", str(self.context.mountpoint)
 
 
 class BsfsAdapter(FilesystemAdapter):
@@ -207,39 +200,7 @@ class CustomBsfsAdapter(BsfsAdapter):
             "formatter_sha256": self.artifacts.formatter_sha256,
             "module_name": self.artifacts.module_name,
             "vermagic": self.artifacts.vermagic,
-            "correctness_gate_coverage": "publication-validation-only",
         }
-
-
-class OldBsfsAdapter(FilesystemAdapter):
-    name = "old-bsfs"
-    mounted = False
-    mount_options = "raw-userspace-api"
-
-    def format_argv(self) -> list[str]:
-        return [
-            str(self.context.repository / "bench/bin/mkfs-old-bsfs"),
-            self.context.device,
-        ]
-
-    def version(self) -> str:
-        described = self.context.runner.run(
-            ["git", "-C", str(self.context.repository.parent / "bsfs_old"),
-             "describe", "--always", "--dirty"],
-            check=False,
-            label="old-bsfs-version",
-        )
-        return described.stdout.strip() or "unknown"
-
-    def mount(self) -> None:
-        return
-
-    def unmount(self) -> None:
-        return
-
-    @property
-    def target_argument(self) -> tuple[str, str]:
-        return "--device", self.context.device
 
 
 class Ext4Adapter(FilesystemAdapter):
@@ -424,7 +385,6 @@ class Zfs4KAdapter(ZfsAdapter):
 
 ADAPTERS: dict[str, type[FilesystemAdapter]] = {
     "bsfs": BsfsAdapter,
-    "old-bsfs": OldBsfsAdapter,
     "ext4": Ext4Adapter,
     "btrfs": BtrfsAdapter,
     "zfs": ZfsAdapter,
@@ -439,7 +399,7 @@ for _strategy in alloc_strategies(REPOSITORY):
         {"name": f"bsfs-{_strategy}", "alloc_strategy": _strategy},
     )
 
-# test membership here, never a "bsfs" prefix. old-bsfs is a different filesystem
+# test membership here, never a "bsfs" prefix
 BSFS_FILESYSTEMS = ("bsfs", *(f"bsfs-{s}" for s in alloc_strategies(REPOSITORY)))
 
 

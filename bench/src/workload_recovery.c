@@ -32,7 +32,8 @@ struct survivor_scan {
 };
 
 static uint32_t recovery_seed_files(const struct bench_run_config *config) {
-  return config->profile == BENCH_PROFILE_PUBLICATION ? 1000 : 64;
+  (void)config;
+  return 256;
 }
 
 static void reclaim_accumulate(struct bench_result *result,

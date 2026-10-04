@@ -6,7 +6,7 @@ import time
 from typing import Iterator
 
 from .command import CommandRunner
-from .filesystems import FilesystemAdapter, OldBsfsAdapter, ZfsAdapter
+from .filesystems import FilesystemAdapter, ZfsAdapter
 
 
 @contextmanager
@@ -30,10 +30,6 @@ def drop_linux_caches(runner: CommandRunner, device: str) -> None:
 
 def cold_reset(adapter: FilesystemAdapter) -> None:
     context = adapter.context
-    if isinstance(adapter, OldBsfsAdapter):
-        with _reported(adapter, "flush device"):
-            drop_linux_caches(context.runner, context.device)
-        return
     if isinstance(adapter, ZfsAdapter):
         with _reported(adapter, "export + drop_caches + import"):
             adapter.unmount()
@@ -47,14 +43,6 @@ def cold_reset(adapter: FilesystemAdapter) -> None:
 
 
 def reopen(adapter: FilesystemAdapter) -> None:
-    context = adapter.context
-    if isinstance(adapter, OldBsfsAdapter):
-        with _reported(adapter, "reopen (flush)"):
-            context.runner.run(
-                ["blockdev", "--flushbufs", context.device],
-                label="old-bsfs-reopen-flush",
-            )
-        return
     if isinstance(adapter, ZfsAdapter):
         with _reported(adapter, "reopen (export + import)"):
             adapter.unmount()

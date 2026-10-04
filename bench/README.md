@@ -1,38 +1,54 @@
 # BSFS benchmark suite
 
-This suite runs kernel BSFS, Ext4, Btrfs, and ZFS through one POSIX runner. The
-sibling userspace BSFS runs the same workload sources through its native API.
+This suite runs kernel BSFS, Ext4, Btrfs, and ZFS through one POSIX runner and
+compares them phase by phase.
 
-The publication runner is destructive. It formats the selected partition
-before every measured scenario and repetition. Read the safety section before
-running it.
+Runs are destructive. The runner formats the target before every scenario and
+repetition. For a physical partition, read the safety section first.
 
 ## Build and local checks
 
-Point `OLD_BSFS_DIR` at the old-BSFS source tree. It is only read, and its
-objects land in this repository's build directory.
-
 ```sh
-make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old
-make -C bench OLD_BSFS_DIR=/absolute/path/to/bsfs_old check
+make bench
+make bench-check
 ```
 
-Runs without `old-bsfs` only need the POSIX runner, which builds without an
-old-BSFS checkout:
+The build creates `bench/bin/bench-posix`, with `-O2` and `-Werror`.
 
-```sh
-make -C bench bin/bench-posix
-```
+## What a run does
 
-The build creates:
+`bench/config/default.toml` runs `bsfs`, `ext4`, `btrfs`, and `zfs` for three
+repetitions on a 1 GiB loop image and is sized to finish in about 10 to 15
+minutes. There is one workload size:
 
-- `bench/bin/bench-posix`
-- `bench/bin/bench-old`
-- `bench/bin/mkfs-old-bsfs`
+| scenario | work |
+| --- | --- |
+| `bulk` | one 128 MiB file: sequential write, cold and warm read, 4000 random 4 KiB reads, 2000 random 4 KiB overwrites, verify |
+| `metadata` | 20 directories, 1000 files, 200 renames: create, cold and warm stat, iterate, rename, unlink, rmdir, verify |
+| `mixed` | 500 files from 4 KiB to 1 MiB across 20 directories: create, cold read, edit, verify |
+| `concurrency-seq` | 32 MiB per worker, 1 and 4 workers: write, cold read |
+| `concurrency-mixed` | 250 files per worker, 1 and 4 workers: create, cold read, edit, verify |
+| `recovery-pressure` | bsfs only, off by default, see below |
 
-Both runners use `-O2`. The shared benchmark sources build with `-Werror`. The
-old-BSFS sources don't, since newer compilers warn about code that lives outside
-this repository.
+Every scenario gets a fresh mkfs. The step order, including where caches are
+dropped, is the `SCENARIOS` table in `orchestration/plan.py`.
+
+### Recovery pressure
+
+`recovery-pressure` fills the device three times to force reclaim and reads the
+bsfs `reclaim_stats` counters. It only exists for bsfs targets, so it is not
+comparative, and its cost scales with device size rather than with the
+workload (a few minutes on the 1 GiB loop image). Enable it with `--recovery`,
+or `recovery = true` under `[run]`; `--no-recovery` overrides the config the
+other way. It runs once per bsfs target after everything else, not once per
+repetition.
+
+### Timeouts
+
+No command can hang a run. A workload phase is killed after `phase_timeout_s`
+(default 300, three times that for recovery pressure), and helpers such as
+mkfs, mount, and umount after 300 seconds. A timeout is recorded as a failure
+for that scenario and the run moves on to the next one.
 
 ## Dry run
 
@@ -42,36 +58,38 @@ drops caches:
 
 ```sh
 python3 -m bench.orchestration.run \
-  --config bench/config/quick.toml \
+  --config bench/config/default.toml \
   --loop-image /tmp/bsfs-bench.img \
-  --filesystems old-bsfs ext4 btrfs \
+  --filesystems bsfs ext4 btrfs \
   --dry-run
 ```
 
 If the loop image already exists, pass its resolved path to `--confirm` too.
 Real loop and physical runs need root.
 
-## Development loop run
-
-Loop results are always marked non-publication:
+## Loop run
 
 ```sh
 sudo python3 -m bench.orchestration.run \
-  --config bench/config/quick.toml \
-  --loop-image /tmp/bsfs-bench.img \
-  --filesystems bsfs old-bsfs ext4 btrfs
+  --config bench/config/default.toml \
+  --loop-image /tmp/bsfs-bench.img
 ```
 
-Under `sudo`, the finished result directory is chowned back to the invoking
-user, so analysis runs without `sudo`. The mountpoint under `mnt/` is skipped
-while still mounted. The `--loop-image` file lives outside the result directory
-and stays root-owned.
+Only list installed filesystems, either in the config or with `--filesystems`.
+`zfs` and `zfs-4k` need working `zpool`, `zfs`, and the matching kernel module.
+A filesystem with missing tools is recorded as a failure and the run exits
+nonzero.
 
-Build the C runners the selected filesystems need before a real run. The
-launcher checks they are executable before it creates or attaches the loop
-image, but it won't build them, so rebuild after touching `bench/src/`. Every
-run records the size, mtime, and SHA-256 of each built artifact under
-`built_artifacts` in `manifest.json`, so a stale binary shows up after the fact.
+Under `sudo`, the finished result directory is chowned back to the invoking
+user. The mountpoint under `mnt/` is skipped while still mounted. The
+`--loop-image` file lives outside the result directory and stays root-owned.
+
+Build the C runner before a real run. The launcher checks it is executable
+before it creates or attaches the loop image, but it won't build it, so rebuild
+after touching `bench/src/`. Every run records the size, mtime, and SHA-256 of
+each built artifact under `built_artifacts` in `manifest.json`, so a stale
+binary shows up after the fact.
+
 
 With a repository-built `bsfs` target selected, the launcher builds `bsfs2.ko`,
 unloads any stale `bsfs2`, and checks the new module loads on the running kernel.
@@ -96,7 +114,8 @@ sudo python3 -m bench.orchestration.run \
 
 `bench/config/alloc.toml` selects `bsfs-linear`, `bsfs-heap`, and
 `bsfs-twolevel`. They mix freely with `ext4`, `btrfs`, and the rest, and run the
-full matrix including recovery pressure and concurrency. Plain `bsfs` is still
+same matrix. Add `--recovery` here: recovery pressure is where the allocators
+are most likely to differ. Plain `bsfs` is still
 the default build, the same module as `bsfs-linear`. Selecting both benchmarks
 one build under two labels, and the launcher warns about it.
 
@@ -144,20 +163,11 @@ a bogus comparison.
 Preflight copies each selected pair to `bench/build/custom/NAME/`, checks the
 module is named `bsfs2`, probe-loads it, checks it registers the `bsfs`
 filesystem type, and unloads it, all before the benchmark target is touched.
-The custom target then runs the same common, recovery, concurrency, and
-publication-validation matrices as the repository-built targets.
+The custom target then runs the same common, concurrency, and optional recovery
+units as the repository-built targets.
 
-Custom artifacts stay publication eligible when every normal publication check
-passes. The publication validation matrix covers them, but the optional QEMU
-correctness gates only cover this checkout's default module. The manifest
-records both artifact hashes, their original and staged paths, the module
-vermagic, and whatever source Git state it can find.
-
-The quick profile runs cut-down versions of every common, recovery, and
-one- and four-worker scenario. Only list installed filesystems. `zfs` and
-`zfs-4k` need working `zpool`, `zfs`, and the matching kernel module. A
-filesystem with missing tools is recorded as a failure and the run exits
-nonzero.
+The manifest records both artifact hashes, their original and staged paths, the
+module vermagic, and whatever source Git state it can find.
 
 ## Progress output
 
@@ -200,8 +210,8 @@ matrix
 
 On failure the runner prints the path to the command's captured stderr rather
 than burying it in `manifest.json`. The closing summary lists total wall time,
-phase and failure counts per filesystem, kernel-log findings, and the `analyze`
-command.
+phase and failure counts per filesystem, kernel-log findings, and the path to
+the generated report.
 
 | flag | effect |
 | --- | --- |
@@ -215,17 +225,17 @@ background threads, no timers, and it reads results only after the measured
 process exits. `commands.jsonl` records each command's wall time as
 `duration_s`.
 
-## Physical publication run
+## Physical partition run
 
-Publication mode only accepts a partition symlink under `/dev/disk/by-id/`
-ending in `-partN`. Resolve it before confirming:
+`--device` only accepts a partition symlink under `/dev/disk/by-id/` ending in
+`-partN`. Resolve it before confirming:
 
 ```sh
 target=/dev/disk/by-id/REPLACE-ME-part1
 resolved=$(realpath "$target")
 
 sudo python3 -m bench.orchestration.run \
-  --config bench/config/publication.toml \
+  --config bench/config/default.toml \
   --device "$target" \
   --confirm "$resolved"
 ```
@@ -237,26 +247,16 @@ paths can't know where a host keeps `/efi`, `/var`, or `/usr`, and a wrong guess
 wipes a partition. Use a disk with nothing else mounted, or pass
 `--allow-shared-disk`.
 
-Publication partitions must be 4 to 16 GiB unless you pass
-`--allow-size-outside-range`. The manifest records both overrides.
-
-Before any measured publication work, the runner builds the current module,
-formatter, and both benchmark runners, runs a reduced untimed validation matrix,
-and records the fixed cyclic filesystem schedule and the exact commands.
-
-`--run-correctness-gates` adds the QEMU smoke, persistence, copy-on-write,
-crash, ENOSPC-crash, fuzz, alias, and recovery checks. They are off by default
-because they need `KDIR` pointing at a bootable kernel build that matches the
-module under test. The manifest records whether they were requested and how they
-went.
+Partitions must be 4 to 16 GiB unless you pass `--allow-size-outside-range`.
+The manifest records both overrides. Recovery pressure takes proportionally
+longer on a larger target, so raise `phase_timeout_s` if you enable it here.
 
 ## Outputs
 
 Each run directory contains:
 
 - `manifest.json`: host, kernel, repositories, device, tools, affinity,
-  configuration, correctness gates, failures, and the fixed filesystem
-  schedule.
+  configuration, failures, and the fixed filesystem schedule.
 - `commands.jsonl` and `logs/`: exact argv vectors and command output.
 - `raw/results.jsonl`: one schema-versioned object per benchmark phase.
 - `raw/artifacts/`: ordered binary latency samples and recovery timelines.
@@ -266,7 +266,9 @@ Failures stay in the JSONL and logs. After a measured workload fails, the
 runner moves on to the remaining filesystem and scenario combinations, then
 exits nonzero after cleanup.
 
-Generate publication tables and a consolidated HTML report with:
+- `derived/`: summary tables and `report.html`, written when the run ends.
+
+To regenerate `derived/` for an existing run:
 
 ```sh
 python3 -m bench.orchestration.analyze bench/results/RUN_ID
@@ -314,10 +316,7 @@ whatever writeback happened to land during the phase.
   formatted with. Run both to separate "ZFS defaults" from "ZFS at parity".
 - Every result is from a fresh filesystem. Each repetition reformats and
   re-conditions the device, so there is no aging and no fragmentation.
-- `old-bsfs` is a userspace filesystem driving a raw block device through its
-  own API, with no VFS, no dentry cache, and no page-cache-backed lookups. It
-  sits out the concurrency matrix. Despite the name it isn't a `bsfs-*`
-  allocator variant, it's a different source tree.
+- Recovery pressure runs once, so its numbers have no spread.
 - The `bsfs-*` targets differ only in the compiled block allocator. Workloads
   with plenty of free blocks may barely differ. Recovery pressure and
   write-heavy phases are where a difference most likely shows up.
@@ -340,15 +339,6 @@ bench/bin/bench-posix \
   --root /mnt/bsfs-bench \
   --scenario bulk \
   --phase prepare \
-  --profile quick \
-  --seed 1234 \
-  --results /tmp/results.jsonl
-
-bench/bin/bench-old \
-  --device /dev/loop0 \
-  --scenario bulk \
-  --phase prepare \
-  --profile quick \
   --seed 1234 \
   --results /tmp/results.jsonl
 ```

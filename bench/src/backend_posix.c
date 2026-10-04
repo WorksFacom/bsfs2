@@ -293,32 +293,6 @@ static int posix_space(struct bench_backend *backend, struct bench_space *out) {
   return 0;
 }
 
-static int unsupported_list(struct bench_backend *backend,
-                            struct bench_recovery_entry *entries,
-                            size_t capacity, size_t *count) {
-  (void)backend;
-  (void)entries;
-  (void)capacity;
-  (void)count;
-  return -EOPNOTSUPP;
-}
-
-static int unsupported_restore(struct bench_backend *backend, uint32_t id,
-                               const char *destination) {
-  (void)backend;
-  (void)id;
-  (void)destination;
-  return -EOPNOTSUPP;
-}
-
-static int unsupported_purge(struct bench_backend *backend, uint64_t blocks,
-                             uint64_t *blocks_reclaimed) {
-  (void)backend;
-  (void)blocks;
-  (void)blocks_reclaimed;
-  return -EOPNOTSUPP;
-}
-
 static const struct bench_backend_ops posix_ops = {
     .open = posix_open_backend,
     .close = posix_close_backend,
@@ -336,9 +310,6 @@ static const struct bench_backend_ops posix_ops = {
     .rmdir = posix_rmdir,
     .flush = posix_flush,
     .space = posix_space,
-    .recovery_list = unsupported_list,
-    .recovery_restore = unsupported_restore,
-    .recovery_purge = unsupported_purge,
 };
 
 int bench_backend_create(struct bench_backend *backend) {

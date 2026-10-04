@@ -151,24 +151,6 @@ PHASE_DESCRIPTIONS = {
             "Enumerates the final refill's surviving files and validates every file's contents."
         ),
     },
-    "old-recovery": {
-        "create": (
-            "Creates and writes the 64 KiB files used by the old-BSFS recovery "
-            "test, then flushes them."
-        ),
-        "native-retention-logical-deletion": (
-            "Logically deletes the files while old-BSFS retains recovery entries, then flushes the deletions."
-        ),
-        "retention-verify": (
-            "Lists retained recovery entries and verifies that every deleted file is represented."
-        ),
-        "restore-fixed-subset": (
-            "Restores a fixed subset of retained files, validates their contents, then flushes the restores."
-        ),
-        "explicit-purge": (
-            "Explicitly purges retained recovery data, records reclaimed blocks, then flushes the purge."
-        ),
-    },
 }
 
 
@@ -194,7 +176,7 @@ def _phase_description(scenario: str, phase: str) -> str:
         removal_match = re.fullmatch(r"cycle-(\d+)-native-namespace-removal", phase)
         if refill_match:
             description = (
-                f"Recovery cycle {refill_match.group(1)} creates 64 KiB files "
+                f"Recovery cycle {refill_match.group(1)} creates 1 MiB files "
                 "until the reclaim target or ENOSPC is reached, then flushes them."
             )
         elif removal_match:
@@ -272,7 +254,6 @@ def _manifest_context(manifest: dict[str, Any]) -> tuple[str, str, str]:
         kernel = {}
 
     items = (
-        ("Profile", config.get("profile", "unknown")),
         ("Host", manifest.get("hostname", "unknown")),
         ("Kernel", kernel.get("release", "unknown")),
         ("Started", manifest.get("created_at", "unknown")),
@@ -345,23 +326,11 @@ def render_report(
     )
 
     run_id = str(manifest.get("run_id") or run_dir.name)
-    eligibility = manifest.get("publication_eligible")
-    if eligibility is True:
-        status = "Publication eligible"
-        status_class = "badge good"
-    elif eligibility is False:
-        status = "Not publication eligible"
-        status_class = "badge warning"
-    else:
-        status = "Eligibility not recorded"
-        status_class = "badge"
     context, schedule, overrides = _manifest_context(manifest)
 
     replacements = {
         "__TITLE__": escape(f"BSFS benchmark report: {run_id}"),
         "__RUN_ID__": escape(run_id),
-        "__STATUS__": escape(status),
-        "__STATUS_CLASS__": status_class,
         "__RECORD_COUNT__": str(record_count),
         "__GROUP_COUNT__": str(len(summary)),
         "__FILESYSTEM_COUNT__": str(len(filesystems)),
@@ -462,9 +431,6 @@ h3 { margin-bottom: 10px; font-size: 1rem; }
 .muted, .empty { color: var(--muted); }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
 .hero-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
-.badge { display: inline-block; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .8rem; font-weight: 800; white-space: nowrap; }
-.badge.good { border-color: var(--accent); color: var(--accent); }
-.badge.warning { border-color: var(--warning); color: var(--warning); }
 .theme-switch { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; }
 .theme-switch:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
 .switch-track { position: relative; width: 32px; height: 18px; border-radius: 999px; background: var(--line); transition: background .15s ease; }
@@ -567,7 +533,6 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       <p class="muted">A self-contained view of the run's derived results.</p>
     </div>
     <div class="hero-actions">
-      <div class="__STATUS_CLASS__">__STATUS__</div>
       <button id="theme-switch" class="theme-switch" type="button" role="switch" aria-checked="false" aria-label="Switch to dark mode">
         <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
         <span id="theme-label">Light mode</span>

@@ -11,7 +11,6 @@ mkdir -p "$TMPDIR_BENCH/root" "$TMPDIR_BENCH/artifacts"
   --root "$TMPDIR_BENCH/root" \
   --scenario bulk \
   --phase all \
-  --profile quick \
   --seed 1234 \
   --results "$TMPDIR_BENCH/results.jsonl" \
   --artifact-dir "$TMPDIR_BENCH/artifacts" \
@@ -26,7 +25,6 @@ mkdir -p "$TMPDIR_BENCH/root"
   --root "$TMPDIR_BENCH/root" \
   --scenario metadata \
   --phase all \
-  --profile quick \
   --seed 1234 \
   --results "$TMPDIR_BENCH/metadata.jsonl" \
   --artifact-dir "$TMPDIR_BENCH/artifacts" \
@@ -40,7 +38,6 @@ mkdir -p "$TMPDIR_BENCH/root"
   --root "$TMPDIR_BENCH/root" \
   --scenario mixed \
   --phase all \
-  --profile quick \
   --seed 1234 \
   --results "$TMPDIR_BENCH/mixed.jsonl" \
   --artifact-dir "$TMPDIR_BENCH/artifacts" \
@@ -54,7 +51,6 @@ mkdir -p "$TMPDIR_BENCH/root"
   --root "$TMPDIR_BENCH/root" \
   --scenario concurrency-seq \
   --phase all \
-  --profile quick \
   --workers 4 \
   --seed 1234 \
   --results "$TMPDIR_BENCH/concurrency-seq.jsonl" \
@@ -69,7 +65,6 @@ mkdir -p "$TMPDIR_BENCH/root"
   --root "$TMPDIR_BENCH/root" \
   --scenario concurrency-mixed \
   --phase all \
-  --profile quick \
   --workers 4 \
   --seed 1234 \
   --results "$TMPDIR_BENCH/concurrency-mixed.jsonl" \
@@ -86,7 +81,6 @@ set +e
   --root "$TMPDIR_BENCH/root" \
   --scenario recovery-pressure \
   --phase verify \
-  --profile quick \
   --seed 1234 \
   --results "$TMPDIR_BENCH/empty-recovery.jsonl" \
   --filesystem posix-test
@@ -95,24 +89,5 @@ set -e
 test "$status" -ne 0
 test "$status" -lt 128
 grep -q '"validation_status":"failed"' "$TMPDIR_BENCH/empty-recovery.jsonl"
-
-truncate -s 128M "$TMPDIR_BENCH/old-bsfs.img"
-for scenario in bulk metadata mixed old-recovery; do
-  "$REPO/bench/bin/mkfs-old-bsfs" "$TMPDIR_BENCH/old-bsfs.img"
-  "$REPO/bench/bin/bench-old" \
-    --device "$TMPDIR_BENCH/old-bsfs.img" \
-    --scenario "$scenario" \
-    --phase all \
-    --profile quick \
-    --seed 1234 \
-    --results "$TMPDIR_BENCH/old-$scenario.jsonl" \
-    --artifact-dir "$TMPDIR_BENCH/artifacts" \
-    --filesystem old-bsfs-test
-done
-
-test "$(wc -l <"$TMPDIR_BENCH/old-bulk.jsonl")" -eq 6
-test "$(wc -l <"$TMPDIR_BENCH/old-metadata.jsonl")" -eq 9
-test "$(wc -l <"$TMPDIR_BENCH/old-mixed.jsonl")" -eq 8
-test "$(wc -l <"$TMPDIR_BENCH/old-old-recovery.jsonl")" -eq 5
 
 echo "bench C integration tests: PASS"

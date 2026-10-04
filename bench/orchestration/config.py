@@ -9,7 +9,6 @@ from .topology import select_cpus, sibling_conflicts
 
 @dataclass(frozen=True)
 class RunConfig:
-    profile: str
     repetitions: int
     seeds: tuple[int, ...]
     filesystems: tuple[str, ...]
@@ -21,10 +20,8 @@ class RunConfig:
     max_device_gib: int
     loop_size_mib: int
     discard: bool
-
-    @property
-    def publication(self) -> bool:
-        return self.profile == "publication"
+    recovery: bool = False
+    phase_timeout_s: int = 300
 
 
 def _resolve_cpus(run: dict) -> tuple[int, tuple[int, ...]]:
@@ -53,7 +50,6 @@ def load_config(path: Path) -> RunConfig:
     scenarios = raw["scenarios"]
     common_cpu, concurrency_cpus = _resolve_cpus(run)
     config = RunConfig(
-        profile=str(run["profile"]),
         repetitions=int(run["repetitions"]),
         seeds=tuple(int(value) for value in run["seeds"]),
         filesystems=tuple(str(value) for value in run["filesystems"]),
@@ -67,9 +63,11 @@ def load_config(path: Path) -> RunConfig:
         max_device_gib=int(device["max_gib"]),
         loop_size_mib=int(device["loop_size_mib"]),
         discard=bool(device["discard"]),
+        recovery=bool(run.get("recovery", False)),
+        phase_timeout_s=int(run.get("phase_timeout_s", 300)),
     )
-    if config.profile not in {"quick", "publication"}:
-        raise ValueError(f"unsupported profile: {config.profile}")
+    if config.phase_timeout_s <= 0:
+        raise ValueError("phase_timeout_s must be positive")
     if config.repetitions <= 0:
         raise ValueError("repetitions must be positive")
     if len(config.seeds) < config.repetitions:

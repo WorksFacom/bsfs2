@@ -254,10 +254,8 @@ int bench_result_write(const struct bench_run_config *config,
   fputs(",\"validation_status\":", output);
   json_string(output, result->validation_ok ? "passed" : "failed");
   fprintf(output,
-          ",\"error_code\":%d,\"publication_eligible\":%s,"
-          "\"has_durable_window\":%s",
+          ",\"error_code\":%d,\"has_durable_window\":%s",
           result->error_code,
-          config->publication_eligible ? "true" : "false",
           result->has_durable_window ? "true" : "false");
   if (result->has_reclaim_stats)
     fprintf(output,

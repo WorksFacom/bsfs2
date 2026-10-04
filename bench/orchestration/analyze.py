@@ -163,12 +163,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    run_dir = args.run_dir.resolve()
+def analyze_run(run_dir: Path) -> Path:
+    """Writes derived/ for a finished run and returns the report path."""
     raw = run_dir / "raw" / "results.jsonl"
     if not raw.exists():
-        raise SystemExit(f"results not found: {raw}")
+        raise FileNotFoundError(f"results not found: {raw}")
     output = run_dir / "derived"
     output.mkdir(parents=True, exist_ok=True)
     records, skipped = load_records(raw)
@@ -204,6 +203,15 @@ def main() -> int:
         f"analyzed {len(records)} records: {len(summary)} groups, "
         f"{len(failures)} failed phases; report: {output / 'report.html'}"
     )
+    return output / "report.html"
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        analyze_run(args.run_dir.resolve())
+    except FileNotFoundError as error:
+        raise SystemExit(str(error)) from error
     return 0
 
 

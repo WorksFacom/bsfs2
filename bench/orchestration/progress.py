@@ -261,7 +261,6 @@ class RunReporter:
         *,
         run_id: str,
         config_path: Path,
-        profile: str,
         repetitions: int,
         seeds: tuple[int, ...],
         common_cpu: int,
@@ -276,7 +275,7 @@ class RunReporter:
         seed_text = ", ".join(str(seed) for seed in seeds[:repetitions])
         self._line(
             f"  config    {config_path} "
-            f"(profile={profile}, repetitions={repetitions}, "
+            f"(repetitions={repetitions}, "
             f"seeds=[{seed_text}])"
         )
         cpu_text = ", ".join(str(cpu) for cpu in concurrency_cpus)
@@ -583,9 +582,9 @@ class RunReporter:
         run_id: str,
         failures: list[dict[str, object]],
         kernel_findings: int,
-        publication_eligible: bool,
         run_dir: Path,
         interrupted: bool = False,
+        report: Path | None = None,
     ) -> None:
         self._close_unit()
         self._close_section()
@@ -628,10 +627,6 @@ class RunReporter:
         self._line(
             f"  kernel log: {kernel_findings} relevant findings", Level.QUIET
         )
-        self._line(
-            f"  publication eligible: {'yes' if publication_eligible else 'no'}",
-            Level.QUIET,
-        )
         if failures:
             self._line(
                 f"  {self._paint(str(len(failures)) + ' failures', Style.RED)}"
@@ -645,7 +640,10 @@ class RunReporter:
                 Level.QUIET,
             )
         self._line(f"  results: {run_dir}", Level.QUIET)
-        self._line(
-            f"  next:    python3 -m bench.orchestration.analyze {run_dir}",
-            Level.QUIET,
-        )
+        if report is not None:
+            self._line(f"  report:  {report}", Level.QUIET)
+        else:
+            self._line(
+                f"  next:    python3 -m bench.orchestration.analyze {run_dir}",
+                Level.QUIET,
+            )

@@ -12,8 +12,6 @@ from typing import Any, Iterable, Mapping
 
 BUILT_ARTIFACTS = (
     "bench/bin/bench-posix",
-    "bench/bin/bench-old",
-    "bench/bin/mkfs-old-bsfs",
     "bsfs2.ko",
     "mkfs.bsfs",
 )
@@ -130,7 +128,6 @@ def _custom_artifacts(
             "module_name": item.module_name,
             "vermagic": item.vermagic,
             "source_repository": _git(item.source_module.parent),
-            "correctness_gate_coverage": "publication-validation-only",
         }
     return described
 
@@ -151,13 +148,12 @@ def _governors(cpus: tuple[int, ...]) -> dict[str, str]:
 def collect_manifest(
     *,
     repository: Path,
-    old_repository: Path,
     config_path: Path,
     config: RunConfig,
     run_id: str,
     device: DeviceInfo | dict[str, Any],
     affinity: tuple[int, ...],
-    publication_eligible: bool,
+    filesystems: Iterable[str],
     extra_artifacts: Iterable[Path] = (),
     custom_bsfs: Mapping[str, CustomBsfsArtifacts] | None = None,
 ) -> dict[str, Any]:
@@ -187,7 +183,6 @@ def collect_manifest(
         "schema_version": 1,
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "publication_eligible": publication_eligible,
         "hostname": socket.gethostname(),
         "kernel": {
             "release": platform.release(),
@@ -207,16 +202,16 @@ def collect_manifest(
         "device": device.to_dict() if isinstance(device, DeviceInfo) else device,
         "repositories": {
             "current": _git(repository),
-            "old": _git(old_repository),
         },
         "built_artifacts": _artifacts(repository, extra_artifacts),
         "custom_bsfs_artifacts": _custom_artifacts(custom_bsfs or {}),
         "config": {
             "path": str(config_path),
-            "profile": config.profile,
             "repetitions": config.repetitions,
             "seeds": list(config.seeds),
-            "filesystems": list(config.filesystems),
+            "filesystems": list(filesystems),
+            "recovery": config.recovery,
+            "phase_timeout_s": config.phase_timeout_s,
             "common_scenarios": list(config.common_scenarios),
             "concurrency_scenarios": list(config.concurrency_scenarios),
         },

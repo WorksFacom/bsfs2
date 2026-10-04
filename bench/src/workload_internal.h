@@ -35,7 +35,6 @@ int bench_run_bulk(struct bench_run_config *config);
 int bench_run_metadata(struct bench_run_config *config);
 int bench_run_mixed(struct bench_run_config *config);
 int bench_run_recovery(struct bench_run_config *config);
-int bench_run_old_recovery(struct bench_run_config *config);
 int bench_run_concurrency_seq(struct bench_run_config *config);
 int bench_run_concurrency_mixed(struct bench_run_config *config);
 

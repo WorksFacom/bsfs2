@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import json
 import os
 from pathlib import Path
 import signal
@@ -12,92 +12,57 @@ import sys
 from typing import Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
+    # run as a script: make the relative imports below resolve
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from bench.orchestration.cache import cold_reset, reopen
-    from bench.orchestration.command import CommandError, CommandRunner
-    from bench.orchestration.conditioning import DeviceConditioner
-    from bench.orchestration.config import RunConfig, load_config
-    from bench.orchestration.filesystems import (
-        BSFS_FILESYSTEMS,
-        FilesystemAdapter,
-        FilesystemContext,
-        FilesystemUnavailable,
-        bsfs_targets_by_strategy,
-        create_adapter,
-    )
-    from bench.orchestration.governor import PerformanceGovernor
-    from bench.orchestration.manifest import collect_manifest, write_manifest
-    from bench.orchestration.modules import (
-        BsfsModuleError,
-        CustomBsfsArtifacts,
-        build_module_argv,
-        build_modules,
-        define_custom_artifacts,
-        stage_custom_artifacts,
-    )
-    from bench.orchestration.plan import (
-        COMMON_FILESYSTEMS,
-        CONCURRENCY_WORKERS,
-        KERNEL_FILESYSTEMS,
-        build_plan,
-    )
-    from bench.orchestration.preflight import (
-        BenchmarkBinaryError,
-        CorrectnessGateError,
-        run_correctness_gates,
-        validate_benchmark_binaries,
-    )
-    from bench.orchestration.progress import Level, RunReporter
-    from bench.orchestration.safety import (
-        DeviceInfo,
-        SafetyError,
-        cyclic_schedule,
-        inspect_physical_device,
-        validate_loop_image,
-    )
-else:
-    from .cache import cold_reset, reopen
-    from .command import CommandError, CommandRunner
-    from .conditioning import DeviceConditioner
-    from .config import RunConfig, load_config
-    from .filesystems import (
-        BSFS_FILESYSTEMS,
-        FilesystemAdapter,
-        FilesystemContext,
-        FilesystemUnavailable,
-        bsfs_targets_by_strategy,
-        create_adapter,
-    )
-    from .governor import PerformanceGovernor
-    from .manifest import collect_manifest, write_manifest
-    from .modules import (
-        BsfsModuleError,
-        CustomBsfsArtifacts,
-        build_module_argv,
-        build_modules,
-        define_custom_artifacts,
-        stage_custom_artifacts,
-    )
-    from .plan import (
-        COMMON_FILESYSTEMS,
-        CONCURRENCY_WORKERS,
-        KERNEL_FILESYSTEMS,
-        build_plan,
-    )
-    from .preflight import (
-        BenchmarkBinaryError,
-        CorrectnessGateError,
-        run_correctness_gates,
-        validate_benchmark_binaries,
-    )
-    from .progress import Level, RunReporter
-    from .safety import (
-        DeviceInfo,
-        SafetyError,
-        cyclic_schedule,
-        inspect_physical_device,
-        validate_loop_image,
-    )
+    import bench.orchestration  # noqa: F401
+
+    __package__ = "bench.orchestration"
+
+from .analyze import analyze_run
+from .cache import cold_reset, reopen
+from .command import CommandError, CommandRunner
+from .conditioning import DeviceConditioner
+from .config import RunConfig, load_config
+from .filesystems import (
+    FilesystemAdapter,
+    FilesystemContext,
+    FilesystemUnavailable,
+    bsfs_targets_by_strategy,
+    create_adapter,
+)
+from .governor import PerformanceGovernor
+from .manifest import collect_manifest, write_manifest
+from .modules import (
+    BsfsModuleError,
+    CustomBsfsArtifacts,
+    build_module_argv,
+    build_modules,
+    define_custom_artifacts,
+    stage_custom_artifacts,
+)
+from .plan import (
+    COLD,
+    CONCURRENCY_WORKERS,
+    FILESYSTEMS,
+    REOPEN,
+    PlannedUnit,
+    RunPlan,
+    build_plan,
+)
+from .preflight import BenchmarkBinaryError, validate_benchmark_binaries
+from .progress import Level, RunReporter
+from .safety import (
+    DeviceInfo,
+    SafetyError,
+    cyclic_schedule,
+    inspect_physical_device,
+    validate_loop_image,
+)
+
+# mkfs, mount, umount and friends. workload phases use the configured phase timeout instead
+HELPER_TIMEOUT_S = 300
+# recovery rewrites the whole device several times
+RECOVERY_TIMEOUT_FACTOR = 3
 
 
 def sudo_invoker_owner(
@@ -157,7 +122,7 @@ def custom_bsfs_definitions(
     """Parses and validates the repeatable ``--custom-bsfs`` triples."""
     definitions: dict[str, CustomBsfsArtifacts] = {}
     for name, module, formatter in values or ():
-        if name in COMMON_FILESYSTEMS:
+        if name in FILESYSTEMS:
             raise BsfsModuleError(
                 f"custom BSFS name {name!r} collides with a built-in target"
             )
@@ -186,7 +151,6 @@ class BenchmarkRun:
         stable_device: str,
         device_info: DeviceInfo | None,
         run_id: str,
-        publication_eligible: bool,
         reporter: RunReporter | None = None,
         custom_bsfs: Mapping[str, CustomBsfsArtifacts] | None = None,
     ):
@@ -201,10 +165,7 @@ class BenchmarkRun:
         self.stable_device = stable_device
         self.device_info = device_info
         self.run_id = run_id
-        self.publication_eligible = publication_eligible
         self.custom_bsfs = dict(custom_bsfs or {})
-        self.bsfs_filesystems = (*BSFS_FILESYSTEMS, *self.custom_bsfs)
-        self.kernel_filesystems = (*KERNEL_FILESYSTEMS, *self.custom_bsfs)
         self.mountpoint = run_dir / "mnt"
         self.results = run_dir / "raw" / "results.jsonl"
         self.artifacts = run_dir / "raw" / "artifacts"
@@ -278,27 +239,15 @@ class BenchmarkRun:
         repetition: int,
         seed: int,
         workers: int,
-        *,
-        profile: str | None = None,
-        results: Path | None = None,
-        eligible: bool | None = None,
     ) -> list[str]:
-        binary = (
-            self.repository / "bench/bin/bench-old"
-            if adapter.name == "old-bsfs"
-            else self.repository / "bench/bin/bench-posix"
-        )
-        target_flag, target_value = adapter.target_argument
         argv = [
-            str(binary),
-            target_flag,
-            target_value,
+            str(self.repository / "bench/bin/bench-posix"),
+            "--root",
+            str(self.mountpoint),
             "--scenario",
             scenario,
             "--phase",
             phase,
-            "--profile",
-            profile or self.config.profile,
             "--seed",
             str(seed),
             "--repetition",
@@ -306,7 +255,7 @@ class BenchmarkRun:
             "--workers",
             str(workers),
             "--results",
-            str(results or self.results),
+            str(self.results),
             "--artifact-dir",
             str(self.artifacts),
             "--block-device",
@@ -328,11 +277,6 @@ class BenchmarkRun:
                     "reclaim_stats",
                 ]
             )
-        is_eligible = (
-            self.publication_eligible if eligible is None else eligible
-        )
-        if is_eligible:
-            argv.append("--publication-eligible")
         if scenario.startswith("concurrency-"):
             cpus = self.config.concurrency_cpus[:workers]
             argv.extend(
@@ -350,102 +294,27 @@ class BenchmarkRun:
         repetition: int,
         seed: int,
         workers: int = 1,
-        **kwargs: object,
     ) -> None:
-        results = kwargs.get("results") or self.results
+        timeout = self.config.phase_timeout_s
+        if scenario == "recovery-pressure":
+            timeout *= RECOVERY_TIMEOUT_FACTOR
         with self.reporter.phase(
             filesystem=adapter.name,
             scenario=scenario,
             phase=phase,
             workers=workers,
-            results=None if self.runner.dry_run else results,
+            results=None if self.runner.dry_run else self.results,
         ):
             self.runner.run(
                 self._runner_argv(
-                    adapter,
-                    scenario,
-                    phase,
-                    repetition,
-                    seed,
-                    workers,
-                    **kwargs,
+                    adapter, scenario, phase, repetition, seed, workers
                 ),
                 cwd=self.repository,
                 label=(
                     f"{adapter.name}-{scenario}-{phase}-r{repetition}-w{workers}"
                 ),
+                timeout=timeout,
             )
-
-    def execute_common_scenario(
-        self,
-        adapter: FilesystemAdapter,
-        scenario: str,
-        repetition: int,
-        seed: int,
-        **phase_kwargs: object,
-    ) -> None:
-        if scenario == "bulk":
-            self.run_phase(
-                adapter, scenario, "prepare", repetition, seed, **phase_kwargs
-            )
-            cold_reset(adapter)
-            self.run_phase(
-                adapter, scenario, "cold-read", repetition, seed, **phase_kwargs
-            )
-            self.run_phase(
-                adapter, scenario, "warm-read", repetition, seed, **phase_kwargs
-            )
-            cold_reset(adapter)
-            self.run_phase(
-                adapter, scenario, "random-read", repetition, seed, **phase_kwargs
-            )
-            self.run_phase(
-                adapter, scenario, "random-write", repetition, seed, **phase_kwargs
-            )
-            reopen(adapter)
-            self.run_phase(
-                adapter, scenario, "verify", repetition, seed, **phase_kwargs
-            )
-            return
-        if scenario == "metadata":
-            self.run_phase(
-                adapter, scenario, "create", repetition, seed, **phase_kwargs
-            )
-            # without a drop, lookups hit the dentry cache and every kernel filesystem looks the same
-            cold_reset(adapter)
-            self.run_phase(
-                adapter, scenario, "stat-cold", repetition, seed, **phase_kwargs
-            )
-            self.run_phase(
-                adapter, scenario, "stat-warm", repetition, seed, **phase_kwargs
-            )
-            cold_reset(adapter)
-            for phase in ("iterate", "rename", "unlink", "rmdir"):
-                self.run_phase(
-                    adapter, scenario, phase, repetition, seed, **phase_kwargs
-                )
-            reopen(adapter)
-            self.run_phase(
-                adapter, scenario, "verify", repetition, seed, **phase_kwargs
-            )
-            return
-        if scenario == "mixed":
-            self.run_phase(
-                adapter, scenario, "create", repetition, seed, **phase_kwargs
-            )
-            cold_reset(adapter)
-            self.run_phase(
-                adapter, scenario, "read", repetition, seed, **phase_kwargs
-            )
-            self.run_phase(
-                adapter, scenario, "edit", repetition, seed, **phase_kwargs
-            )
-            reopen(adapter)
-            self.run_phase(
-                adapter, scenario, "verify", repetition, seed, **phase_kwargs
-            )
-            return
-        raise ValueError(f"unknown common scenario: {scenario}")
 
     def record_failure(
         self,
@@ -470,233 +339,40 @@ class BenchmarkRun:
         )
         self.reporter.failure(filesystem, scenario, repetition, error, log_hint)
 
-    def validation_matrix(self, filesystems: tuple[str, ...]) -> None:
-        validation_results = self.run_dir / "validation.jsonl"
-        for filesystem in filesystems:
-            self.reporter.unit_start(
-                matrix="validation",
-                filesystem=filesystem,
-                scenario="bulk",
-                repetition=0,
-            )
-            try:
-                with self.fresh_filesystem(filesystem) as adapter:
-                    self.execute_common_scenario(
-                        adapter,
-                        "bulk",
-                        0,
-                        self.config.seeds[0],
-                        profile="quick",
-                        results=validation_results,
-                        eligible=False,
-                    )
-            except (CommandError, FilesystemUnavailable, RuntimeError) as error:
-                self.record_failure(filesystem, "validation-bulk", 0, error)
-                if self.config.publication:
-                    raise
-
-    def common_matrix(self, filesystems: tuple[str, ...]) -> None:
-        for repetition in range(self.config.repetitions):
-            seed = self.config.seeds[repetition]
-            for filesystem in cyclic_schedule(filesystems, repetition):
-                for scenario in self.config.common_scenarios:
-                    self.reporter.unit_start(
-                        matrix="common",
-                        filesystem=filesystem,
-                        scenario=scenario,
-                        repetition=repetition,
-                    )
-                    try:
-                        with self.fresh_filesystem(filesystem) as adapter:
-                            self.execute_common_scenario(
-                                adapter, scenario, repetition, seed
-                            )
-                    except (
-                        CommandError,
-                        FilesystemUnavailable,
-                        RuntimeError,
-                    ) as error:
-                        self.record_failure(
-                            filesystem, scenario, repetition, error
-                        )
-
-    def recovery_matrix(self, filesystems: tuple[str, ...]) -> None:
-        for repetition in range(self.config.repetitions):
-            seed = self.config.seeds[repetition]
-            for filesystem in self.bsfs_filesystems:
-                if filesystem not in filesystems:
-                    continue
-                self.reporter.unit_start(
-                    matrix="recovery",
-                    filesystem=filesystem,
-                    scenario="recovery-pressure",
-                    repetition=repetition,
-                )
-                try:
-                    with self.fresh_filesystem(filesystem) as adapter:
-                        self.run_phase(
-                            adapter,
-                            "recovery-pressure",
-                            "run",
-                            repetition,
-                            seed,
-                        )
-                        reopen(adapter)
-                        self.run_phase(
-                            adapter,
-                            "recovery-pressure",
-                            "verify",
-                            repetition,
-                            seed,
-                        )
-                except (
-                    CommandError,
-                    FilesystemUnavailable,
-                    RuntimeError,
-                ) as error:
-                    self.record_failure(
-                        filesystem, "recovery-pressure", repetition, error
-                    )
-            if "old-bsfs" in filesystems:
-                self.reporter.unit_start(
-                    matrix="recovery",
-                    filesystem="old-bsfs",
-                    scenario="old-recovery",
-                    repetition=repetition,
-                )
-                try:
-                    with self.fresh_filesystem("old-bsfs") as adapter:
-                        self.run_phase(
-                            adapter, "old-recovery", "prepare", repetition, seed
-                        )
-                        reopen(adapter)
-                        self.run_phase(
-                            adapter,
-                            "old-recovery",
-                            "retention",
-                            repetition,
-                            seed,
-                        )
-                    self.reporter.unit_start(
-                        matrix="recovery",
-                        filesystem="old-bsfs",
-                        scenario="old-recovery",
-                        repetition=repetition,
-                    )
-                    with self.fresh_filesystem("old-bsfs") as adapter:
-                        self.run_phase(
-                            adapter, "old-recovery", "prepare", repetition, seed
-                        )
-                        self.run_phase(
-                            adapter, "old-recovery", "restore", repetition, seed
-                        )
-                        self.run_phase(
-                            adapter, "old-recovery", "purge", repetition, seed
-                        )
-                except (
-                    CommandError,
-                    FilesystemUnavailable,
-                    RuntimeError,
-                ) as error:
-                    self.record_failure(
-                        "old-bsfs", "old-recovery", repetition, error
-                    )
-
-    def concurrency_matrix(self, filesystems: tuple[str, ...]) -> None:
-        kernel_filesystems = tuple(
-            filesystem
-            for filesystem in filesystems
-            if filesystem in self.kernel_filesystems
+    def run_unit(self, unit: PlannedUnit) -> None:
+        """One mkfs cycle. a failure is recorded and the run moves on to the next unit."""
+        seed = self.config.seeds[unit.repetition]
+        self.reporter.unit_start(
+            matrix=unit.matrix,
+            filesystem=unit.filesystem,
+            scenario=unit.scenario,
+            repetition=unit.repetition,
+            workers=unit.workers,
         )
-        for repetition in range(self.config.repetitions):
-            seed = self.config.seeds[repetition]
-            for filesystem in cyclic_schedule(kernel_filesystems, repetition):
-                for scenario in self.config.concurrency_scenarios:
-                    for workers in CONCURRENCY_WORKERS:
-                        if len(self.config.concurrency_cpus) < workers:
-                            self.record_failure(
-                                filesystem,
-                                scenario,
-                                repetition,
-                                RuntimeError(
-                                    f"{workers} configured CPUs are required"
-                                ),
-                            )
-                            continue
-                        self.reporter.unit_start(
-                            matrix="concurrency",
-                            filesystem=filesystem,
-                            scenario=scenario,
-                            repetition=repetition,
-                            workers=workers,
+        try:
+            with self.fresh_filesystem(unit.filesystem) as adapter:
+                for step in unit.steps:
+                    if step == COLD:
+                        cold_reset(adapter)
+                    elif step == REOPEN:
+                        reopen(adapter)
+                    else:
+                        self.run_phase(
+                            adapter,
+                            unit.scenario,
+                            step,
+                            unit.repetition,
+                            seed,
+                            unit.workers,
                         )
-                        try:
-                            with self.fresh_filesystem(filesystem) as adapter:
-                                if scenario == "concurrency-seq":
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "write",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                    cold_reset(adapter)
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "read",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                elif scenario == "concurrency-mixed":
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "create",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                    cold_reset(adapter)
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "read",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "edit",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                    reopen(adapter)
-                                    self.run_phase(
-                                        adapter,
-                                        scenario,
-                                        "verify",
-                                        repetition,
-                                        seed,
-                                        workers,
-                                    )
-                                else:
-                                    raise ValueError(
-                                        f"unknown concurrency scenario: {scenario}"
-                                    )
-                        except (
-                            CommandError,
-                            FilesystemUnavailable,
-                            RuntimeError,
-                        ) as error:
-                            self.record_failure(
-                                filesystem, scenario, repetition, error
-                            )
+        except (CommandError, FilesystemUnavailable, RuntimeError) as error:
+            self.record_failure(
+                unit.filesystem, unit.scenario, unit.repetition, error
+            )
+
+    def run_plan(self, plan: RunPlan) -> None:
+        for unit in plan.units:
+            self.run_unit(unit)
 
 
 def parse_args() -> argparse.Namespace:
@@ -722,11 +398,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
-        "--run-correctness-gates",
-        action="store_true",
+        "--recovery",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
-            "run the optional QEMU smoke/crash correctness suite before a "
-            "publication run; requires KDIR to identify a bootable kernel build"
+            "also run the bsfs-only recovery-pressure scenario, overriding "
+            "[run] recovery in the config"
         ),
     )
     verbosity = parser.add_mutually_exclusive_group()
@@ -751,9 +428,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     repository = Path(__file__).resolve().parents[2]
-    old_repository = repository.parent / "bsfs_old"
-    build_bsfs_argv = build_module_argv(repository)
     config = load_config(args.config.resolve())
+    if getattr(args, "recovery", None) is not None:
+        config = dataclasses.replace(config, recovery=args.recovery)
     try:
         custom_bsfs = custom_bsfs_definitions(
             repository, getattr(args, "custom_bsfs", None)
@@ -762,7 +439,7 @@ def main() -> int:
         print(f"benchmark setup failed: {error}", file=sys.stderr)
         return 2
     selected = tuple(args.filesystems or config.filesystems)
-    unknown = set(selected) - {*COMMON_FILESYSTEMS, *custom_bsfs}
+    unknown = set(selected) - {*FILESYSTEMS, *custom_bsfs}
     if unknown:
         message = f"unknown filesystems: {', '.join(sorted(unknown))}"
         if any(name.startswith("bsfs-") for name in unknown):
@@ -787,7 +464,7 @@ def main() -> int:
     )
     if not args.dry_run:
         try:
-            validate_benchmark_binaries(repository, selected)
+            validate_benchmark_binaries(repository)
         except BenchmarkBinaryError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
@@ -804,7 +481,6 @@ def main() -> int:
     reporter.header(
         run_id=run_id,
         config_path=args.config.resolve(),
-        profile=config.profile,
         repetitions=config.repetitions,
         seeds=config.seeds,
         common_cpu=config.common_cpu,
@@ -812,9 +488,13 @@ def main() -> int:
         run_dir=run_dir,
         dry_run=args.dry_run,
     )
-    reporter.announce_plan(
-        build_plan(config, selected, custom_bsfs=tuple(selected_custom_bsfs))
-    )
+    plan = build_plan(config, selected, custom_bsfs=tuple(selected_custom_bsfs))
+    reporter.announce_plan(plan)
+    if len(config.concurrency_cpus) < max(CONCURRENCY_WORKERS):
+        reporter.warning(
+            f"only {len(config.concurrency_cpus)} concurrency CPUs configured; "
+            "larger worker counts are skipped"
+        )
     reporter.section("preflight")
     if not args.dry_run:
         reporter.step("benchmark binaries ok")
@@ -848,22 +528,16 @@ def main() -> int:
         except BsfsModuleError as error:
             print(f"benchmark setup failed: {error}", file=sys.stderr)
             return 2
-    run_correctness = bool(
-        config.publication
-        and getattr(args, "run_correctness_gates", False)
+    runner = CommandRunner(
+        run_dir,
+        dry_run=args.dry_run,
+        reporter=reporter,
+        default_timeout=HELPER_TIMEOUT_S,
     )
-    if run_correctness and selected_custom_bsfs:
-        reporter.warning(
-            "custom BSFS artifacts are covered by the publication validation "
-            "matrix only; optional QEMU correctness gates cover this "
-            "checkout's default module"
-        )
-    runner = CommandRunner(run_dir, dry_run=args.dry_run, reporter=reporter)
     result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
     loop_device: str | None = None
     benchmark: BenchmarkRun | None = None
-    publication_eligible = config.publication and args.device is not None
 
     try:
         if args.device:
@@ -887,7 +561,6 @@ def main() -> int:
         else:
             assert args.loop_image is not None
             validate_loop_image(args.loop_image, args.confirm)
-            publication_eligible = False
             if args.dry_run:
                 device = "/dev/loop-dry-run"
             else:
@@ -930,29 +603,11 @@ def main() -> int:
             reporter.step("debugfs already mounted")
         kernel_before = runner.run(
             ["dmesg", "--color=never"],
-            check=config.publication,
+            check=False,
             label="kernel-log-before",
         )
         reporter.step("kernel log captured (before)")
 
-        correctness: list[dict[str, object]] = []
-        if run_correctness:
-            # the gates boot a VM with $REPO/bsfs2.ko and $REPO/mkfs.bsfs, so build even with no BSFS selected
-            if not bsfs_strategies:
-                with reporter.timed("build gate artifacts"):
-                    runner.run(build_bsfs_argv, label="build-gate-artifacts")
-            try:
-                with reporter.timed("correctness gates"):
-                    correctness = run_correctness_gates(runner, repository)
-            except CorrectnessGateError as error:
-                gate_failure = run_dir / "correctness-gates.json"
-                if not args.dry_run:
-                    gate_failure.parent.mkdir(parents=True, exist_ok=True)
-                    gate_failure.write_text(
-                        json.dumps(error.outcomes, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-                raise
         manifest_device: DeviceInfo | dict[str, object]
         if device_info:
             manifest_device = device_info
@@ -972,7 +627,6 @@ def main() -> int:
             stable_device=stable_device,
             device_info=device_info,
             run_id=run_id,
-            publication_eligible=publication_eligible,
             reporter=reporter,
             custom_bsfs=selected_custom_bsfs,
         )
@@ -983,18 +637,15 @@ def main() -> int:
         )
         manifest = collect_manifest(
             repository=repository,
-            old_repository=old_repository,
             config_path=args.config.resolve(),
             config=config,
             run_id=run_id,
             device=manifest_device,
             affinity=(config.common_cpu, *config.concurrency_cpus),
-            publication_eligible=publication_eligible,
+            filesystems=selected,
             extra_artifacts=(*stashed_bsfs_modules, *custom_staged_paths),
             custom_bsfs=selected_custom_bsfs,
         )
-        manifest["correctness_gates"] = correctness
-        manifest["correctness_gates_requested"] = run_correctness
         manifest["size_range_override_used"] = bool(
             args.device and args.allow_size_outside_range
         )
@@ -1053,11 +704,7 @@ def main() -> int:
             )
             reporter.section("matrix")
             with PerformanceGovernor(runner, cpus):
-                if config.publication:
-                    benchmark.validation_matrix(selected)
-                benchmark.common_matrix(selected)
-                benchmark.recovery_matrix(selected)
-                benchmark.concurrency_matrix(selected)
+                benchmark.run_plan(plan)
         finally:
             benchmark.cleanup_current()
             for sig, previous in previous_handlers.items():
@@ -1066,8 +713,6 @@ def main() -> int:
 
         manifest["failures"] = benchmark.failures
         manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
-        if benchmark.failures:
-            manifest["publication_eligible"] = False
         kernel_after = runner.run(
             ["dmesg", "--color=never"],
             check=False,
@@ -1110,28 +755,27 @@ def main() -> int:
                     f"{len(findings)} relevant kernel warning/error lines"
                 ),
             )
-            manifest["publication_eligible"] = False
-        if config.publication and kernel_after.returncode != 0:
+        if kernel_after.returncode != 0:
             benchmark.record_failure(
                 "host",
                 "kernel-log-capture",
                 config.repetitions - 1,
                 RuntimeError("could not capture the post-run kernel log"),
             )
-            manifest["publication_eligible"] = False
         if not args.dry_run:
             kernel_log = run_dir / "raw" / "kernel.log"
             kernel_log.parent.mkdir(parents=True, exist_ok=True)
             kernel_log.write_text(excerpt, encoding="utf-8")
             write_manifest(run_dir, manifest)
+        report: Path | None = None
+        if not args.dry_run and benchmark.results.exists():
+            report = analyze_run(run_dir)
         reporter.summary(
             run_id=run_id,
             failures=benchmark.failures,
             kernel_findings=len(findings),
-            publication_eligible=bool(
-                manifest.get("publication_eligible", publication_eligible)
-            ),
             run_dir=run_dir,
+            report=report,
         )
         return 1 if benchmark.failures else 0
     except (
@@ -1149,7 +793,6 @@ def main() -> int:
             run_id=run_id,
             failures=benchmark.failures if benchmark else [],
             kernel_findings=0,
-            publication_eligible=False,
             run_dir=run_dir,
             interrupted=True,
         )

@@ -1,0 +1,19 @@
+# about 10-15 minutes on a loop image. add --recovery for the bsfs-only reclaim scenario
+[run]
+repetitions = 3
+seeds = [1234, 5678, 9012]
+filesystems = ["bsfs", "ext4", "btrfs", "zfs"]
+common_cpu = "auto"
+concurrency_cpus = "auto"
+recovery = false
+phase_timeout_s = 300
+
+[device]
+min_gib = 4
+max_gib = 16
+loop_size_mib = 1024
+discard = false
+
+[scenarios]
+common = ["bulk", "metadata", "mixed"]
+concurrency = ["concurrency-seq", "concurrency-mixed"]
