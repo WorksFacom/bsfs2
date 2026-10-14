@@ -12,6 +12,13 @@ class SafetyError(RuntimeError):
     pass
 
 
+class DeviceBusy(SafetyError):
+    """The target got mounted behind the harness's back, every later unit would fail the same way."""
+
+
+MOUNTINFO = Path("/proc/self/mountinfo")
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     requested: str
@@ -91,16 +98,21 @@ def _device_ancestors(major: int, minor: int) -> set[tuple[int, int]]:
     return found
 
 
-def _mount_devices() -> list[tuple[tuple[int, int], str]]:
+def _mount_devices(
+    mountinfo: Path = MOUNTINFO,
+) -> list[tuple[tuple[int, int], str]]:
     devices: list[tuple[tuple[int, int], str]] = []
-    for line in Path("/proc/self/mountinfo").read_text(
-        encoding="utf-8"
-    ).splitlines():
+    for line in mountinfo.read_text(encoding="utf-8").splitlines():
         fields = line.split()
         major, minor = (int(value) for value in fields[2].split(":"))
         mountpoint = fields[4].replace("\\040", " ")
         devices.append(((major, minor), mountpoint))
     return devices
+
+
+def device_mountpoints(device: str, mountinfo: Path = MOUNTINFO) -> list[str]:
+    devnum = _devnum(Path(device).resolve())
+    return [point for number, point in _mount_devices(mountinfo) if number == devnum]
 
 
 def _swap_devices() -> set[tuple[int, int]]:

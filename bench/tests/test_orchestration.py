@@ -44,11 +44,15 @@ from bench.orchestration.modules import (
     stage_custom_artifacts,
 )
 from bench.orchestration.manifest import _artifacts, _custom_artifacts
+from bench.orchestration.conditioning import DeviceConditioner
 from bench.orchestration.safety import (
+    DeviceBusy,
     SafetyError,
     cyclic_schedule,
+    device_mountpoints,
     validate_loop_image,
 )
+from bench.orchestration.udev import UdisksIgnore
 from bench.orchestration.topology import physical_cores, sibling_conflicts
 from bench.orchestration.filesystems import (
     ADAPTERS,
@@ -1403,6 +1407,7 @@ class PlanTests(unittest.TestCase):
         *,
         custom_bsfs: tuple[str, ...] = (),
         fail: tuple[str, str] | None = None,
+        busy: Exception | None = None,
     ) -> tuple[list[tuple[str, str, str, int]], BenchmarkRun]:
         """Runs the plan offline and returns every step in execution order."""
         executed: list[tuple[str, str, str, int]] = []
@@ -1458,6 +1463,9 @@ class PlanTests(unittest.TestCase):
                 patch(
                     "bench.orchestration.run.reopen",
                     side_effect=transition(REOPEN),
+                ),
+                patch.object(
+                    BenchmarkRun, "assert_device_free", side_effect=busy
                 ),
             ):
                 benchmark.run_plan(
@@ -1527,6 +1535,16 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("bulk", {row[1] for row in executed if row[0] == "ext4"})
         self.assertIn(("btrfs", "bulk", "verify", 1), executed)
         self.assertIn(("ext4", "metadata", "verify", 1), executed)
+
+    def test_a_device_grabbed_from_outside_aborts_the_run(self) -> None:
+        config = self._config(repetitions=1)
+        executed, benchmark = self._walk(
+            config, ("ext4", "btrfs"), busy=DeviceBusy("mounted elsewhere")
+        )
+
+        self.assertEqual(executed, [])
+        self.assertEqual(len(benchmark.failures), 1)
+        self.assertIn("mounted elsewhere", benchmark.failures[0]["error"])
 
     def test_every_allocator_variant_gets_a_recovery_unit(self) -> None:
         config = self._config("alloc", recovery=True)
@@ -1969,6 +1987,80 @@ class CommandDurationTests(unittest.TestCase):
 
             self.assertIsNotNone(runner.last_error_log)
             self.assertTrue(runner.last_error_log.exists())
+
+
+class RecordingRunner:
+    dry_run = True
+
+    def __init__(self) -> None:
+        self.argvs: list[list[str]] = []
+
+    def run(self, argv, **kwargs):
+        self.argvs.append(list(argv))
+        return CommandResult(tuple(argv), 0, "", "")
+
+
+class UdevTests(unittest.TestCase):
+    def test_conditioning_waits_for_udev_after_wiping(self) -> None:
+        runner = RecordingRunner()
+        DeviceConditioner(runner, "/dev/loop7", None, False).condition()
+
+        self.assertEqual(runner.argvs[-2][0], "wipefs")
+        self.assertEqual(runner.argvs[-1][:2], ["udevadm", "settle"])
+
+    def test_only_mounts_of_the_device_itself_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            mountinfo = Path(directory) / "mountinfo"
+            mountinfo.write_text(
+                "36 25 7:0 / /run/media/user/disk rw - ext4 /dev/loop0 rw\n"
+                "37 25 7:1 / /mnt/other rw - ext4 /dev/loop1 rw\n"
+                "38 25 7:0 / /bench/mnt rw - ext4 /dev/loop0 rw\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "bench.orchestration.safety._devnum", return_value=(7, 0)
+            ):
+                points = device_mountpoints("/dev/loop0", mountinfo)
+
+        self.assertEqual(points, ["/run/media/user/disk", "/bench/mnt"])
+
+    def test_udisks_rule_is_installed_applied_and_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            rules = Path(directory) / "rules.d"
+            runner = CommandRunner(Path(directory) / "run")
+            with (
+                patch("bench.orchestration.udev.RULES_DIR", rules),
+                patch.object(runner, "run") as run,
+            ):
+                ignore = UdisksIgnore(runner, "/dev/loop7", "20261014T041701Z")
+                ignore.install()
+                rule = rules / "99-bsfs-bench-20261014T041701Z.rules"
+
+                self.assertEqual(
+                    rule.read_text(encoding="ascii"),
+                    'KERNEL=="loop7", ENV{UDISKS_IGNORE}="1"\n',
+                )
+                self.assertEqual(
+                    [c.args[0] for c in run.call_args_list],
+                    [
+                        ["udevadm", "control", "--reload"],
+                        [
+                            "udevadm",
+                            "trigger",
+                            "--action=change",
+                            "--settle",
+                            "/dev/loop7",
+                        ],
+                    ],
+                )
+
+                ignore.remove()
+
+                self.assertFalse(rule.exists())
+                self.assertEqual(
+                    run.call_args_list[-1].args[0],
+                    ["udevadm", "control", "--reload"],
+                )
 
 
 if __name__ == "__main__":

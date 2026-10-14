@@ -52,12 +52,15 @@ from .plan import (
 from .preflight import BenchmarkBinaryError, validate_benchmark_binaries
 from .progress import Level, RunReporter
 from .safety import (
+    DeviceBusy,
     DeviceInfo,
     SafetyError,
     cyclic_schedule,
+    device_mountpoints,
     inspect_physical_device,
     validate_loop_image,
 )
+from .udev import UdisksIgnore, settle
 
 # mkfs, mount, umount and friends. workload phases use the configured phase timeout instead
 HELPER_TIMEOUT_S = 300
@@ -202,9 +205,24 @@ class BenchmarkRun:
         finally:
             self.current_adapter = None
 
+    def assert_device_free(self) -> None:
+        if self.runner.dry_run:
+            return
+        foreign = [
+            point
+            for point in device_mountpoints(self.device)
+            if point != str(self.mountpoint)
+        ]
+        if foreign:
+            raise DeviceBusy(
+                f"{self.device} is mounted at {', '.join(foreign)}; "
+                "something outside the bench grabbed it"
+            )
+
     @contextmanager
     def fresh_filesystem(self, filesystem: str) -> Iterator[FilesystemAdapter]:
         self.cleanup_current()
+        self.assert_device_free()
         adapter = create_adapter(
             filesystem, self.context_for(filesystem), self.custom_bsfs
         )
@@ -222,6 +240,7 @@ class BenchmarkRun:
                 conditioner.condition()
             with self.reporter.timed(f"mkfs {adapter.name}"):
                 adapter.format()
+                settle(self.runner, f"{adapter.name}-udev-settle")
             with self.reporter.timed(
                 "mount", adapter.mount_options or None
             ):
@@ -365,6 +384,8 @@ class BenchmarkRun:
                             seed,
                             unit.workers,
                         )
+        except DeviceBusy:
+            raise
         except (CommandError, FilesystemUnavailable, RuntimeError) as error:
             self.record_failure(
                 unit.filesystem, unit.scenario, unit.repetition, error
@@ -372,7 +393,14 @@ class BenchmarkRun:
 
     def run_plan(self, plan: RunPlan) -> None:
         for unit in plan.units:
-            self.run_unit(unit)
+            try:
+                self.run_unit(unit)
+            except DeviceBusy as error:
+                self.record_failure(
+                    unit.filesystem, unit.scenario, unit.repetition, error
+                )
+                self.reporter.warning(f"aborting run: {error}")
+                return
 
 
 def parse_args() -> argparse.Namespace:
@@ -537,6 +565,7 @@ def main() -> int:
     result_owner = sudo_invoker_owner()
     device_info: DeviceInfo | None = None
     loop_device: str | None = None
+    udisks_ignore: UdisksIgnore | None = None
     benchmark: BenchmarkRun | None = None
 
     try:
@@ -580,6 +609,9 @@ def main() -> int:
                 f"loop {args.loop_image} -> {device} "
                 f"({config.loop_size_mib} MiB)"
             )
+
+        udisks_ignore = UdisksIgnore(runner, device, run_id)
+        udisks_ignore.install()
 
         # dry runs skip preflight, so show the builds it would do
         if args.dry_run:
@@ -804,6 +836,8 @@ def main() -> int:
                 check=False,
                 label="detach-loop-device",
             )
+        if udisks_ignore:
+            udisks_ignore.remove()
         if result_owner:
             unowned = transfer_result_ownership(run_dir, result_owner)
             if unowned:

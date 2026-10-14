@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .command import CommandRunner
 from .safety import DeviceInfo
+from .udev import settle
 
 
 class DeviceConditioner:
@@ -33,4 +34,5 @@ class DeviceConditioner:
             self.runner.run(
                 ["blkdiscard", self.device], label="condition-discard-device"
             )
+        settle(self.runner, "condition-udev-settle")
 
