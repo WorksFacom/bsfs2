@@ -173,157 +173,86 @@ static void hb_rb_insert(hb_rbtree *t, long key) {
     hb_fix_insert(t, new_node);
 }
 
-static void hb_fix_delete(hb_rbtree *t, hb_rbnode *node) {
+/* CLRS delete fixup. `node` (maybe NULL) carries the extra black, `is_left` is its side under `parent` */
+static void hb_fix_delete(hb_rbtree *t, hb_rbnode *node, hb_rbnode *parent, int is_left) {
     while (node != t->root && hb_color(node) == HB_BLACK) {
-        if (node == node->parent->left) {
-            hb_rbnode *sibling = node->parent->right;
-            if (hb_color(sibling) == HB_RED) {
-                sibling->color = HB_BLACK;
-                node->parent->color = HB_RED;
-                hb_rotate_left(t, node->parent);
-                sibling = node->parent->right;
-            }
-            int lc = sibling ? hb_color(sibling->left) : HB_BLACK;
-            int rc = sibling ? hb_color(sibling->right) : HB_BLACK;
-            if (lc == HB_BLACK && rc == HB_BLACK) {
-                if (sibling) {
-                    sibling->color = HB_RED;
-                }
-                node = node->parent;
-            } else {
-                if (rc == HB_BLACK) {
-                    if (sibling->left) {
-                        sibling->left->color = HB_BLACK;
-                    }
-                    sibling->color = HB_RED;
-                    hb_rotate_right(t, sibling);
-                    sibling = node->parent->right;
-                }
-                if (sibling) {
-                    sibling->color = node->parent->color;
-                }
-                node->parent->color = HB_BLACK;
-                if (sibling && sibling->right) {
-                    sibling->right->color = HB_BLACK;
-                }
-                hb_rotate_left(t, node->parent);
-                node = t->root;
-            }
-        } else {
-            hb_rbnode *sibling = node->parent->left;
-            if (hb_color(sibling) == HB_RED) {
-                sibling->color = HB_BLACK;
-                node->parent->color = HB_RED;
-                hb_rotate_right(t, node->parent);
-                sibling = node->parent->left;
-            }
-            int lc = sibling ? hb_color(sibling->left) : HB_BLACK;
-            int rc = sibling ? hb_color(sibling->right) : HB_BLACK;
-            if (rc == HB_BLACK && lc == HB_BLACK) {
-                if (sibling) {
-                    sibling->color = HB_RED;
-                }
-                node = node->parent;
-            } else {
-                if (lc == HB_BLACK) {
-                    if (sibling->right) {
-                        sibling->right->color = HB_BLACK;
-                    }
-                    sibling->color = HB_RED;
-                    hb_rotate_left(t, sibling);
-                    sibling = node->parent->left;
-                }
-                if (sibling) {
-                    sibling->color = node->parent->color;
-                }
-                node->parent->color = HB_BLACK;
-                if (sibling && sibling->left) {
-                    sibling->left->color = HB_BLACK;
-                }
-                hb_rotate_right(t, node->parent);
-                node = t->root;
-            }
+        if (!parent) {
+            break;
         }
-    }
-}
-
-static void hb_fix_delete_null(hb_rbtree *t, hb_rbnode *parent, int is_left) {
-    hb_rbnode *node = NULL;
-    (void)is_left;
-    while (parent && (node == NULL || node->color == HB_BLACK)) {
-        if (node == NULL || node == parent->left) {
+        if (is_left) {
             hb_rbnode *sibling = parent->right;
-            if (sibling && sibling->color == HB_RED) {
+            if (hb_color(sibling) == HB_RED) {
                 sibling->color = HB_BLACK;
                 parent->color = HB_RED;
                 hb_rotate_left(t, parent);
                 sibling = parent->right;
             }
-            if (sibling) {
-                int lc = hb_color(sibling->left);
-                int rc = hb_color(sibling->right);
-                if (lc == HB_BLACK && rc == HB_BLACK) {
-                    sibling->color = HB_RED;
-                    node = parent;
-                    parent = node->parent;
-                } else {
-                    if (rc == HB_BLACK) {
-                        if (sibling->left) {
-                            sibling->left->color = HB_BLACK;
-                        }
-                        sibling->color = HB_RED;
-                        hb_rotate_right(t, sibling);
-                        sibling = parent->right;
-                    }
-                    sibling->color = parent->color;
-                    parent->color = HB_BLACK;
-                    if (sibling && sibling->right) {
-                        sibling->right->color = HB_BLACK;
-                    }
-                    hb_rotate_left(t, parent);
-                    break;
-                }
-            } else {
+            if (!sibling) {
                 node = parent;
                 parent = node->parent;
+                is_left = parent && parent->left == node;
+                continue;
+            }
+            if (hb_color(sibling->left) == HB_BLACK && hb_color(sibling->right) == HB_BLACK) {
+                sibling->color = HB_RED;
+                node = parent;
+                parent = node->parent;
+                is_left = parent && parent->left == node;
+            } else {
+                if (hb_color(sibling->right) == HB_BLACK) {
+                    sibling->left->color = HB_BLACK;
+                    sibling->color = HB_RED;
+                    hb_rotate_right(t, sibling);
+                    sibling = parent->right;
+                }
+                sibling->color = parent->color;
+                parent->color = HB_BLACK;
+                if (sibling->right) {
+                    sibling->right->color = HB_BLACK;
+                }
+                hb_rotate_left(t, parent);
+                node = t->root;
+                parent = NULL;
             }
         } else {
             hb_rbnode *sibling = parent->left;
-            if (sibling && sibling->color == HB_RED) {
+            if (hb_color(sibling) == HB_RED) {
                 sibling->color = HB_BLACK;
                 parent->color = HB_RED;
                 hb_rotate_right(t, parent);
                 sibling = parent->left;
             }
-            if (sibling) {
-                int lc = hb_color(sibling->left);
-                int rc = hb_color(sibling->right);
-                if (rc == HB_BLACK && lc == HB_BLACK) {
-                    sibling->color = HB_RED;
-                    node = parent;
-                    parent = node->parent;
-                } else {
-                    if (lc == HB_BLACK) {
-                        if (sibling->right) {
-                            sibling->right->color = HB_BLACK;
-                        }
-                        sibling->color = HB_RED;
-                        hb_rotate_left(t, sibling);
-                        sibling = parent->left;
-                    }
-                    sibling->color = parent->color;
-                    parent->color = HB_BLACK;
-                    if (sibling && sibling->left) {
-                        sibling->left->color = HB_BLACK;
-                    }
-                    hb_rotate_right(t, parent);
-                    break;
-                }
-            } else {
+            if (!sibling) {
                 node = parent;
                 parent = node->parent;
+                is_left = parent && parent->left == node;
+                continue;
+            }
+            if (hb_color(sibling->left) == HB_BLACK && hb_color(sibling->right) == HB_BLACK) {
+                sibling->color = HB_RED;
+                node = parent;
+                parent = node->parent;
+                is_left = parent && parent->left == node;
+            } else {
+                if (hb_color(sibling->left) == HB_BLACK) {
+                    sibling->right->color = HB_BLACK;
+                    sibling->color = HB_RED;
+                    hb_rotate_left(t, sibling);
+                    sibling = parent->left;
+                }
+                sibling->color = parent->color;
+                parent->color = HB_BLACK;
+                if (sibling->left) {
+                    sibling->left->color = HB_BLACK;
+                }
+                hb_rotate_right(t, parent);
+                node = t->root;
+                parent = NULL;
             }
         }
+    }
+    if (node) {
+        node->color = HB_BLACK;
     }
 }
 
@@ -341,21 +270,16 @@ static void hb_rb_delete(hb_rbtree *t, long key) {
     if (child) {
         child->parent = node->parent;
     }
+    int is_left = node->parent && node->parent->left == node;
     if (!node->parent) {
         t->root = child;
+    } else if (is_left) {
+        node->parent->left = child;
     } else {
-        if (node->parent->left == node) {
-            node->parent->left = child;
-        } else {
-            node->parent->right = child;
-        }
+        node->parent->right = child;
     }
     if (node->color == HB_BLACK) {
-        if (child) {
-            hb_fix_delete(t, child);
-        } else if (node->parent) {
-            hb_fix_delete_null(t, node->parent, node == node->parent->left);
-        }
+        hb_fix_delete(t, child, node->parent, is_left);
     }
     free(node);
     t->node_count -= 1;
@@ -388,12 +312,7 @@ static void hb_sift_up(hybrid_alloc *a, long pos) {
     lm_set(&a->position_map, key, pos);
 }
 
-/*
- * deliberately differs from hybrid_heap_rb.py. the Python _sift_down compares children against
- * `heap[smallest]`, which goes stale after the first level, so it can break the heap property and
- * return a non-minimal root. comparing against the carried `key` is the min-heap that was meant,
- * and keeps `hybrid` matching baseline under any RNG.
- */
+/* compares against the carried `key`, heap[pos] goes stale after the first move */
 static void hb_sift_down(hybrid_alloc *a, long pos) {
     long key = a->heap[pos];
     long size = a->heap_len;

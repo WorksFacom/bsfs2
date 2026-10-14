@@ -12,6 +12,7 @@ per-size metrics (1 MiB, 10 MiB, 1 GiB).
 
 from __future__ import annotations
 
+import gc
 from datetime import datetime
 from pathlib import Path
 
@@ -293,6 +294,8 @@ class StatisticalRunner:
                             error=f"{exc.__class__.__name__}: {exc}",
                         )
                     )
+                # scenarios run with GC paused, RB parent links leave cycles behind
+                gc.collect()
                 done += 1
                 if done % max(1, total_runs // 20) == 0:
                     print(f"Progress: {done:,}/{total_runs:,}")

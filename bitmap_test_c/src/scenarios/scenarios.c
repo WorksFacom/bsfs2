@@ -6,7 +6,6 @@
 #include <time.h>
 
 #include "rng.h"
-#include "longmap.h"
 
 static double now_ns(void) {
     struct timespec ts;
@@ -44,15 +43,21 @@ static void larr_extend(larr *a, const long *src, long n) {
     a->len += n;
 }
 
-/* drop every value in the set `freed` from `a`, in place */
-static void larr_remove_set(larr *a, longmap *freed) {
-    long w = 0;
-    for (long i = 0; i < a->len; i++) {
-        if (!lm_contains(freed, a->data[i])) {
-            a->data[w++] = a->data[i];
+static int cmp_long_desc(const void *x, const void *y) {
+    long a = *(const long *)x, b = *(const long *)y;
+    return (a < b) - (a > b);
+}
+
+/* swap-remove the given positions in O(k). descending, so the tail element moved into a hole is
+ * never one still pending removal. same bookkeeping as scenarios/harness.py. */
+static void larr_remove_positions(larr *a, long *positions, long k) {
+    qsort(positions, (size_t)k, sizeof(long), cmp_long_desc);
+    for (long i = 0; i < k; i++) {
+        long last = a->data[--a->len];
+        if (positions[i] < a->len) {
+            a->data[positions[i]] = last;
         }
     }
-    a->len = w;
 }
 
 static double peak_kib(allocator *al, double cur) {
@@ -79,6 +84,7 @@ static scenario_result run_mixed(const strategy_spec *spec, long bitmap_size,
 
     long *alloc_buf = (long *)malloc((size_t)blocks_per_alloc * sizeof(long));
     long *free_buf = (long *)malloc((size_t)blocks_per_alloc * sizeof(long));
+    long *positions = (long *)malloc((size_t)blocks_per_alloc * sizeof(long));
     double peak_mem = 0.0;
 
     for (long i = 0; i < num_operations; i++) {
@@ -100,19 +106,16 @@ static scenario_result run_mixed(const strategy_spec *spec, long bitmap_size,
             }
         } else {
             long free_count = blocks_per_alloc < allocated.len ? blocks_per_alloc : allocated.len;
-            rng_sample(&st, allocated.data, allocated.len, free_count, free_buf);
+            rng_sample_range(&st, allocated.len, free_count, positions);
+            for (long j = 0; j < free_count; j++) {
+                free_buf[j] = allocated.data[positions[j]];
+            }
             double t0 = now_ns();
             bool success = al->deallocate(al, free_buf, free_count);
             double t1 = now_ns();
             if (success) {
                 dealloc_times[n_dealloc++] = (t1 - t0) / 1000.0;
-                longmap freed;
-                lm_init(&freed);
-                for (long j = 0; j < free_count; j++) {
-                    lm_set(&freed, free_buf[j], 1);
-                }
-                larr_remove_set(&allocated, &freed);
-                lm_free(&freed);
+                larr_remove_positions(&allocated, positions, free_count);
             }
         }
 
@@ -139,6 +142,7 @@ static scenario_result run_mixed(const strategy_spec *spec, long bitmap_size,
     free(dealloc_times);
     free(alloc_buf);
     free(free_buf);
+    free(positions);
     larr_free(&allocated);
     al->destroy(al);
     return res;
@@ -222,6 +226,7 @@ scenario_result scenario_multisize_pareto(const strategy_spec *spec, long bitmap
     long max_size = SIZES[2];
     long *alloc_buf = (long *)malloc((size_t)max_size * sizeof(long));
     long *free_buf = (long *)malloc((size_t)max_size * sizeof(long));
+    long *positions = (long *)malloc((size_t)max_size * sizeof(long));
     double peak_mem = 0.0;
 
     for (long i = 0; i < num_operations; i++) {
@@ -260,7 +265,10 @@ scenario_result scenario_multisize_pareto(const strategy_spec *spec, long bitmap
         } else {
             long free_count = file_size < allocated[si].len ? file_size : allocated[si].len;
             if (free_count > 0) {
-                rng_sample(&st, allocated[si].data, allocated[si].len, free_count, free_buf);
+                rng_sample_range(&st, allocated[si].len, free_count, positions);
+                for (long j = 0; j < free_count; j++) {
+                    free_buf[j] = allocated[si].data[positions[j]];
+                }
                 double t0 = now_ns();
                 bool success = al->deallocate(al, free_buf, free_count);
                 double t1 = now_ns();
@@ -269,13 +277,7 @@ scenario_result scenario_multisize_pareto(const strategy_spec *spec, long bitmap
                     dealloc_times[n_dealloc++] = elapsed;
                     sum_dealloc_sz[si] += elapsed;
                     n_dealloc_sz[si] += 1;
-                    longmap freed;
-                    lm_init(&freed);
-                    for (long j = 0; j < free_count; j++) {
-                        lm_set(&freed, free_buf[j], 1);
-                    }
-                    larr_remove_set(&allocated[si], &freed);
-                    lm_free(&freed);
+                    larr_remove_positions(&allocated[si], positions, free_count);
                     dealloc_counts[si] += 1;
                 }
             }
@@ -314,6 +316,7 @@ scenario_result scenario_multisize_pareto(const strategy_spec *spec, long bitmap
     free(dealloc_times);
     free(alloc_buf);
     free(free_buf);
+    free(positions);
     for (int s = 0; s < 3; s++) {
         larr_free(&allocated[s]);
     }

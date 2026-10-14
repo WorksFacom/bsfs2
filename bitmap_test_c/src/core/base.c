@@ -21,41 +21,28 @@ long allocator_free_remaining(const allocator *self) {
     return (long)self->bm.free_count;
 }
 
-static int cmp_long(const void *a, const void *b) {
-    long x = *(const long *)a;
-    long y = *(const long *)b;
-    return (x > y) - (x < y);
-}
-
 bool allocator_validate_deallocation(allocator *self, const long *indices, long n) {
     if (n <= 0) {
         return true; /* empty: nothing to reject */
     }
 
-    /* duplicate check: len(set(indices)) != len(indices) */
-    long *tmp = (long *)malloc((size_t)n * sizeof(long));
-    for (long i = 0; i < n; i++) {
-        tmp[i] = indices[i];
-    }
-    qsort(tmp, (size_t)n, sizeof(long), cmp_long);
-    for (long i = 1; i < n; i++) {
-        if (tmp[i] == tmp[i - 1]) {
-            free(tmp);
-            return false;
-        }
-    }
-    free(tmp);
-
-    for (long i = 0; i < n; i++) {
+    /* O(n) like Python's set(): tag each index's byte with 2, a second hit is a duplicate. a qsort
+     * here cost more than most allocators' own dealloc work. bytes are restored before returning. */
+    uint8_t *data = self->bm.data;
+    long i = 0;
+    bool ok = true;
+    for (; i < n; i++) {
         long idx = indices[i];
-        if (idx < 0 || idx >= self->size) {
-            return false;
+        if (idx < 0 || idx >= self->size || data[idx] != 1) {
+            ok = false;
+            break;
         }
-        if (bitmap_get(&self->bm, (size_t)idx) == 0) {
-            return false;
-        }
+        data[idx] = 2;
     }
-    return true;
+    for (long j = 0; j < i; j++) {
+        data[indices[j]] = 1;
+    }
+    return ok;
 }
 
 void allocator_rollback(allocator *self, const long *allocated, long n) {

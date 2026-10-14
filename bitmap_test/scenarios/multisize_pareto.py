@@ -2,7 +2,8 @@
 Pareto workload with three file sizes.
 
 Sizes: 70% 1 MiB (256 blocks), 25% 10 MiB (2,560), 5% 1 GiB (262,144). Each op picks a size,
-then alloc or dealloc 80/20. Every size class keeps its own allocated list and timings and adds
+then alloc or dealloc 80/20; a dealloc frees a random sample of that class's blocks, not a whole
+file. Every size class keeps its own allocated blocks and timings and adds
 `ops_per_sec_<size>`, `alloc_avg_<size>` etc. (1mib, 10mib, 1gib) on top of the global metrics.
 """
 
@@ -14,6 +15,7 @@ import time
 from core.metrics import build_stress_metrics, measure_allocator_memory_kib
 
 from .base import BenchmarkScenario
+from .harness import gc_paused, memory_sample_every, new_block_list, remove_positions
 
 
 class MultisizeParetoScenario(BenchmarkScenario):
@@ -32,25 +34,23 @@ class MultisizeParetoScenario(BenchmarkScenario):
         self.num_operations = num_operations
         self.seed = seed
 
-    def run(
-        self,
-        allocator_class,
-        allocator_name,
-        bitmap_size,
-        show_progress=False,
-        show_summary=False,
-    ):
+    def run(self, allocator_class, allocator_name, bitmap_size, show_progress=False, show_summary=False):
+        with gc_paused():
+            return self._run(allocator_class, allocator_name, bitmap_size, show_progress)
+
+    def _run(self, allocator_class, allocator_name, bitmap_size, show_progress):
         allocator = allocator_class(bitmap_size)
         rng = random.Random(self.seed)
 
         alloc_times = []
         dealloc_times = []
-        allocated = {256: [], 2560: [], 262144: []}
+        allocated = {256: new_block_list(), 2560: new_block_list(), 262144: new_block_list()}
         alloc_counts_by_size = {256: 0, 2560: 0, 262144: 0}
         dealloc_counts_by_size = {256: 0, 2560: 0, 262144: 0}
         alloc_times_by_size = {256: [], 2560: [], 262144: []}
         dealloc_times_by_size = {256: [], 2560: [], 262144: []}
         peak_mem = 0.0
+        mem_every = memory_sample_every(self.num_operations)
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -75,6 +75,7 @@ class MultisizeParetoScenario(BenchmarkScenario):
             if estimated_free_blocks <= file_size and allocated[file_size]:
                 should_alloc = False
 
+            freed_now = False
             if should_alloc:
                 t_start = time.perf_counter_ns()
                 allocated_blocks = allocator.allocate_blocks(file_size)
@@ -89,7 +90,8 @@ class MultisizeParetoScenario(BenchmarkScenario):
             else:
                 free_count = min(file_size, len(allocated[file_size]))
                 if free_count > 0:
-                    blocks_to_free = rng.sample(allocated[file_size], free_count)
+                    positions = rng.sample(range(len(allocated[file_size])), free_count)
+                    blocks_to_free = [allocated[file_size][p] for p in positions]
                     t_start = time.perf_counter_ns()
                     success = allocator.deallocate_blocks(blocks_to_free)
                     t_end = time.perf_counter_ns()
@@ -97,12 +99,13 @@ class MultisizeParetoScenario(BenchmarkScenario):
                     if success:
                         elapsed_us = (t_end - t_start) / 1000.0
                         dealloc_times.append(elapsed_us)
+                        freed_now = True
                         dealloc_times_by_size[file_size].append(elapsed_us)
-                        freed = set(blocks_to_free)
-                        allocated[file_size] = [b for b in allocated[file_size] if b not in freed]
+                        remove_positions(allocated[file_size], positions)
                         dealloc_counts_by_size[file_size] += 1
 
-            peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
+            if (freed_now and len(dealloc_times) % mem_every == 0) or i == self.num_operations - 1:
+                peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
 
         if show_progress:
             print(

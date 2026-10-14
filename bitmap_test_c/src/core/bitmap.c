@@ -1,9 +1,12 @@
 #include "bitmap.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 void bitmap_init(bitmap *bm, size_t size) {
-    bm->data = (uint8_t *)calloc(size ? size : 1, 1);
+    /* memset instead of calloc so every page faults in here, not inside a timed allocate */
+    bm->data = (uint8_t *)malloc(size ? size : 1);
+    memset(bm->data, 0, size ? size : 1);
     bm->size = size;
     bm->free_count = size;
 }

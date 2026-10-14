@@ -165,159 +165,86 @@ static void rb_insert_node(rb_alloc *a, long index) {
     rb_fix_insert(a, new_node);
 }
 
-static void rb_fix_delete(rb_alloc *a, rb_node *node) {
+/* CLRS delete fixup. `node` (maybe NULL) carries the extra black, `is_left` is its side under `parent` */
+static void rb_fix_delete(rb_alloc *a, rb_node *node, rb_node *parent, int is_left) {
     while (node != a->root && rb_get_color(node) == RB_BLACK) {
-        if (node == node->parent->left) {
-            rb_node *sibling = node->parent->right;
-            if (rb_get_color(sibling) == RB_RED) {
-                sibling->color = RB_BLACK;
-                node->parent->color = RB_RED;
-                rb_rotate_left(a, node->parent);
-                sibling = node->parent->right;
-            }
-            int left_color = sibling ? rb_get_color(sibling->left) : RB_BLACK;
-            int right_color = sibling ? rb_get_color(sibling->right) : RB_BLACK;
-            if (left_color == RB_BLACK && right_color == RB_BLACK) {
-                if (sibling) {
-                    sibling->color = RB_RED;
-                }
-                node = node->parent;
-            } else {
-                if (right_color == RB_BLACK) {
-                    if (sibling->left) {
-                        sibling->left->color = RB_BLACK;
-                    }
-                    sibling->color = RB_RED;
-                    rb_rotate_right(a, sibling);
-                    sibling = node->parent->right;
-                }
-                if (sibling) {
-                    sibling->color = node->parent->color;
-                }
-                node->parent->color = RB_BLACK;
-                if (sibling && sibling->right) {
-                    sibling->right->color = RB_BLACK;
-                }
-                rb_rotate_left(a, node->parent);
-                node = a->root;
-            }
-        } else {
-            rb_node *sibling = node->parent->left;
-            if (rb_get_color(sibling) == RB_RED) {
-                sibling->color = RB_BLACK;
-                node->parent->color = RB_RED;
-                rb_rotate_right(a, node->parent);
-                sibling = node->parent->left;
-            }
-            int left_color = sibling ? rb_get_color(sibling->left) : RB_BLACK;
-            int right_color = sibling ? rb_get_color(sibling->right) : RB_BLACK;
-            if (right_color == RB_BLACK && left_color == RB_BLACK) {
-                if (sibling) {
-                    sibling->color = RB_RED;
-                }
-                node = node->parent;
-            } else {
-                if (left_color == RB_BLACK) {
-                    if (sibling->right) {
-                        sibling->right->color = RB_BLACK;
-                    }
-                    sibling->color = RB_RED;
-                    rb_rotate_left(a, sibling);
-                    sibling = node->parent->left;
-                }
-                if (sibling) {
-                    sibling->color = node->parent->color;
-                }
-                node->parent->color = RB_BLACK;
-                if (sibling && sibling->left) {
-                    sibling->left->color = RB_BLACK;
-                }
-                rb_rotate_right(a, node->parent);
-                node = a->root;
-            }
+        if (!parent) {
+            break;
         }
-    }
-    /* rbtree.py never recolors `node` BLACK after the loop, kept as is. only colors are off, never
-     * the index set or order. */
-}
-
-static void rb_fix_delete_null(rb_alloc *a, rb_node *parent, int is_left) {
-    rb_node *node = NULL;
-    (void)is_left;
-    while (parent && (node == NULL || node->color == RB_BLACK)) {
-        if (node == NULL || node == parent->left) {
+        if (is_left) {
             rb_node *sibling = parent->right;
-            if (sibling && sibling->color == RB_RED) {
+            if (rb_get_color(sibling) == RB_RED) {
                 sibling->color = RB_BLACK;
                 parent->color = RB_RED;
                 rb_rotate_left(a, parent);
                 sibling = parent->right;
             }
-            if (sibling) {
-                int left_color = rb_get_color(sibling->left);
-                int right_color = rb_get_color(sibling->right);
-                if (left_color == RB_BLACK && right_color == RB_BLACK) {
-                    sibling->color = RB_RED;
-                    node = parent;
-                    parent = node->parent;
-                } else {
-                    if (right_color == RB_BLACK) {
-                        if (sibling->left) {
-                            sibling->left->color = RB_BLACK;
-                        }
-                        sibling->color = RB_RED;
-                        rb_rotate_right(a, sibling);
-                        sibling = parent->right;
-                    }
-                    sibling->color = parent->color;
-                    parent->color = RB_BLACK;
-                    if (sibling && sibling->right) {
-                        sibling->right->color = RB_BLACK;
-                    }
-                    rb_rotate_left(a, parent);
-                    break;
-                }
-            } else {
+            if (!sibling) {
                 node = parent;
                 parent = node->parent;
+                is_left = parent && parent->left == node;
+                continue;
+            }
+            if (rb_get_color(sibling->left) == RB_BLACK && rb_get_color(sibling->right) == RB_BLACK) {
+                sibling->color = RB_RED;
+                node = parent;
+                parent = node->parent;
+                is_left = parent && parent->left == node;
+            } else {
+                if (rb_get_color(sibling->right) == RB_BLACK) {
+                    sibling->left->color = RB_BLACK;
+                    sibling->color = RB_RED;
+                    rb_rotate_right(a, sibling);
+                    sibling = parent->right;
+                }
+                sibling->color = parent->color;
+                parent->color = RB_BLACK;
+                if (sibling->right) {
+                    sibling->right->color = RB_BLACK;
+                }
+                rb_rotate_left(a, parent);
+                node = a->root;
+                parent = NULL;
             }
         } else {
             rb_node *sibling = parent->left;
-            if (sibling && sibling->color == RB_RED) {
+            if (rb_get_color(sibling) == RB_RED) {
                 sibling->color = RB_BLACK;
                 parent->color = RB_RED;
                 rb_rotate_right(a, parent);
                 sibling = parent->left;
             }
-            if (sibling) {
-                int left_color = rb_get_color(sibling->left);
-                int right_color = rb_get_color(sibling->right);
-                if (right_color == RB_BLACK && left_color == RB_BLACK) {
-                    sibling->color = RB_RED;
-                    node = parent;
-                    parent = node->parent;
-                } else {
-                    if (left_color == RB_BLACK) {
-                        if (sibling->right) {
-                            sibling->right->color = RB_BLACK;
-                        }
-                        sibling->color = RB_RED;
-                        rb_rotate_left(a, sibling);
-                        sibling = parent->left;
-                    }
-                    sibling->color = parent->color;
-                    parent->color = RB_BLACK;
-                    if (sibling && sibling->left) {
-                        sibling->left->color = RB_BLACK;
-                    }
-                    rb_rotate_right(a, parent);
-                    break;
-                }
-            } else {
+            if (!sibling) {
                 node = parent;
                 parent = node->parent;
+                is_left = parent && parent->left == node;
+                continue;
+            }
+            if (rb_get_color(sibling->left) == RB_BLACK && rb_get_color(sibling->right) == RB_BLACK) {
+                sibling->color = RB_RED;
+                node = parent;
+                parent = node->parent;
+                is_left = parent && parent->left == node;
+            } else {
+                if (rb_get_color(sibling->left) == RB_BLACK) {
+                    sibling->right->color = RB_BLACK;
+                    sibling->color = RB_RED;
+                    rb_rotate_left(a, sibling);
+                    sibling = parent->left;
+                }
+                sibling->color = parent->color;
+                parent->color = RB_BLACK;
+                if (sibling->left) {
+                    sibling->left->color = RB_BLACK;
+                }
+                rb_rotate_right(a, parent);
+                node = a->root;
+                parent = NULL;
             }
         }
+    }
+    if (node) {
+        node->color = RB_BLACK;
     }
 }
 
@@ -335,21 +262,16 @@ static void rb_delete_node(rb_alloc *a, long index) {
     if (child) {
         child->parent = node->parent;
     }
+    int is_left = node->parent && node->parent->left == node;
     if (!node->parent) {
         a->root = child;
+    } else if (is_left) {
+        node->parent->left = child;
     } else {
-        if (node->parent->left == node) {
-            node->parent->left = child;
-        } else {
-            node->parent->right = child;
-        }
+        node->parent->right = child;
     }
     if (node->color == RB_BLACK) {
-        if (child) {
-            rb_fix_delete(a, child);
-        } else if (node->parent) {
-            rb_fix_delete_null(a, node->parent, node == node->parent->left);
-        }
+        rb_fix_delete(a, child, node->parent, is_left);
     }
     free(node);
     a->node_count -= 1;

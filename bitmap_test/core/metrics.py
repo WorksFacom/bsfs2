@@ -4,17 +4,29 @@ Metrics aggregation for benchmark results.
 `build_stress_metrics` turns per-op alloc/dealloc times (us) into ops/sec, averages, counts
 and final bitmap state. Fragmentation is `(occupied - runs) / occupied`, where `runs` is the
 number of contiguous occupied runs. Closer to 1 is more contiguous; an empty bitmap is 0.0.
+
+`measure_allocator_memory_kib` walks every object reachable from the allocator (gc referents), so
+node-based trees are counted in full instead of just their root.
 """
 
 from __future__ import annotations
 
+import gc
 import sys
+import types
 
 
 def _calculate_fragmentation(bitmap):
     """(occupied - runs) / occupied. total_frags counts occupied blocks, total_files counts runs."""
     if not bitmap or bitmap.count(1) == 0:
         return 0.0
+
+    data = getattr(bitmap, "_data", None)
+    if data is not None:
+        # same counts as the loop below, at C speed: a run starts at every 0->1 edge plus index 0
+        total_frags = bitmap.count(1)
+        total_files = data.count(b"\x00\x01") + (1 if data[0] == 1 else 0)
+        return (total_frags - total_files) / total_frags
 
     total_files = 0
     total_frags = 0
@@ -62,18 +74,38 @@ def build_stress_metrics(name, alloc_times_us, dealloc_times_us, bitmap_size, fr
     }
 
 
+_ATOMIC = (int, float, complex, str, bytes, bool, type(None))
+_NOT_DATA = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+_MANAGED_DICT = 1 << 4  # Py_TPFLAGS_MANAGED_DICT
+
+
+def _object_bytes(obj, n_referents):
+    size = sys.getsizeof(obj)
+    # getsizeof skips the inline attribute values of plain (non-__slots__) instances, about 8 B per
+    # attribute plus a 24 B header on 3.12+
+    if type(obj).__flags__ & _MANAGED_DICT:
+        size += 8 * max(0, n_referents - 1) + 24
+    return size
+
+
 def measure_allocator_memory_kib(allocator):
-    """Approximate aux memory of the allocator's structures via sys.getsizeof, bitmap excluded."""
-    SKIP = {"bitmap", "size", "free_blocks_remaining"}
+    """Deep size of everything reachable from the allocator, bitmap excluded, shared objects once."""
+    seen = {id(allocator)}
+    bitmap = getattr(allocator, "bitmap", None)
+    if bitmap is not None:
+        seen.add(id(bitmap))
     total = 0
-    for attr, val in vars(allocator).items():
-        if attr in SKIP:
+    stack = list(gc.get_referents(allocator))
+    while stack:
+        obj = stack.pop()
+        oid = id(obj)
+        if oid in seen or isinstance(obj, _NOT_DATA):
             continue
-        total += sys.getsizeof(val)
-        if isinstance(val, dict):
-            for k, v in val.items():
-                total += sys.getsizeof(k) + sys.getsizeof(v)
-        elif isinstance(val, list):
-            for item in val:
-                total += sys.getsizeof(item)
+        seen.add(oid)
+        if isinstance(obj, _ATOMIC):
+            total += sys.getsizeof(obj)
+            continue
+        refs = gc.get_referents(obj)
+        total += _object_bytes(obj, len(refs))
+        stack.extend(refs)
     return total / 1024.0

@@ -71,19 +71,16 @@ class HybridRBTreeForDealloc:
         if child:
             child.parent = node.parent
 
+        is_left = node.parent is not None and node.parent.left is node
         if not node.parent:
             self.root = child
+        elif is_left:
+            node.parent.left = child
         else:
-            if node.parent.left == node:
-                node.parent.left = child
-            else:
-                node.parent.right = child
+            node.parent.right = child
 
         if node.color == Color.BLACK:
-            if child:
-                self._fix_delete(child)
-            elif node.parent:
-                self._fix_delete_null(node.parent, node == node.parent.left)
+            self._fix_delete(child, node.parent, is_left)
 
     def _find(self, node, key):
         while node:
@@ -139,142 +136,74 @@ class HybridRBTreeForDealloc:
 
         self.root.color = Color.BLACK
 
-    def _fix_delete(self, node):
-        while node != self.root and self._get_color(node) == Color.BLACK:
-            if node == node.parent.left:
-                sibling = node.parent.right
 
-                if self._get_color(sibling) == Color.RED:
-                    sibling.color = Color.BLACK
-                    node.parent.color = Color.RED
-                    self._rotate_left(node.parent)
-                    sibling = node.parent.right
-
-                left_color = self._get_color(sibling.left) if sibling else Color.BLACK
-                right_color = self._get_color(sibling.right) if sibling else Color.BLACK
-
-                if left_color == Color.BLACK and right_color == Color.BLACK:
-                    if sibling:
-                        sibling.color = Color.RED
-                    node = node.parent
-                else:
-                    if right_color == Color.BLACK:
-                        if sibling.left:
-                            sibling.left.color = Color.BLACK
-                        sibling.color = Color.RED
-                        self._rotate_right(sibling)
-                        sibling = node.parent.right
-
-                    if sibling:
-                        sibling.color = node.parent.color
-                    node.parent.color = Color.BLACK
-                    if sibling and sibling.right:
-                        sibling.right.color = Color.BLACK
-                    self._rotate_left(node.parent)
-                    node = self.root
-            else:
-                sibling = node.parent.left
-
-                if self._get_color(sibling) == Color.RED:
-                    sibling.color = Color.BLACK
-                    node.parent.color = Color.RED
-                    self._rotate_right(node.parent)
-                    sibling = node.parent.left
-
-                left_color = self._get_color(sibling.left) if sibling else Color.BLACK
-                right_color = self._get_color(sibling.right) if sibling else Color.BLACK
-
-                if right_color == Color.BLACK and left_color == Color.BLACK:
-                    if sibling:
-                        sibling.color = Color.RED
-                    node = node.parent
-                else:
-                    if left_color == Color.BLACK:
-                        if sibling.right:
-                            sibling.right.color = Color.BLACK
-                        sibling.color = Color.RED
-                        self._rotate_left(sibling)
-                        sibling = node.parent.left
-
-                    if sibling:
-                        sibling.color = node.parent.color
-                    node.parent.color = Color.BLACK
-                    if sibling and sibling.left:
-                        sibling.left.color = Color.BLACK
-                    self._rotate_right(node.parent)
-                    node = self.root
-
-    def _fix_delete_null(self, parent, is_left):
-        node = None
-        while parent and (node is None or node.color == Color.BLACK):
-            if not node or node == parent.left:
+    def _fix_delete(self, node, parent, is_left):
+        """CLRS delete fixup. `node` (maybe None) carries the extra black, `is_left` is its side under `parent`."""
+        while node is not self.root and (node is None or node.color == Color.BLACK):
+            if parent is None:
+                break
+            if is_left:
                 sibling = parent.right
-
-                if sibling and sibling.color == Color.RED:
+                if sibling is not None and sibling.color == Color.RED:
                     sibling.color = Color.BLACK
                     parent.color = Color.RED
                     self._rotate_left(parent)
                     sibling = parent.right
-
-                if sibling:
-                    left_color = self._get_color(sibling.left)
-                    right_color = self._get_color(sibling.right)
-
-                    if left_color == Color.BLACK and right_color == Color.BLACK:
-                        sibling.color = Color.RED
-                        node = parent
-                        parent = node.parent
-                    else:
-                        if right_color == Color.BLACK:
-                            if sibling.left:
-                                sibling.left.color = Color.BLACK
-                            sibling.color = Color.RED
-                            self._rotate_right(sibling)
-                            sibling = parent.right
-
-                        sibling.color = parent.color
-                        parent.color = Color.BLACK
-                        if sibling and sibling.right:
-                            sibling.right.color = Color.BLACK
-                        self._rotate_left(parent)
-                        break
-                else:
+                if sibling is None:
                     node = parent
                     parent = node.parent
+                    is_left = parent is not None and parent.left is node
+                    continue
+                if self._get_color(sibling.left) == Color.BLACK and self._get_color(sibling.right) == Color.BLACK:
+                    sibling.color = Color.RED
+                    node = parent
+                    parent = node.parent
+                    is_left = parent is not None and parent.left is node
+                else:
+                    if self._get_color(sibling.right) == Color.BLACK:
+                        sibling.left.color = Color.BLACK
+                        sibling.color = Color.RED
+                        self._rotate_right(sibling)
+                        sibling = parent.right
+                    sibling.color = parent.color
+                    parent.color = Color.BLACK
+                    if sibling.right is not None:
+                        sibling.right.color = Color.BLACK
+                    self._rotate_left(parent)
+                    node = self.root
+                    parent = None
             else:
                 sibling = parent.left
-
-                if sibling and sibling.color == Color.RED:
+                if sibling is not None and sibling.color == Color.RED:
                     sibling.color = Color.BLACK
                     parent.color = Color.RED
                     self._rotate_right(parent)
                     sibling = parent.left
-
-                if sibling:
-                    left_color = self._get_color(sibling.left)
-                    right_color = self._get_color(sibling.right)
-
-                    if right_color == Color.BLACK and left_color == Color.BLACK:
-                        sibling.color = Color.RED
-                        node = parent
-                        parent = node.parent
-                    else:
-                        if left_color == Color.BLACK:
-                            if sibling.right:
-                                sibling.right.color = Color.BLACK
-                            sibling.color = Color.RED
-                            self._rotate_left(sibling)
-                            sibling = parent.left
-
-                        sibling.color = parent.color
-                        parent.color = Color.BLACK
-                        if sibling and sibling.left:
-                            sibling.left.color = Color.BLACK
-                        self._rotate_right(parent)
-                        break
-                else:
+                if sibling is None:
                     node = parent
                     parent = node.parent
+                    is_left = parent is not None and parent.left is node
+                    continue
+                if self._get_color(sibling.left) == Color.BLACK and self._get_color(sibling.right) == Color.BLACK:
+                    sibling.color = Color.RED
+                    node = parent
+                    parent = node.parent
+                    is_left = parent is not None and parent.left is node
+                else:
+                    if self._get_color(sibling.left) == Color.BLACK:
+                        sibling.right.color = Color.BLACK
+                        sibling.color = Color.RED
+                        self._rotate_left(sibling)
+                        sibling = parent.left
+                    sibling.color = parent.color
+                    parent.color = Color.BLACK
+                    if sibling.left is not None:
+                        sibling.left.color = Color.BLACK
+                    self._rotate_right(parent)
+                    node = self.root
+                    parent = None
+        if node is not None:
+            node.color = Color.BLACK
 
     def _get_color(self, node):
         return node.color if node else Color.BLACK
@@ -429,13 +358,16 @@ class BitmapHybridHeapRB(BaseAllocator):
 
         while True:
             smallest = pos
+            best = key
             left = 2 * pos + 1
             right = 2 * pos + 2
 
-            if left < size and self.heap[left] < self.heap[smallest]:
+            # compare against the carried key, heap[pos] goes stale after the first move
+            if left < size and self.heap[left] < best:
                 smallest = left
+                best = self.heap[left]
 
-            if right < size and self.heap[right] < self.heap[smallest]:
+            if right < size and self.heap[right] < best:
                 smallest = right
 
             if smallest != pos:

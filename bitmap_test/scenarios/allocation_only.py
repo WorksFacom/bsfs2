@@ -13,6 +13,7 @@ import time
 from core.metrics import build_stress_metrics, measure_allocator_memory_kib
 
 from .base import BenchmarkScenario
+from .harness import gc_paused, memory_sample_every
 
 
 class AllocationOnlyScenario(BenchmarkScenario):
@@ -20,17 +21,15 @@ class AllocationOnlyScenario(BenchmarkScenario):
         self.blocks_per_alloc = blocks_per_alloc
         self.num_operations = num_operations
 
-    def run(
-        self,
-        allocator_class,
-        allocator_name,
-        bitmap_size,
-        show_progress=False,
-        show_summary=False,
-    ):
+    def run(self, allocator_class, allocator_name, bitmap_size, show_progress=False, show_summary=False):
+        with gc_paused():
+            return self._run(allocator_class, allocator_name, bitmap_size, show_progress)
+
+    def _run(self, allocator_class, allocator_name, bitmap_size, show_progress):
         allocator = allocator_class(bitmap_size)
         alloc_times = []
         peak_mem = 0.0
+        mem_every = memory_sample_every(self.num_operations)
 
         progress_step = max(1, self.num_operations // 10)
         for i in range(self.num_operations):
@@ -47,7 +46,8 @@ class AllocationOnlyScenario(BenchmarkScenario):
 
             if blocks:
                 alloc_times.append((t_end - t_start) / 1000.0)
-            peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
+            if i % mem_every == 0 or i == self.num_operations - 1:
+                peak_mem = max(peak_mem, measure_allocator_memory_kib(allocator))
 
         if show_progress:
             print(

@@ -52,7 +52,8 @@ src/
 ├── allocators/
 │   ├── scatter/  baseline, needle, avl, avl_range, rb, heap, btree,
 │   │             bplustree, hybrid, segtree, twolevel, treap
-│   └── extent/   extent_treap (política lowaddr) + avl_range_extent
+│   └── extent/   extent_base (política lowaddr) + extent_treap, extent_rb,
+│                 extent_bplustree, avl_range_extent
 ├── scenarios/ stress, pareto, allocation_only, multisize_pareto
 ├── runners/   demo, stress, validator, report, statistical (CSV)
 └── main.c     CLI
@@ -81,17 +82,18 @@ Cada alocador embute `allocator base;` como primeiro membro e preenche a vtable
 2. `peak_memory_kib`: o Python usa `sys.getsizeof` (específico de objetos
    Python). Aqui calcula-se a memória auxiliar real em C (nº de nós × `sizeof`).
 
-3. `hybrid` (`_sift_down`): o `_sift_down` do `hybrid_heap_rb.py` tem um bug
-   latente (compara contra um valor obsoleto do heap em vez da chave que
-   desce), que pode quebrar a propriedade do heap e, sob certas cargas, retornar
-   um mínimo incorreto. O port implementa o min-heap correto que o autor
-   pretendia, para que `hybrid` permaneça consistente com o `baseline` em
-   qualquer RNG. Ver o comentário em `src/allocators/scatter/hybrid.c`.
+3. `validate_deallocation`: mesma semântica do Python (duplicata, fora do
+   intervalo ou bloco livre invalidam), mas em O(n) marcando os bytes do bitmap
+   em vez de ordenar a lista. A versão com `qsort` custava mais que o trabalho
+   de dealloc da maioria das estruturas e achatava as diferenças entre elas.
 
-4. Extents lowaddr: os três alocadores `*_range_extent`/`*_extent` de menor
-   endereço são definidos para produzir bitmaps idênticos (mesma política; só
-   muda a estrutura interna: treap/RB/B+tree). Para manter o port tratável, os
-   três compartilham uma única implementação fiel de *treap de ranges com
-   max_gap* (`extent_treap.c`). Isso não altera o bitmap nem qualquer métrica
-   além de `peak_memory`/tempo. O `avl_range_extent` (grupo próprio) é portado
-   separadamente.
+4. O bitmap é zerado com `memset` na criação (fora da medição), para que as
+   falhas de página não caiam dentro de um `allocate` cronometrado.
+
+As três estruturas extent de menor endereço (`treap_range_extent`,
+`rb_range_extent`, `bplustree_extent`) compartilham a política em
+`extent_base.c` e cada uma tem sua estrutura própria (`extent_treap.c`,
+`extent_rb.c`, `extent_bplustree.c`), como no Python.
+
+A carga é registrada como no Python (`scenarios/harness.py`): desalocações
+sorteiam posições e removem por troca com o último elemento.

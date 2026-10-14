@@ -11,7 +11,13 @@ Separar lógica de workload da CLI e dos allocators para facilitar extensão e t
 - `base.py`: contrato `BenchmarkScenario` (`run(...)`).
 - `stress.py`: cenário padrão de benchmark (mix 70% alloc / 30% dealloc, seed fixa).
 - `allocation_only.py`: cenário estatístico de alocação pura.
-- `mixed_7030.py`: cenário estatístico seedável com mix 70/30.
+- `pareto.py`: cenário estatístico seedável com mix 80/20 e um tamanho de arquivo.
+- `multisize_pareto.py`: mix 80/20 com arquivos de 1 MiB, 10 MiB e 1 GiB.
+- `harness.py`: registro dos blocos alocados (`array` + remoção por troca), GC
+  pausado durante a execução e amostragem da memória de pico.
+
+Desalocações liberam uma amostra aleatória dos blocos alocados, não um arquivo
+inteiro, então o espaço liberado fica espalhado pelo disco.
 - `__init__.py`: exports públicos.
 
 ## Interface comum
