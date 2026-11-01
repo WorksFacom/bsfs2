@@ -44,6 +44,11 @@ mkdir -p "$TMPDIR_BENCH/root"
   --filesystem posix-test
 
 test "$(wc -l <"$TMPDIR_BENCH/mixed.jsonl")" -eq 8
+# only phases that flush have a durable rate
+test "$(grep -c '"durable_throughput_mib_s":null' "$TMPDIR_BENCH/mixed.jsonl")" -eq 6
+grep '"phase":"append-4k"' "$TMPDIR_BENCH/mixed.jsonl" | grep -q '"durable_throughput_mib_s":null'
+grep '"phase":"edit-cycle-durable-total"' "$TMPDIR_BENCH/mixed.jsonl" | grep -q '"has_durable_window":true'
+grep '"phase":"edit-cycle-durable-total"' "$TMPDIR_BENCH/mixed.jsonl" | grep -vq '"durable_throughput_mib_s":null'
 
 rm -rf "$TMPDIR_BENCH/root"
 mkdir -p "$TMPDIR_BENCH/root"

@@ -1295,6 +1295,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("recorded final flush", metrics["durable_throughput_mib_s"])
         self.assertIn("recorded final flush", metrics["durable_iops"])
         self.assertIn("Operation-path time", metrics["durable_total_ns"])
+        self.assertIn("page-cache ingest", metrics["throughput_mib_s"])
         self.assertIn("excluding the final flush", metrics["latency_p99_ns"])
         self.assertIn(
             "only for phases with a final flush", metrics["write_amplification"]
@@ -1322,6 +1323,27 @@ class AnalysisTests(unittest.TestCase):
 
         self.assertEqual(len(scaling), 1)
         self.assertEqual(scaling[0]["scaling_ratio"], 3.0)
+
+    def test_scaling_falls_back_to_the_operation_rate_for_reads(self) -> None:
+        records = [
+            result(workers=1, throughput=10.0, durable_window=False),
+            result(workers=4, throughput=30.0, durable_window=False),
+        ]
+
+        scaling = derive_scaling(derive_summary(records))
+
+        self.assertEqual(scaling[0]["rate_basis"], "operation")
+        self.assertEqual(scaling[0]["one_worker_mib_s"], 40.0)
+        self.assertEqual(scaling[0]["four_worker_mib_s"], 120.0)
+
+    def test_durable_rates_are_dropped_without_a_flush(self) -> None:
+        # schema 1 records carry a durable rate even when the phase never flushed
+        row = derive_summary(
+            [result(workers=1, throughput=10.0, durable_window=False)]
+        )[0]
+
+        self.assertIsNone(row["durable_throughput_mib_s_median"])
+        self.assertEqual(row["throughput_mib_s_median"], 40.0)
 
     def test_failed_records_are_excluded_from_summary(self) -> None:
         failed = result(workers=1, throughput=10.0)

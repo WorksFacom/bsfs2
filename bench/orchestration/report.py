@@ -15,7 +15,7 @@ REPORT_METRICS = (
         "Durable throughput",
         "MiB/s",
         "Higher is better",
-        "Logical data divided by operation time plus any recorded final flush; higher is better.",
+        "Logical data divided by operation time plus the recorded final flush, shown only for phases with one; higher is better.",
         False,
     ),
     (
@@ -23,7 +23,7 @@ REPORT_METRICS = (
         "Durable IOPS",
         "ops/s",
         "Higher is better",
-        "Completed operations divided by operation time plus any recorded final flush; higher is better.",
+        "Completed operations divided by operation time plus the recorded final flush, shown only for phases with one; higher is better.",
         False,
     ),
     (
@@ -31,8 +31,24 @@ REPORT_METRICS = (
         "Durable total time",
         "ns",
         "Lower is better",
-        "Operation-path time plus any recorded final flush; lower is better.",
+        "Operation-path time plus the recorded final flush, shown only for phases with one; lower is better.",
         True,
+    ),
+    (
+        "throughput_mib_s",
+        "Operation throughput",
+        "MiB/s",
+        "Higher is better",
+        "Logical data divided by operation time alone. For buffered writes this is page-cache ingest, not completed writes; higher is better.",
+        False,
+    ),
+    (
+        "iops",
+        "Operation IOPS",
+        "ops/s",
+        "Higher is better",
+        "Completed operations divided by operation time alone, excluding any flush; higher is better.",
+        False,
     ),
     (
         "latency_p99_ns",
@@ -583,7 +599,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
 
   <section aria-labelledby="scaling-title">
     <h2 id="scaling-title">Concurrency scaling</h2>
-    <p class="muted">Aggregate durable throughput at one and four workers.</p>
+    <p class="muted">Aggregate throughput at one and four workers. rate_basis says whether a row includes a final flush.</p>
     <div id="scaling"></div>
   </section>
 
@@ -866,7 +882,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   function renderScaling() {
     document.querySelector("#scaling").append(makeTable(
       data.scaling,
-      ["filesystem", "scenario", "phase", "one_worker_mib_s", "four_worker_mib_s", "scaling_ratio"],
+      ["filesystem", "scenario", "phase", "rate_basis", "one_worker_mib_s", "four_worker_mib_s", "scaling_ratio"],
     ));
   }
 

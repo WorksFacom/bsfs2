@@ -18,6 +18,7 @@ else:
 
 
 GROUP_FIELDS = ("filesystem", "scenario", "phase", "worker_count", "worker_id")
+DURABLE_FIELDS = ("durable_throughput_mib_s", "durable_iops", "durable_total_ns")
 METRICS = (
     "durable_throughput_mib_s",
     "durable_iops",
@@ -80,9 +81,16 @@ def summarize(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
+def without_false_durability(record: dict[str, Any]) -> dict[str, Any]:
+    """Remove durable rates from schema 1 records for phases that did not flush."""
+    if record.get("has_durable_window") is not False:
+        return record
+    return {**record, **dict.fromkeys(DURABLE_FIELDS)}
+
+
 def derive_summary(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-    for record in records:
+    for record in map(without_false_durability, records):
         if record.get("validation_status") != "passed":
             continue
         grouped[tuple(record.get(field) for field in GROUP_FIELDS)].append(record)
@@ -123,6 +131,14 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def comparable_rate(row: dict[str, Any]) -> tuple[Any, str]:
+    """Use the operation rate for phases without a durable rate."""
+    durable = row.get("durable_throughput_mib_s_median")
+    if durable is not None:
+        return durable, "durable"
+    return row.get("throughput_mib_s_median"), "operation"
+
+
 def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_key: dict[tuple[str, str, str], dict[int, dict[str, Any]]] = defaultdict(
         dict
@@ -138,9 +154,9 @@ def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for key, workers in sorted(by_key.items()):
         if 1 not in workers or 4 not in workers:
             continue
-        one = workers[1].get("durable_throughput_mib_s_median")
-        four = workers[4].get("durable_throughput_mib_s_median")
-        if not one or four is None:
+        one, one_basis = comparable_rate(workers[1])
+        four, four_basis = comparable_rate(workers[4])
+        if not one or four is None or one_basis != four_basis:
             continue
         output.append(
             {
@@ -150,6 +166,7 @@ def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "one_worker_mib_s": one,
                 "four_worker_mib_s": four,
                 "scaling_ratio": float(four) / float(one),
+                "rate_basis": one_basis,
             }
         )
     return output

@@ -174,7 +174,7 @@ int bench_result_write(const struct bench_run_config *config,
   gmtime_r(&now, &tm);
   strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
-  fputs("{\"schema_version\":1,\"run_id\":", output);
+  fputs("{\"schema_version\":2,\"run_id\":", output);
   json_string(output, config->run_id);
   fputs(",\"timestamp\":", output);
   json_string(output, timestamp);
@@ -193,11 +193,10 @@ int bench_result_write(const struct bench_run_config *config,
           ",\"worker_count\":%u,\"operations\":%" PRIu64
           ",\"logical_bytes\":%" PRIu64 ",\"elapsed_ns\":%" PRIu64
           ",\"operation_path_ns\":%" PRIu64 ",\"final_flush_ns\":%" PRIu64
-          ",\"durable_total_ns\":%" PRIu64 ",\"cpu_user_ns\":%" PRIu64
-          ",\"cpu_system_ns\":%" PRIu64,
+          ",\"cpu_user_ns\":%" PRIu64 ",\"cpu_system_ns\":%" PRIu64,
           config->repetition, config->seed, config->worker_count,
           result->operations, result->logical_bytes, result->elapsed_ns,
-          result->operation_path_ns, result->final_flush_ns, durable_total,
+          result->operation_path_ns, result->final_flush_ns,
           result->cpu_user_ns, result->cpu_system_ns);
   if (result->has_worker_id)
     fprintf(output, ",\"worker_id\":%u", result->worker_id);
@@ -212,14 +211,19 @@ int bench_result_write(const struct bench_run_config *config,
   }
   /*
    * throughput_mib_s excludes the flush, so buffered writes measure page-cache ingest.
-   * these include it, the only rate comparable across filesystems that defer differently
+   * durable rates include the flush, allowing comparisons across filesystems
+   * that defer writes differently. Without a flush, these rates are null.
    */
-  if (durable_seconds > 0.0) {
-    fprintf(output, ",\"durable_throughput_mib_s\":%.9f,\"durable_iops\":%.9f",
-            mib / durable_seconds,
+  if (result->has_durable_window && durable_seconds > 0.0) {
+    fprintf(output,
+            ",\"durable_total_ns\":%" PRIu64
+            ",\"durable_throughput_mib_s\":%.9f,\"durable_iops\":%.9f",
+            durable_total, mib / durable_seconds,
             (double)result->operations / durable_seconds);
   } else {
-    fputs(",\"durable_throughput_mib_s\":null,\"durable_iops\":null", output);
+    fputs(",\"durable_total_ns\":null,\"durable_throughput_mib_s\":null,"
+          "\"durable_iops\":null",
+          output);
   }
 
   if (result->has_latency)

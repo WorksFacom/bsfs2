@@ -291,7 +291,9 @@ Each phase records two rates, and they are not interchangeable.
 
 - `durable_throughput_mib_s` and `durable_iops` divide by `durable_total_ns`,
   which includes the phase's final flush. These are the comparable numbers and
-  the ones the charts plot.
+  the ones the charts plot first. All three are null when `has_durable_window`
+  is false. This applies to reads, per-worker records, and mixed edit phases
+  that share the flush in `edit-cycle-durable-total`.
 - `throughput_mib_s` and `iops` divide by the operation path alone. For buffered
   writes that is page-cache ingest rate, not filesystem throughput. It stays in
   `summary.csv` because the gap between the two is interesting, but ranking on
