@@ -27,6 +27,7 @@ METRICS = (
     "elapsed_ns",
     "operation_path_ns",
     "final_flush_ns",
+    "wall_ns",
     "durable_total_ns",
     "latency_p50_ns",
     "latency_p95_ns",

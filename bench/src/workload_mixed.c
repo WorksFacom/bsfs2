@@ -177,8 +177,10 @@ static int mixed_create(struct bench_run_config *config,
       if (error)
         break;
     }
+    operation_started = bench_now_ns();
     if (config->backend.ops->close_file(&config->backend, &file) && !error)
       error = -EIO;
+    operation_elapsed += bench_now_ns() - operation_started;
     if (error)
       break;
     if ((error = bench_latency_add(&latencies, operation_elapsed)) != 0)
@@ -227,12 +229,15 @@ static int mixed_read(struct bench_run_config *config,
     struct bench_file file = {0};
     uint32_t i = order[n];
     uint64_t size = mixed_file_size(parameters, i);
+    uint64_t operation_started;
     uint64_t operation_elapsed = 0;
 
     error = mixed_path(path, sizeof(path), parameters, i, 0);
-    if (!error)
-      error =
-          config->backend.ops->open_file(&config->backend, path, 0, &file);
+    if (error)
+      break;
+    operation_started = bench_now_ns();
+    error = config->backend.ops->open_file(&config->backend, path, 0, &file);
+    operation_elapsed += bench_now_ns() - operation_started;
     if (error)
       break;
     for (uint64_t offset = 0; offset < size; offset += MIXED_CHUNK) {
@@ -249,7 +254,9 @@ static int mixed_read(struct bench_run_config *config,
         break;
       }
     }
+    operation_started = bench_now_ns();
     (void)config->backend.ops->close_file(&config->backend, &file);
+    operation_elapsed += bench_now_ns() - operation_started;
     if (error)
       break;
     if ((error = bench_latency_add(&latencies, operation_elapsed)) != 0)
@@ -310,6 +317,9 @@ static int emit_edit_operation(struct bench_run_config *config,
     error = mixed_path(old_path, sizeof(old_path), parameters, i, 0);
     if (error)
       break;
+    if (operation == 0 || operation == 1)
+      bench_pattern_fill(buffer, sizeof(buffer), config->seed,
+                         (operation == 0 ? 0x300000ULL : 0x400000ULL) + i, 0);
     start = bench_now_ns();
     if (operation == 0 || operation == 1) {
       uint64_t size = mixed_file_size(parameters, i);
@@ -320,8 +330,6 @@ static int emit_edit_operation(struct bench_run_config *config,
       if (!error)
         error =
             config->backend.ops->seek_file(&config->backend, &file, offset);
-      bench_pattern_fill(buffer, sizeof(buffer), config->seed,
-                         (operation == 0 ? 0x300000ULL : 0x400000ULL) + i, 0);
       if (!error)
         error = bench_write_all(&config->backend, &file, buffer,
                                 sizeof(buffer), NULL);
@@ -392,29 +400,33 @@ static int mixed_edit(struct bench_run_config *config,
 static int validate_mixed_file(struct bench_run_config *config,
                                const struct mixed_parameters *parameters,
                                const struct mixed_plan *plan, uint32_t file_id,
-                               unsigned char *buffer,
-                               unsigned char *expected) {
+                               unsigned char *buffer, unsigned char *expected,
+                               uint64_t *elapsed) {
   struct bench_file file = {0};
   struct bench_stat status;
   char path[BENCH_PATH_MAX];
   uint64_t original_size = mixed_file_size(parameters, file_id);
   uint64_t final_size = original_size + (plan->append[file_id] ? EDIT_CHUNK : 0);
+  uint64_t started;
   int error;
 
   error = mixed_path(path, sizeof(path), parameters, file_id,
                      plan->rename[file_id]);
-  if (plan->remove[file_id]) {
-    error = config->backend.ops->stat(&config->backend, path, &status);
+  if (error)
+    return error;
+  started = bench_now_ns();
+  error = config->backend.ops->stat(&config->backend, path, &status);
+  *elapsed += bench_now_ns() - started;
+  if (plan->remove[file_id])
     return error == -ENOENT ? 0 : (error ? error : -EEXIST);
-  }
-  if (!error)
-    error = config->backend.ops->stat(&config->backend, path, &status);
   if (error)
     return error;
   if (status.size != final_size)
     return -EILSEQ;
+  started = bench_now_ns();
   error =
       config->backend.ops->open_file(&config->backend, path, 0, &file);
+  *elapsed += bench_now_ns() - started;
   if (error)
     return error;
   for (uint64_t offset = 0; offset < final_size; offset += MIXED_CHUNK) {
@@ -422,7 +434,7 @@ static int validate_mixed_file(struct bench_run_config *config,
         (size_t)((final_size - offset) < MIXED_CHUNK ? final_size - offset
                                                      : MIXED_CHUNK);
     error =
-        bench_read_all(&config->backend, &file, buffer, request, NULL);
+        bench_read_all(&config->backend, &file, buffer, request, elapsed);
     if (error)
       break;
     if (offset < original_size) {
@@ -469,7 +481,9 @@ static int validate_mixed_file(struct bench_run_config *config,
       }
     }
   }
+  started = bench_now_ns();
   (void)config->backend.ops->close_file(&config->backend, &file);
+  *elapsed += bench_now_ns() - started;
   return error;
 }
 
@@ -500,11 +514,10 @@ static int mixed_verify(struct bench_run_config *config,
     goto out;
   bench_phase_start(config, &state);
   for (uint32_t i = 0; i < parameters->files; i++) {
-    uint64_t start = bench_now_ns();
-    uint64_t elapsed;
+    uint64_t elapsed = 0;
 
-    error = validate_mixed_file(config, parameters, &plan, i, buffer, expected);
-    elapsed = bench_now_ns() - start;
+    error = validate_mixed_file(config, parameters, &plan, i, buffer, expected,
+                                &elapsed);
     if (error)
       break;
     if ((error = bench_latency_add(&latencies, elapsed)) != 0)

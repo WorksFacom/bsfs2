@@ -63,6 +63,7 @@ mkdir -p "$TMPDIR_BENCH/root"
   --filesystem posix-test
 
 test "$(wc -l <"$TMPDIR_BENCH/concurrency-seq.jsonl")" -eq 10
+grep '"phase":"sequential-write"' "$TMPDIR_BENCH/concurrency-seq.jsonl" | grep -q '"wall_ns":[0-9]'
 
 rm -rf "$TMPDIR_BENCH/root"
 mkdir -p "$TMPDIR_BENCH/root"

@@ -20,6 +20,7 @@ struct bench_result {
   uint64_t elapsed_ns;
   uint64_t operation_path_ns;
   uint64_t final_flush_ns;
+  uint64_t wall_ns;
   uint64_t cpu_user_ns;
   uint64_t cpu_system_ns;
   uint64_t device_sectors_read;
@@ -49,6 +50,7 @@ struct bench_result {
   int has_reclaim_stats;
   int has_durable_window;
   int has_worker_id;
+  int has_wall;
   unsigned int worker_id;
 };
 

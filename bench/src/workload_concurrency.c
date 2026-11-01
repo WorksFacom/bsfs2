@@ -20,7 +20,8 @@ struct worker_result {
   const char *phase;
   uint64_t operations;
   uint64_t logical_bytes;
-  uint64_t elapsed_ns;
+  uint64_t operation_path_ns;
+  uint64_t wall_ns;
   struct bench_latency latencies;
   int error;
 };
@@ -168,11 +169,12 @@ ready:
     worker->error = bench_latency_add(&worker->latencies, elapsed);
     if (worker->error)
       break;
+    worker->operation_path_ns += elapsed;
     worker->operations++;
     worker->logical_bytes += CONCURRENT_REQUEST;
   }
 out:
-  worker->elapsed_ns = bench_now_ns() - wall_start;
+  worker->wall_ns = bench_now_ns() - wall_start;
   if (file.private_data)
     (void)backend->ops->close_file(backend, &file);
   free(banks);
@@ -205,7 +207,8 @@ static int emit_concurrency_results(struct bench_run_config *config,
                                     int flush) {
   struct bench_result aggregate;
   struct bench_latency aggregate_latencies;
-  uint64_t maximum_elapsed = 0;
+  uint64_t slowest_operation_path = 0;
+  uint64_t slowest_wall = 0;
   char phase[96];
   char raw_path[BENCH_PATH_MAX] = {0};
   int error = bench_latency_init(&aggregate_latencies, 0);
@@ -222,8 +225,10 @@ static int emit_concurrency_results(struct bench_run_config *config,
     result.worker_id = i;
     result.operations = workers[i].operations;
     result.logical_bytes = workers[i].logical_bytes;
-    result.elapsed_ns = workers[i].elapsed_ns;
-    result.operation_path_ns = workers[i].elapsed_ns;
+    result.elapsed_ns = workers[i].operation_path_ns;
+    result.operation_path_ns = workers[i].operation_path_ns;
+    result.wall_ns = workers[i].wall_ns;
+    result.has_wall = 1;
     bench_latency_summarize(&workers[i].latencies, &result);
     if (workers[i].error)
       bench_result_error(&result, workers[i].error,
@@ -232,8 +237,10 @@ static int emit_concurrency_results(struct bench_run_config *config,
       error = -EIO;
     aggregate.operations += workers[i].operations;
     aggregate.logical_bytes += workers[i].logical_bytes;
-    if (workers[i].elapsed_ns > maximum_elapsed)
-      maximum_elapsed = workers[i].elapsed_ns;
+    if (workers[i].operation_path_ns > slowest_operation_path)
+      slowest_operation_path = workers[i].operation_path_ns;
+    if (workers[i].wall_ns > slowest_wall)
+      slowest_wall = workers[i].wall_ns;
     for (size_t n = 0; n < workers[i].latencies.count; n++) {
       int add_error =
           bench_latency_add(&aggregate_latencies, workers[i].latencies.values[n]);
@@ -243,8 +250,11 @@ static int emit_concurrency_results(struct bench_run_config *config,
     if (workers[i].error && !error)
       error = workers[i].error;
   }
-  aggregate.elapsed_ns = maximum_elapsed;
-  aggregate.operation_path_ns = maximum_elapsed;
+  /* Rates use filesystem time, as in serial phases. Wall time includes pattern and memcmp work. */
+  aggregate.elapsed_ns = slowest_operation_path;
+  aggregate.operation_path_ns = slowest_operation_path;
+  aggregate.wall_ns = slowest_wall;
+  aggregate.has_wall = 1;
   if (flush) {
     /* flush even after a worker failure so the next phase reads settled state */
     int flush_error = bench_phase_flush(config, &aggregate);
@@ -440,6 +450,7 @@ static int mixed_worker_create(struct worker_result *worker,
       break;
     if ((error = bench_latency_add(&worker->latencies, elapsed)) != 0)
       break;
+    worker->operation_path_ns += elapsed;
     worker->operations++;
     worker->logical_bytes += size;
   }
@@ -468,7 +479,9 @@ static int mixed_worker_read_or_verify(
     if (error)
       break;
     if (verify && plan->remove[i]) {
+      started = bench_now_ns();
       error = backend->ops->stat(backend, path, &status);
+      worker->operation_path_ns += bench_now_ns() - started;
       if (error == -ENOENT)
         error = 0;
       else if (!error)
@@ -507,6 +520,7 @@ static int mixed_worker_read_or_verify(
     }
     if ((error = bench_latency_add(&worker->latencies, elapsed)) != 0)
       break;
+    worker->operation_path_ns += elapsed;
     worker->operations++;
     worker->logical_bytes += final_size;
   }
@@ -535,14 +549,16 @@ static int mixed_worker_edit(struct worker_result *worker,
     error = concurrent_path(old_path, sizeof(old_path), worker, i, 0);
     if (error)
       break;
-    started = bench_now_ns();
     if (plan->append[i] || plan->overwrite[i]) {
-      uint64_t offset =
-          plan->append[i] ? size : ((uint64_t)i * 4096) % size;
       uint64_t stream =
           (plan->append[i] ? 0x900000ULL : 0xa00000ULL) +
           ((uint64_t)worker->worker << 32) + i;
       bench_pattern_fill(buffer, 4096, worker->config->seed, stream, 0);
+    }
+    started = bench_now_ns();
+    if (plan->append[i] || plan->overwrite[i]) {
+      uint64_t offset =
+          plan->append[i] ? size : ((uint64_t)i * 4096) % size;
       error = backend->ops->open_file(backend, old_path, 1, &file);
       if (!error)
         error = backend->ops->seek_file(backend, &file, offset);
@@ -563,6 +579,7 @@ static int mixed_worker_edit(struct worker_result *worker,
       break;
     if ((error = bench_latency_add(&worker->latencies, elapsed)) != 0)
       break;
+    worker->operation_path_ns += elapsed;
     worker->operations++;
   }
   return error;
@@ -610,7 +627,7 @@ ready:
   else
     worker->error = -EINVAL;
 out:
-  worker->elapsed_ns = bench_now_ns() - wall_start;
+  worker->wall_ns = bench_now_ns() - wall_start;
   free(buffer);
   free(expected);
   concurrent_plan_destroy(&plan);

@@ -303,6 +303,26 @@ Each phase records two rates, and they are not interchangeable.
 (`has_durable_window` is true). Without one, the device counters just reflect
 whatever writeback happened to land during the phase.
 
+## What the timers cover
+
+Rates use time spent in filesystem calls for both serial and concurrent phases.
+The timers exclude pattern generation, content comparison, and result bookkeeping.
+
+- `bulk` and `concurrency-seq` time the data transfer. The file is created or
+  opened before the phase starts and closed after it ends.
+- `mixed` and `concurrency-mixed` work per file, so each timed file operation
+  includes create or open through close, as well as any rename, unlink, or stat.
+- `metadata` times each namespace call.
+
+A concurrent aggregate uses the slowest worker's summed filesystem time, plus
+the final flush for its durable rate. `wall_ns` keeps the slowest worker's
+wall-clock loop time for comparison. It is null for serial phases. Inline
+checks still leave small gaps between a worker's reads, so a read phase applies
+slightly less contention than a pure read loop.
+
+`mixed/verify-tree` also stats every file while `concurrency-mixed/mixed-verify`
+stats only removed ones, so verification rates aren't comparable between them.
+
 ## Comparability caveats
 
 - Metadata lookups run twice, `lookup-stat-cold` after a cache drop and

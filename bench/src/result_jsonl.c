@@ -198,6 +198,10 @@ int bench_result_write(const struct bench_run_config *config,
           result->operations, result->logical_bytes, result->elapsed_ns,
           result->operation_path_ns, result->final_flush_ns,
           result->cpu_user_ns, result->cpu_system_ns);
+  if (result->has_wall)
+    fprintf(output, ",\"wall_ns\":%" PRIu64, result->wall_ns);
+  else
+    fputs(",\"wall_ns\":null", output);
   if (result->has_worker_id)
     fprintf(output, ",\"worker_id\":%u", result->worker_id);
   else
