@@ -98,8 +98,7 @@ static void start_gate_release(struct start_gate *gate, int aborted) {
 }
 
 static uint64_t concurrency_size(const struct bench_run_config *config) {
-  (void)config;
-  return 32ULL * 1024ULL * 1024ULL;
+  return config->work_scale * 32ULL * 1024ULL * 1024ULL;
 }
 
 static void *sequential_worker(void *opaque) {
@@ -349,19 +348,17 @@ struct concurrent_mixed_plan {
 
 static uint32_t concurrent_mixed_files(
     const struct bench_run_config *config) {
-  (void)config;
-  return 250;
+  return config->work_scale * 250;
 }
 
+/* Scale directories with files to match the directory sizes of multiple workers' trees. */
 static uint32_t concurrent_mixed_directories(
     const struct bench_run_config *config) {
-  (void)config;
-  return 20;
+  return config->work_scale * 20;
 }
 
-static uint64_t concurrent_mixed_size(
-    const struct bench_run_config *config, uint32_t file) {
-  (void)config;
+static uint64_t concurrent_mixed_size(uint32_t file) {
+  file %= 250;
   if (file < 125)
     return 4096;
   if (file < 200)
@@ -430,7 +427,7 @@ static int mixed_worker_create(struct worker_result *worker,
 
   for (uint32_t i = 0; i < files; i++) {
     struct bench_file file = {0};
-    uint64_t size = concurrent_mixed_size(worker->config, i);
+    uint64_t size = concurrent_mixed_size(i);
     uint64_t started;
     uint64_t elapsed;
 
@@ -468,7 +465,7 @@ static int mixed_worker_read_or_verify(
   for (uint32_t i = 0; i < files; i++) {
     struct bench_file file = {0};
     struct bench_stat status;
-    uint64_t size = concurrent_mixed_size(worker->config, i);
+    uint64_t size = concurrent_mixed_size(i);
     uint64_t final_size =
         size + (verify && plan->append[i] ? 4096 : 0);
     uint64_t started;
@@ -538,7 +535,7 @@ static int mixed_worker_edit(struct worker_result *worker,
 
   for (uint32_t i = 0; i < files; i++) {
     struct bench_file file = {0};
-    uint64_t size = concurrent_mixed_size(worker->config, i);
+    uint64_t size = concurrent_mixed_size(i);
     uint64_t started;
     uint64_t elapsed;
     int selected = plan->append[i] || plan->overwrite[i] || plan->rename[i] ||

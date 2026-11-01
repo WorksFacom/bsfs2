@@ -24,6 +24,7 @@ struct bench_run_config {
   uint64_t seed;
   unsigned int repetition;
   unsigned int worker_count;
+  unsigned int work_scale;
   unsigned int cpu_count;
   unsigned int cpus[256];
 };

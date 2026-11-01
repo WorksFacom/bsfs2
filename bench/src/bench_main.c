@@ -19,6 +19,7 @@ static void usage(FILE *output, const char *program) {
           "  --seed N                    deterministic seed\n"
           "  --repetition N              measured repetition number\n"
           "  --workers N                 worker count\n"
+          "  --work-scale N              multiply concurrency work per worker\n"
           "  --results PATH              JSON Lines output\n"
           "  --artifact-dir PATH         raw sidecar directory\n"
           "  --block-device PATH         device statistics source\n"
@@ -100,6 +101,7 @@ int main(int argc, char **argv) {
       .run_id = "manual",
       .seed = 1234,
       .worker_count = 1,
+      .work_scale = 1,
   };
   const char *cpu = NULL;
   int option;
@@ -111,6 +113,7 @@ int main(int argc, char **argv) {
       {"seed", required_argument, NULL, 'S'},
       {"repetition", required_argument, NULL, 'R'},
       {"workers", required_argument, NULL, 'w'},
+      {"work-scale", required_argument, NULL, 'W'},
       {"results", required_argument, NULL, 'o'},
       {"artifact-dir", required_argument, NULL, 'a'},
       {"block-device", required_argument, NULL, 'b'},
@@ -150,6 +153,11 @@ int main(int argc, char **argv) {
       if (parse_u64(optarg, &value) || value == 0 || value > 256)
         return 2;
       config.worker_count = (unsigned int)value;
+      break;
+    case 'W':
+      if (parse_u64(optarg, &value) || value == 0 || value > 256)
+        return 2;
+      config.work_scale = (unsigned int)value;
       break;
     case 'o':
       config.result_path = optarg;
@@ -193,6 +201,11 @@ int main(int argc, char **argv) {
 
   if (!config.target || !config.scenario) {
     usage(stderr, argv[0]);
+    return 2;
+  }
+  if (config.work_scale != 1 &&
+      strncmp(config.scenario, "concurrency-", 12) != 0) {
+    fprintf(stderr, "--work-scale only applies to concurrency scenarios\n");
     return 2;
   }
   if (config.artifact_dir && mkdir(config.artifact_dir, 0755) != 0 &&

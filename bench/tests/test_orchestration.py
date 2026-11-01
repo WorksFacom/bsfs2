@@ -1021,8 +1021,10 @@ def result(
     worker_id: int | None = None,
     sectors_written: int | None = None,
     durable_window: bool = True,
+    work_scale: int = 1,
 ) -> dict[str, object]:
     return {
+        "work_scale": work_scale,
         "filesystem": "bsfs",
         "scenario": "concurrency-seq",
         "phase": "write",
@@ -1324,6 +1326,32 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(len(scaling), 1)
         self.assertEqual(scaling[0]["scaling_ratio"], 3.0)
 
+    def test_scaling_separates_size_and_worker_effects(self) -> None:
+        records = [
+            result(workers=1, throughput=80.0),
+            result(workers=1, throughput=20.0, work_scale=4),
+            result(workers=4, throughput=30.0),
+        ]
+
+        row = derive_scaling(derive_summary(records))[0]
+
+        self.assertEqual(row["one_worker_same_total_mib_s"], 20.0)
+        self.assertEqual(row["scaling_ratio"], 0.375)
+        self.assertEqual(row["size_effect_ratio"], 0.25)
+        self.assertEqual(row["worker_effect_ratio"], 1.5)
+
+    def test_scaling_tolerates_runs_without_the_same_total_shape(self) -> None:
+        records = [
+            {k: v for k, v in result(workers=w, throughput=t).items() if k != "work_scale"}
+            for w, t in ((1, 10.0), (4, 30.0))
+        ]
+
+        row = derive_scaling(derive_summary(records))[0]
+
+        self.assertEqual(row["scaling_ratio"], 3.0)
+        self.assertIsNone(row["size_effect_ratio"])
+        self.assertIsNone(row["worker_effect_ratio"])
+
     def test_scaling_falls_back_to_the_operation_rate_for_reads(self) -> None:
         records = [
             result(workers=1, throughput=10.0, durable_window=False),
@@ -1435,7 +1463,9 @@ class PlanTests(unittest.TestCase):
         executed: list[tuple[str, str, str, int]] = []
         current: dict[str, Any] = {}
 
-        def phase(self, adapter, scenario, phase, repetition, seed, workers=1):
+        def phase(
+            self, adapter, scenario, phase, repetition, seed, workers=1, work_scale=1
+        ):
             current.update(scenario=scenario, workers=workers)
             if fail == (adapter.name, scenario):
                 raise RuntimeError("phase failed")
@@ -1499,17 +1529,30 @@ class PlanTests(unittest.TestCase):
         config = self._config()
         plan = build_plan(config, config.filesystems)
 
-        # 4 filesystems x 3 repetitions x (3 common + 2 concurrency x 2 worker counts)
-        self.assertEqual(plan.total_units, 84)
+        # 4 filesystems x 3 repetitions x (3 common + 2 concurrency x 3 shapes)
+        self.assertEqual(plan.total_units, 108)
         self.assertEqual(
             {unit.matrix for unit in plan.units}, {"common", "concurrency"}
+        )
+
+    def test_concurrency_shapes_include_one_worker_at_the_four_worker_total(self) -> None:
+        config = self._config()
+        plan = build_plan(config, ("ext4",))
+
+        self.assertEqual(
+            {
+                (unit.workers, unit.work_scale)
+                for unit in plan.units
+                if unit.matrix == "concurrency"
+            },
+            {(1, 1), (1, 4), (4, 1)},
         )
 
     def test_recovery_adds_one_trailing_unit_per_bsfs_target(self) -> None:
         config = self._config(recovery=True)
         plan = build_plan(config, config.filesystems)
 
-        self.assertEqual(plan.total_units, 85)
+        self.assertEqual(plan.total_units, 109)
         last = plan.units[-1]
         self.assertEqual(
             (last.matrix, last.filesystem, last.scenario, last.repetition),
@@ -1829,7 +1872,7 @@ class ReporterTests(unittest.TestCase):
         )
 
         text = stream.getvalue()
-        self.assertIn("1/90 planned phases were reached", text)
+        self.assertIn("1/108 planned phases were reached", text)
         self.assertIn("kernel log: 2 relevant findings", text)
         self.assertIn("analyze /tmp/run", text)
 

@@ -17,7 +17,14 @@ else:
     from .report import write_report
 
 
-GROUP_FIELDS = ("filesystem", "scenario", "phase", "worker_count", "worker_id")
+GROUP_FIELDS = (
+    "filesystem",
+    "scenario",
+    "phase",
+    "worker_count",
+    "work_scale",
+    "worker_id",
+)
 DURABLE_FIELDS = ("durable_throughput_mib_s", "durable_iops", "durable_total_ns")
 METRICS = (
     "durable_throughput_mib_s",
@@ -89,9 +96,14 @@ def without_false_durability(record: dict[str, Any]) -> dict[str, Any]:
     return {**record, **dict.fromkeys(DURABLE_FIELDS)}
 
 
+def with_work_scale(record: dict[str, Any]) -> dict[str, Any]:
+    """Schema 1 had no scaled concurrency runs."""
+    return {"work_scale": 1, **record}
+
+
 def derive_summary(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-    for record in map(without_false_durability, records):
+    for record in map(with_work_scale, map(without_false_durability, records)):
         if record.get("validation_status") != "passed":
             continue
         grouped[tuple(record.get(field) for field in GROUP_FIELDS)].append(record)
@@ -141,8 +153,8 @@ def comparable_rate(row: dict[str, Any]) -> tuple[Any, str]:
 
 
 def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_key: dict[tuple[str, str, str], dict[int, dict[str, Any]]] = defaultdict(
-        dict
+    by_key: dict[tuple[str, str, str], dict[tuple[int, int], dict[str, Any]]] = (
+        defaultdict(dict)
     )
     for row in summary:
         if not str(row["scenario"]).startswith("concurrency-"):
@@ -150,23 +162,34 @@ def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("worker_id") is not None:
             continue
         key = (str(row["filesystem"]), str(row["scenario"]), str(row["phase"]))
-        by_key[key][int(row["worker_count"])] = row
+        by_key[key][(int(row["worker_count"]), int(row["work_scale"]))] = row
     output: list[dict[str, Any]] = []
-    for key, workers in sorted(by_key.items()):
-        if 1 not in workers or 4 not in workers:
+    for key, shapes in sorted(by_key.items()):
+        if (1, 1) not in shapes or (4, 1) not in shapes:
             continue
-        one, one_basis = comparable_rate(workers[1])
-        four, four_basis = comparable_rate(workers[4])
+        one, one_basis = comparable_rate(shapes[(1, 1)])
+        four, four_basis = comparable_rate(shapes[(4, 1)])
         if not one or four is None or one_basis != four_basis:
             continue
+        same_total = (
+            comparable_rate(shapes[(1, 4)])[0] if (1, 4) in shapes else None
+        )
         output.append(
             {
                 "filesystem": key[0],
                 "scenario": key[1],
                 "phase": key[2],
                 "one_worker_mib_s": one,
+                "one_worker_same_total_mib_s": same_total,
                 "four_worker_mib_s": four,
                 "scaling_ratio": float(four) / float(one),
+                # Split scaling_ratio into dataset-size and worker-count effects.
+                "size_effect_ratio": (
+                    None if same_total is None else float(same_total) / float(one)
+                ),
+                "worker_effect_ratio": (
+                    float(four) / float(same_total) if same_total else None
+                ),
                 "rate_basis": one_basis,
             }
         )

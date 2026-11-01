@@ -184,6 +184,7 @@ def _phase_description(scenario: str, phase: str) -> str:
     elif scenario in {"concurrency-seq", "concurrency-mixed"}:
         worker_suffix = (
             " This chart aggregates all workers in each worker-count configuration."
+            " An x4 row is one worker doing the total work of four."
         )
 
     description = PHASE_DESCRIPTIONS.get(scenario, {}).get(base_phase)
@@ -599,7 +600,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
 
   <section aria-labelledby="scaling-title">
     <h2 id="scaling-title">Concurrency scaling</h2>
-    <p class="muted">Aggregate throughput at one and four workers. rate_basis says whether a row includes a final flush.</p>
+    <p class="muted">Four workers do four times the work of one, so scaling_ratio mixes two effects. size_effect_ratio is one worker doing that total against one worker doing a quarter of it. worker_effect_ratio is four workers against one worker at the same total. rate_basis says whether a row includes a final flush.</p>
     <div id="scaling"></div>
   </section>
 
@@ -728,6 +729,11 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     }
   }
 
+  function shapeLabel(row) {
+    const scale = row.work_scale ?? 1;
+    return scale === 1 ? `w${row.worker_count}` : `w${row.worker_count} x${scale}`;
+  }
+
   function workerLabel(row) {
     if (row.worker_id === null || row.worker_id === undefined) return "aggregate";
     return `worker ${row.worker_id}`;
@@ -736,6 +742,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   const alphabetical = (left, right) =>
     String(left.filesystem).localeCompare(String(right.filesystem)) ||
     Number(left.worker_count) - Number(right.worker_count) ||
+    Number(left.work_scale ?? 1) - Number(right.work_scale ?? 1) ||
     (left.worker_id ?? -1) - (right.worker_id ?? -1);
 
   function orderRows(rows, metric) {
@@ -768,7 +775,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     const maximum = observed > 0 ? observed : 1;
     const percent = (value) => `${Math.min(100, Math.max(0, (value / maximum) * 100))}%`;
     // "w1 · aggregate" on every row of a non-concurrency chart is noise, so only show it when it tells bars apart
-    const qualified = new Set(values.map((row) => `${row.worker_count}/${row.worker_id}`)).size > 1;
+    const qualified = new Set(values.map((row) => `${shapeLabel(row)}/${row.worker_id}`)).size > 1;
 
     const list = element("ol", "bars");
     values.forEach((row) => {
@@ -776,11 +783,11 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
       const minimum = Number.isFinite(row[minimumField]) ? row[minimumField] : median;
       const observedMaximum = Number.isFinite(row[maximumField]) ? row[maximumField] : median;
       const item = element("li", "bar-row");
-      item.title = `${row.filesystem} · workers=${row.worker_count} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)} to ${formatValue(observedMaximum)} ${unit}`;
+      item.title = `${row.filesystem} · ${shapeLabel(row)} · ${workerLabel(row)}\nmedian ${formatValue(median)} ${unit}\nrange ${formatValue(minimum)} to ${formatValue(observedMaximum)} ${unit}`;
 
       const label = element("span", "bar-name", String(row.filesystem));
       if (qualified) {
-        label.append(element("small", "", `w${row.worker_count} · ${workerLabel(row)}`));
+        label.append(element("small", "", `${shapeLabel(row)} · ${workerLabel(row)}`));
       }
       const track = element("span", "bar-track");
       const fill = element("span", "bar-fill");
@@ -882,7 +889,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   function renderScaling() {
     document.querySelector("#scaling").append(makeTable(
       data.scaling,
-      ["filesystem", "scenario", "phase", "rate_basis", "one_worker_mib_s", "four_worker_mib_s", "scaling_ratio"],
+      ["filesystem", "scenario", "phase", "rate_basis", "one_worker_mib_s", "one_worker_same_total_mib_s", "four_worker_mib_s", "scaling_ratio", "size_effect_ratio", "worker_effect_ratio"],
     ));
   }
 

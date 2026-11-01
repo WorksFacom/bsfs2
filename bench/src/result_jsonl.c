@@ -131,9 +131,9 @@ int bench_latency_write_raw(const struct bench_run_config *config,
   if (!config->artifact_dir || !latencies || latencies->count == 0)
     return 0;
   error = bench_format_path(
-      path, path_size, "%s/%s-%s-%s-r%u-w%u.latency-u64",
+      path, path_size, "%s/%s-%s-%s-r%u-w%u-x%u.latency-u64",
       config->artifact_dir, config->filesystem, config->scenario, phase,
-      config->repetition, config->worker_count);
+      config->repetition, config->worker_count, config->work_scale);
   if (error)
     return error;
   output = fopen(path, "wb");
@@ -190,12 +190,12 @@ int bench_result_write(const struct bench_run_config *config,
   json_string(output, result->phase);
   fprintf(output,
           ",\"repetition\":%u,\"seed\":%" PRIu64
-          ",\"worker_count\":%u,\"operations\":%" PRIu64
+          ",\"worker_count\":%u,\"work_scale\":%u,\"operations\":%" PRIu64
           ",\"logical_bytes\":%" PRIu64 ",\"elapsed_ns\":%" PRIu64
           ",\"operation_path_ns\":%" PRIu64 ",\"final_flush_ns\":%" PRIu64
           ",\"cpu_user_ns\":%" PRIu64 ",\"cpu_system_ns\":%" PRIu64,
           config->repetition, config->seed, config->worker_count,
-          result->operations, result->logical_bytes, result->elapsed_ns,
+          config->work_scale, result->operations, result->logical_bytes, result->elapsed_ns,
           result->operation_path_ns, result->final_flush_ns,
           result->cpu_user_ns, result->cpu_system_ns);
   if (result->has_wall)

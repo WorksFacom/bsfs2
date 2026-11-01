@@ -79,6 +79,35 @@ mkdir -p "$TMPDIR_BENCH/root"
 
 test "$(wc -l <"$TMPDIR_BENCH/concurrency-mixed.jsonl")" -eq 20
 
+set +e
+"$REPO/bench/bin/bench-posix" --root "$TMPDIR_BENCH/root" --scenario bulk --work-scale 2 \
+  --results "$TMPDIR_BENCH/rejected.jsonl" 2>/dev/null
+status=$?
+set -e
+test "$status" -eq 2
+
+# one worker does the work of four, with the same files, bytes, and directory count
+rm -rf "$TMPDIR_BENCH/root"
+mkdir -p "$TMPDIR_BENCH/root"
+"$REPO/bench/bin/bench-posix" \
+  --root "$TMPDIR_BENCH/root" \
+  --scenario concurrency-mixed \
+  --phase all \
+  --workers 1 \
+  --work-scale 4 \
+  --seed 1234 \
+  --results "$TMPDIR_BENCH/concurrency-scaled.jsonl" \
+  --artifact-dir "$TMPDIR_BENCH/artifacts" \
+  --filesystem posix-test
+
+test "$(find "$TMPDIR_BENCH/root/concurrent-mixed/w0" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 80
+for phase in mixed-create mixed-read; do
+  scaled=$(grep "\"phase\":\"$phase\"" "$TMPDIR_BENCH/concurrency-scaled.jsonl" | grep -o '"logical_bytes":[0-9]*')
+  four=$(grep "\"phase\":\"$phase\"" "$TMPDIR_BENCH/concurrency-mixed.jsonl" | grep -o '"logical_bytes":[0-9]*')
+  test "$scaled" = "$four"
+done
+grep -q '"worker_count":1,"work_scale":4' "$TMPDIR_BENCH/concurrency-scaled.jsonl"
+
 # recovery-pressure verify against an empty tree must fail cleanly, not segfault
 rm -rf "$TMPDIR_BENCH/root"
 mkdir -p "$TMPDIR_BENCH/root/recovery-pressure"

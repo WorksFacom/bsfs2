@@ -50,7 +50,10 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     "recovery-pressure": ("run", REOPEN, "verify"),
 }
 
-CONCURRENCY_WORKERS = (1, 4)
+# (workers, work_scale). 1x4 is the total work of 4x1 on one worker, so 1x1 to 1x4 is the
+# dataset-size effect and 1x4 to 4x1 is the worker-count effect at a fixed total
+CONCURRENCY_SHAPES = ((1, 1), (1, 4), (4, 1))
+CONCURRENCY_WORKERS = tuple(sorted({workers for workers, _ in CONCURRENCY_SHAPES}))
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class PlannedUnit:
     repetition: int
     workers: int
     steps: tuple[str, ...]
+    work_scale: int = 1
 
     @property
     def phases(self) -> tuple[str, ...]:
@@ -124,7 +128,7 @@ def build_plan(
     for repetition in range(config.repetitions):
         for filesystem in cyclic_schedule(filesystems, repetition):
             for scenario in config.concurrency_scenarios:
-                for workers in CONCURRENCY_WORKERS:
+                for workers, work_scale in CONCURRENCY_SHAPES:
                     if len(config.concurrency_cpus) < workers:
                         continue
                     units.append(
@@ -135,6 +139,7 @@ def build_plan(
                             repetition,
                             workers,
                             _steps(scenario),
+                            work_scale,
                         )
                     )
 

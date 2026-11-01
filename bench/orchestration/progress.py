@@ -184,7 +184,7 @@ class RunReporter:
     # duration lands in the same column as a phase's
     INDENT = 2
     LABEL_WIDTH = 26
-    WORKERS_WIDTH = 3
+    WORKERS_WIDTH = 4
     TIMING_WIDTH = 8
     RATE_WIDTH = 12
     LATENCY_WIDTH = 8
@@ -410,6 +410,7 @@ class RunReporter:
         scenario: str,
         repetition: int,
         workers: int = 1,
+        work_scale: int = 1,
     ) -> None:
         self._close_unit()
         if self.started_at is None:
@@ -427,6 +428,8 @@ class RunReporter:
             index = self.filesystem_order.index(filesystem) + 1
             position = f"{index}/{len(self.filesystem_order)} "
         workers_text = f" w{workers}" if workers != 1 else ""
+        if work_scale != 1:
+            workers_text += f" x{work_scale}"
         headline = (
             f"[fs {position}{filesystem}] "
             f"{matrix}/{scenario} r{repetition}{workers_text}"
@@ -472,6 +475,7 @@ class RunReporter:
         scenario: str,
         phase: str,
         workers: int,
+        work_scale: int = 1,
         results: Path | None = None,
     ) -> Iterator[None]:
         if self.started_at is None:
@@ -496,7 +500,9 @@ class RunReporter:
             if not ok:
                 self.failed_phases += 1
             try:
-                self._emit_phase(scenario, phase, workers, elapsed, ok, results)
+                self._emit_phase(
+                    scenario, phase, workers, work_scale, elapsed, ok, results
+                )
             except Exception:
                 self.degraded = True
 
@@ -505,15 +511,17 @@ class RunReporter:
         scenario: str,
         phase: str,
         workers: int,
+        work_scale: int,
         elapsed: float,
         ok: bool,
         results: Path | None,
     ) -> None:
         counter = self._counter_text(self.completed_phases)
+        shape = f"w{workers}" if work_scale == 1 else f"w{workers}x{work_scale}"
         line = (
             f"{' ' * self.INDENT}{self._paint(counter, Style.DIM)} "
             f"{f'{scenario}/{phase}'.ljust(self.LABEL_WIDTH)} "
-            f"{f'w{workers}'.ljust(self.WORKERS_WIDTH)} "
+            f"{shape.ljust(self.WORKERS_WIDTH)} "
             f"{format_duration(elapsed).rjust(self.TIMING_WIDTH)}"
         )
         if not ok:

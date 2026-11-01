@@ -26,12 +26,29 @@ minutes. There is one workload size:
 | `bulk` | one 128 MiB file: sequential write, cold and warm read, 4000 random 4 KiB reads, 2000 random 4 KiB overwrites, verify |
 | `metadata` | 20 directories, 1000 files, 200 renames: create, cold and warm stat, iterate, rename, unlink, rmdir, verify |
 | `mixed` | 500 files from 4 KiB to 1 MiB across 20 directories: create, cold read, edit, verify |
-| `concurrency-seq` | 32 MiB per worker, 1 and 4 workers: write, cold read |
-| `concurrency-mixed` | 250 files per worker, 1 and 4 workers: create, cold read, edit, verify |
+| `concurrency-seq` | 1x32, 1x128, and 4x32 MiB (workers x per-worker size): write, cold read |
+| `concurrency-mixed` | 1x250, 1x1000, and 4x250 files: create, cold read, edit, verify |
 | `recovery-pressure` | bsfs only, off by default, see below |
 
 Every scenario gets a fresh mkfs. The step order, including where caches are
 dropped, is the `SCENARIOS` table in `orchestration/plan.py`.
+
+### Dataset size and worker count
+
+Adding workers to a fixed per-worker workload increases the total work. File
+growth cost also depends on how much is already allocated. Each concurrency
+scenario runs three shapes on a fresh filesystem. In `1x4`, one worker does
+the total work of four workers using `--work-scale 4`:
+
+| shape | compare with | isolates |
+| --- | --- | --- |
+| `1x1` | | baseline |
+| `1x4` | `1x1` | `size_effect_ratio`, the dataset-size effect |
+| `4x1` | `1x4` | `worker_effect_ratio`, the worker-count effect at a fixed total |
+
+`scaling_ratio` compares `4x1` with `1x1`, changing both size and worker count.
+A scaled mixed tree adds directories along with files. The `1x4` tree has 80
+directories of the same size as those in the four `4x1` trees.
 
 ### Recovery pressure
 

@@ -258,6 +258,7 @@ class BenchmarkRun:
         repetition: int,
         seed: int,
         workers: int,
+        work_scale: int = 1,
     ) -> list[str]:
         argv = [
             str(self.repository / "bench/bin/bench-posix"),
@@ -299,7 +300,12 @@ class BenchmarkRun:
         if scenario.startswith("concurrency-"):
             cpus = self.config.concurrency_cpus[:workers]
             argv.extend(
-                ["--cpu-list", ",".join(str(cpu) for cpu in cpus)]
+                [
+                    "--cpu-list",
+                    ",".join(str(cpu) for cpu in cpus),
+                    "--work-scale",
+                    str(work_scale),
+                ]
             )
         else:
             argv.extend(["--cpu", str(self.config.common_cpu)])
@@ -313,6 +319,7 @@ class BenchmarkRun:
         repetition: int,
         seed: int,
         workers: int = 1,
+        work_scale: int = 1,
     ) -> None:
         timeout = self.config.phase_timeout_s
         if scenario == "recovery-pressure":
@@ -322,15 +329,17 @@ class BenchmarkRun:
             scenario=scenario,
             phase=phase,
             workers=workers,
+            work_scale=work_scale,
             results=None if self.runner.dry_run else self.results,
         ):
             self.runner.run(
                 self._runner_argv(
-                    adapter, scenario, phase, repetition, seed, workers
+                    adapter, scenario, phase, repetition, seed, workers, work_scale
                 ),
                 cwd=self.repository,
                 label=(
-                    f"{adapter.name}-{scenario}-{phase}-r{repetition}-w{workers}"
+                    f"{adapter.name}-{scenario}-{phase}-r{repetition}"
+                    f"-w{workers}-x{work_scale}"
                 ),
                 timeout=timeout,
             )
@@ -367,6 +376,7 @@ class BenchmarkRun:
             scenario=unit.scenario,
             repetition=unit.repetition,
             workers=unit.workers,
+            work_scale=unit.work_scale,
         )
         try:
             with self.fresh_filesystem(unit.filesystem) as adapter:
@@ -383,6 +393,7 @@ class BenchmarkRun:
                             unit.repetition,
                             seed,
                             unit.workers,
+                            unit.work_scale,
                         )
         except DeviceBusy:
             raise
