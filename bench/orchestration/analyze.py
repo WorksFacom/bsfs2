@@ -45,6 +45,10 @@ METRICS = (
     "reclaim_blocks_reclaimed",
 )
 
+# A few scheduling or flush events can dominate a phase this short. See README.
+SHORT_PHASE_NS = 10_000_000
+WIDE_RELATIVE_RANGE = 0.25
+
 
 def load_records(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     """Skips and reports unparseable lines, since an interrupted run leaves a truncated last one."""
@@ -196,6 +200,62 @@ def derive_scaling(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def stability_rate(row: dict[str, Any]) -> str | None:
+    """Metadata phases move no bytes, so use their operation rate."""
+    for metric in (
+        "durable_throughput_mib_s",
+        "throughput_mib_s",
+        "durable_iops",
+        "iops",
+    ):
+        if row.get(f"{metric}_median"):
+            return metric
+    return None
+
+
+def derive_unstable(summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Find aggregate phases with short durations or widely varying rates."""
+    output: list[dict[str, Any]] = []
+    for row in summary:
+        if row.get("worker_id") is not None:
+            continue
+        metric = stability_rate(row)
+        duration = row.get("durable_total_ns_median") or row.get(
+            "operation_path_ns_median"
+        )
+        if metric is None or not duration:
+            continue
+        median = row[f"{metric}_median"]
+        spread = (row[f"{metric}_maximum"] - row[f"{metric}_minimum"]) / median
+        reasons = []
+        if duration < SHORT_PHASE_NS:
+            reasons.append("short")
+        if spread > WIDE_RELATIVE_RANGE:
+            reasons.append("wide-range")
+        if not reasons:
+            continue
+        flush = row.get("final_flush_ns_median") or 0.0
+        output.append(
+            {
+                "filesystem": row["filesystem"],
+                "scenario": row["scenario"],
+                "phase": row["phase"],
+                "worker_count": row["worker_count"],
+                "work_scale": row["work_scale"],
+                "repetitions": row["repetitions"],
+                "reasons": "+".join(reasons),
+                "rate_metric": metric,
+                "median": median,
+                "minimum": row[f"{metric}_minimum"],
+                "maximum": row[f"{metric}_maximum"],
+                "relative_range": spread,
+                "median_duration_ms": duration / 1e6,
+                "flush_share": flush / duration,
+            }
+        )
+    return output
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Aggregate BSFS JSONL results and render an HTML report"
@@ -216,6 +276,7 @@ def analyze_run(run_dir: Path) -> Path:
         print(f"warning: skipped unreadable result line: {message}")
     summary = derive_summary(records)
     scaling = derive_scaling(summary)
+    unstable = derive_unstable(summary)
     failures: list[dict[str, Any]] = [
         record
         for record in records
@@ -229,6 +290,7 @@ def analyze_run(run_dir: Path) -> Path:
             failures.append({"source": "orchestrator", **failure})
     write_csv(output / "summary.csv", summary)
     write_csv(output / "concurrency-scaling.csv", scaling)
+    write_csv(output / "unstable-phases.csv", unstable)
     write_csv(output / "failed-phases.csv", failures)
     write_report(
         output / "report.html",
@@ -236,6 +298,7 @@ def analyze_run(run_dir: Path) -> Path:
         record_count=len(records),
         summary=summary,
         scaling=scaling,
+        unstable=unstable,
         failures=failures,
         skipped=skipped,
         manifest=manifest,

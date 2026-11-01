@@ -17,7 +17,7 @@ The build creates `bench/bin/bench-posix`, with `-O2` and `-Werror`.
 
 ## What a run does
 
-`bench/config/default.toml` runs `bsfs`, `ext4`, `btrfs`, and `zfs` for three
+`bench/config/default.toml` runs `bsfs`, `ext4`, `btrfs`, and `zfs` for ten
 repetitions on a 1 GiB loop image and is sized to finish in about 10 to 15
 minutes. There is one workload size:
 
@@ -293,7 +293,10 @@ python3 -m bench.orchestration.analyze bench/results/RUN_ID
 
 The analyzer only needs the Python standard library. It writes median/min/max,
 mean, standard deviation, device write amplification, failed phases, and
-concurrency scaling as CSV under `derived/`. It also writes
+concurrency scaling as CSV under `derived/`, plus `unstable-phases.csv`, which
+lists aggregate phases under 10 ms and phases whose repetition range exceeds a
+quarter of the median. A single flush can dominate a short phase, so small gaps
+between filesystems may not be meaningful. It also writes
 `derived/report.html`, one self-contained file with inline styles, run
 provenance, failures, scaling, and the full summary table. It never produces a
 combined filesystem score. Metric comparisons are horizontal bar charts with one

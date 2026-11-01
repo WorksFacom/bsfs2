@@ -1,7 +1,7 @@
 # about 10-15 minutes on a loop image. add --recovery for the bsfs-only reclaim scenario
 [run]
-repetitions = 3
-seeds = [1234, 5678, 9012]
+repetitions = 10
+seeds = [1234, 5678, 9012, 3456, 7890, 2345, 6789, 1357, 2468, 8642]
 filesystems = ["bsfs", "ext4", "btrfs", "zfs"]
 common_cpu = "auto"
 concurrency_cpus = "auto"

@@ -320,6 +320,7 @@ def render_report(
     failures: list[dict[str, Any]],
     skipped: list[str],
     manifest: dict[str, Any],
+    unstable: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render one complete, dependency-free benchmark report."""
     fields = sorted({field for row in summary for field in row})
@@ -333,6 +334,7 @@ def render_report(
         {
             "summary": summary,
             "scaling": scaling,
+            "unstable": unstable or [],
             "failures": failures,
             "failedByPhase": _failed_by_phase(failures),
             "skipped": skipped,
@@ -602,6 +604,12 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     <h2 id="scaling-title">Concurrency scaling</h2>
     <p class="muted">Four workers do four times the work of one, so scaling_ratio mixes two effects. size_effect_ratio is one worker doing that total against one worker doing a quarter of it. worker_effect_ratio is four workers against one worker at the same total. rate_basis says whether a row includes a final flush.</p>
     <div id="scaling"></div>
+  </section>
+
+  <section aria-labelledby="unstable-title">
+    <h2 id="unstable-title">Unstable phases</h2>
+    <p class="muted">Aggregate phases under 10 ms and phases whose repetition range exceeds a quarter of the median. Small differences between filesystems may not be meaningful. flush_share is the fraction of phase duration spent in the final flush.</p>
+    <div id="unstable"></div>
   </section>
 
   <section aria-labelledby="complete-title">
@@ -893,6 +901,13 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
     ));
   }
 
+  function renderUnstable() {
+    document.querySelector("#unstable").append(makeTable(
+      data.unstable,
+      ["filesystem", "scenario", "phase", "worker_count", "work_scale", "reasons", "rate_metric", "median", "minimum", "maximum", "relative_range", "median_duration_ms", "flush_share"],
+    ));
+  }
+
   function renderCompleteTable() {
     const term = document.querySelector("#summary-filter").value.toLocaleLowerCase();
     const rows = data.summary.filter((row) =>
@@ -931,6 +946,7 @@ noscript { display: block; margin-top: 20px; padding: 14px; border: 1px solid va
   renderHealth();
   renderComparisons();
   renderScaling();
+  renderUnstable();
   renderCompleteTable();
 })();
 </script>

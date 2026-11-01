@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPOSITORY))
 
 from bench.orchestration.analyze import (
     derive_scaling,
+    derive_unstable,
     derive_summary,
     load_records,
 )
@@ -85,8 +86,8 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_is_valid(self) -> None:
         config = load_config(REPOSITORY / "bench/config/default.toml")
 
-        self.assertEqual(config.repetitions, 3)
-        self.assertEqual(len(config.seeds), 3)
+        self.assertEqual(config.repetitions, 10)
+        self.assertEqual(len(config.seeds), 10)
         self.assertEqual(config.filesystems, ("bsfs", "ext4", "btrfs", "zfs"))
         self.assertFalse(config.recovery)
         self.assertGreater(config.phase_timeout_s, 0)
@@ -1280,6 +1281,22 @@ class AnalysisTests(unittest.TestCase):
             'Compares filesystems for benchmark phase "novel-phase".',
         )
 
+    def test_unstable_phases_reach_the_report(self) -> None:
+        unstable = [{"filesystem": "ext4", "phase": "edit", "reasons": "wide-range"}]
+        report = render_report(
+            run_dir=Path("/results/run-1"),
+            record_count=0,
+            summary=[],
+            scaling=[],
+            unstable=unstable,
+            failures=[],
+            skipped=[],
+            manifest={},
+        )
+
+        self.assertEqual(embedded_report_data(report)["unstable"], unstable)
+        self.assertIn('id="unstable"', report)
+
     def test_chart_description_tracks_the_selected_metric(self) -> None:
         report = render_report(
             run_dir=Path("/results/run-1"),
@@ -1372,6 +1389,44 @@ class AnalysisTests(unittest.TestCase):
 
         self.assertIsNone(row["durable_throughput_mib_s_median"])
         self.assertEqual(row["throughput_mib_s_median"], 40.0)
+
+    def test_short_and_spread_out_phases_are_flagged(self) -> None:
+        def timed(workers: int, throughput: float, total_ns: float) -> dict[str, object]:
+            return {
+                **result(workers=workers, throughput=throughput),
+                "durable_total_ns": total_ns,
+            }
+
+        steady = [timed(1, 100.0, 1e9), timed(1, 110.0, 1e9), timed(1, 105.0, 1e9)]
+        short = [timed(4, 100.0, 5e6), timed(4, 101.0, 5e6)]
+        worker = {**timed(2, 1.0, 1e9), "worker_id": 0}
+        wide = {
+            **timed(2, 97.0, 1e9),
+            "phase": "edit",
+        }
+        wide_high = {**timed(2, 230.0, 1e9), "phase": "edit"}
+
+        rows = derive_unstable(
+            derive_summary([*steady, *short, worker, wide, wide_high])
+        )
+
+        self.assertEqual(
+            {(row["worker_count"], row["phase"]): row["reasons"] for row in rows},
+            {(4, "write"): "short", (2, "edit"): "wide-range"},
+        )
+
+    def test_unflushed_metadata_phases_use_their_operation_rate(self) -> None:
+        record = {
+            **result(workers=1, throughput=0.0, durable_window=False),
+            "throughput_mib_s": 0.0,
+            "iops": 500.0,
+            "operation_path_ns": 2e6,
+        }
+
+        row = derive_unstable(derive_summary([record]))[0]
+
+        self.assertEqual(row["rate_metric"], "iops")
+        self.assertEqual(row["reasons"], "short")
 
     def test_failed_records_are_excluded_from_summary(self) -> None:
         failed = result(workers=1, throughput=10.0)
@@ -1529,8 +1584,8 @@ class PlanTests(unittest.TestCase):
         config = self._config()
         plan = build_plan(config, config.filesystems)
 
-        # 4 filesystems x 3 repetitions x (3 common + 2 concurrency x 3 shapes)
-        self.assertEqual(plan.total_units, 108)
+        # 4 filesystems x 10 repetitions x (3 common + 2 concurrency x 3 shapes)
+        self.assertEqual(plan.total_units, 360)
         self.assertEqual(
             {unit.matrix for unit in plan.units}, {"common", "concurrency"}
         )
@@ -1552,7 +1607,7 @@ class PlanTests(unittest.TestCase):
         config = self._config(recovery=True)
         plan = build_plan(config, config.filesystems)
 
-        self.assertEqual(plan.total_units, 109)
+        self.assertEqual(plan.total_units, 361)
         last = plan.units[-1]
         self.assertEqual(
             (last.matrix, last.filesystem, last.scenario, last.repetition),
@@ -1872,7 +1927,7 @@ class ReporterTests(unittest.TestCase):
         )
 
         text = stream.getvalue()
-        self.assertIn("1/108 planned phases were reached", text)
+        self.assertIn("1/360 planned phases were reached", text)
         self.assertIn("kernel log: 2 relevant findings", text)
         self.assertIn("analyze /tmp/run", text)
 

@@ -1,8 +1,8 @@
 # compares compile-time block allocation strategies, preflight builds one module per strategy.
 # see BSFS_ALLOC in the top-level Makefile and tests/alloc_matrix.sh for the correctness side.
 [run]
-repetitions = 1
-seeds = [1234]
+repetitions = 10
+seeds = [1234, 5678, 9012, 3456, 7890, 2345, 6789, 1357, 2468, 8642]
 filesystems = ["bsfs-linear", "bsfs-heap", "bsfs-twolevel"]
 common_cpu = "auto"
 concurrency_cpus = "auto"
