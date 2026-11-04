@@ -1,116 +1,71 @@
-# BSFS
+# BSFS+
 
-BSFS (Basic Solution File System) is an educational, userspace file system that stores its data in a regular file or directly on a block device. It comes with a formatter (`mkfs.bsfs`) that writes the on-disk layout and an interactive browser with a shell-like interface for file, directory, recovery and permission operations. Deleted files go into a recovery tree and can be restored one by one.
+BSFS+ is an educational Linux filesystem module, `bsfs2.ko`, that registers the type `bsfs`. Every index on disk is a B+tree, every change to a tree is copy-on-write, and deleting a file moves it into a recovery tree instead of freeing its blocks. Two userspace tools come with it. `mkfs.bsfs` formats an image or a block device, and `recovery.bsfs` lists and restores deleted files from an unmounted filesystem.
 
-More detailed code documentation is online [here](https://facom.ufms.br/~brivaldo/bsfs/).
+It started as a kernel port of BSFS, an userspace filesystem with an interactive browser. The original's documentation is [here](https://facom.ufms.br/~brivaldo/bsfs/) and describes that version, not this one.
 
 ## Requirements
 
-- POSIX-compliant environment (tested on Linux)
-- `gcc` (or compatible C compiler)
-- `make`
+- Linux with the build tree of the kernel you'll load the module into. Developed initially on 6.18, updated later to 7.2 (as it stands, it doesn't work on 6.18 anymore).
+- `gcc` and `make`
+- root, for `insmod` and `mount`
+- QEMU, only for the test suite
 
-## Installation
+## Building
 
-1. Clone the repository and enter the project directory.
-2. Clean any previous build artifacts: `make clean`
-3. Build the formatter and browser binaries: `make`
+```sh
+make
+```
 
-Binaries go in `bin/`. `make` builds `bin/mkfs_bsfs`, an alias `bin/mkfs.bsfs`, and the interactive `bin/browser`.
+This builds `bsfs2.ko`, `mkfs.bsfs` and `recovery.bsfs` in the project root. It uses the running kernel's tree at `/lib/modules/$(uname -r)/build`. To build against another tree, copy `local.mk.example` to `local.mk` and set `KDIR` there.
+
+`BSFS_ALLOC` picks the block allocator compiled into the module. Exactly one goes in, and `make clean` isn't needed to switch.
+
+```sh
+make                                     # linear first-fit scan, the default
+make BSFS_ALLOC=heap                     # min-heap of freed blocks
+make BSFS_ALLOC=twolevel                 # free count per 96-block bucket
+make BSFS_ALLOC=heap BSFS_ALLOC_STATS=y  # plus allocation counters in dmesg at unmount
+```
 
 ## Usage
 
-Format a file-backed image (or a block device), then explore it with the BSFS browser.
+Format an image, load the module and mount it:
 
-### Formatting
-
-1. Create an empty image whose size is a multiple of 4096 bytes. Example for an 8 MiB image:
-   ```sh
-   dd if=/dev/zero of=bsfs.img bs=1M count=8
-   ```
-2. Format the image with the BSFS formatter:
-   ```sh
-   ./bin/mkfs.bsfs bsfs.img
-   ```
-   This writes the superblock, the block bitmap, the inode and directory B-trees, and the root directory entries.
-3. You can also format a raw block device, such as a partition like `/dev/sdaX`. Check that it is unmounted and that the path is right first:
-   ```sh
-   sudo ./bin/mkfs.bsfs /dev/sdaX
-   ```
-   This does the same thing in place on the device.
-
-### Browser
-
-Start the browser on the formatted image or device:
 ```sh
-./bin/browser bsfs.img
+dd if=/dev/zero of=bsfs.img bs=1M count=64
+./mkfs.bsfs bsfs.img
+sudo insmod bsfs2.ko
+sudo mkdir -p /mnt/bsfs
+sudo mount -t bsfs -o loop bsfs.img /mnt/bsfs
 ```
 
-For a partition, pass the device path instead of a file:
+`mkfs.bsfs` takes a block device too, such as `/dev/sdaX`. It refuses a target that is mounted, and it rounds the size down to a multiple of 4096 bytes.
+
+Deleted files stay on disk as recovery snapshots until the filesystem runs short of space. Unmount, then use `recovery.bsfs` on the image:
+
 ```sh
-sudo ./bin/browser /dev/sdaX
+sudo umount /mnt/bsfs
+./recovery.bsfs bsfs.img list            # every snapshot, or list <name> for one name
+./recovery.bsfs bsfs.img show 3          # all fields of snapshot 3
+./recovery.bsfs bsfs.img stats           # count, total size, oldest and newest
+./recovery.bsfs bsfs.img restore 3       # back into its original directory
+./recovery.bsfs bsfs.img restore 3 /docs # or into another one, by absolute path
 ```
 
-The browser accepts the commands below, the same list `help` prints. `rm` moves entries into a recovery B-tree, `recovery` lists them, `restore` brings one back by name or ID, and `purge` drops them for good.
-```text
-BSFS Browser Commands:
-======================
-Navigation:
-  cd <directory>     - Change current directory
-  whoami             - Show current uid/gid and umask
-  su <uid> [gid]     - Switch session identity (testing)
-  umask [octal]      - Show/set umask
-  pwd                - Print current working directory
-  ls [directory]     - List directory contents
-  list [directory]   - List directory contents (alias for ls)
+Restore handles regular files only.
 
-Directory Operations:
-  mkdir <directory>  - Create a new directory
-  rmdir <directory>  - Remove an empty directory
+## Tests and benchmarks
 
-File Operations:
-  touch <filename>   - Create an empty file
-  rm <filename>      - Remove a file (rm --all [dir] sweeps files with timing)
-  cp <src> <dest>    - Copy a file
-  mv <src> <dest>    - Move/rename a file or directory
-  cat <filename>     - Display file contents
-  fill <count> <size> [prefix] [bs=<n>] [pattern=index|zero|random]
-       Create many files and print elapsed time (size/bs accept K/M/G)
-  chmod <mode> <path>- Change permissions (octal, e.g., 755)
-  chown <uid> <path> - Change file owner (root only)
-  chgrp <gid> <path> - Change file group (root only)
-  echo <text>        - Display text or write to file
-    echo "text" > file   - Write text to file (overwrite)
-    echo "text" >> file  - Append text to file
-  dd if=<src> of=<dest> bs=<size> count=<blocks> - Create files of specific size
-    Example: dd if=/dev/zero of=testfile bs=1M count=10 (creates 10MB file)
+The tests boot a QEMU guest with the kernel in `KDIR` and run a script from `tests/` inside it. Build the initramfs once with `tools/mkinitramfs.sh`, then:
 
-System:
-  info               - Display filesystem information
-
-Recovery:
-  recovery [name]    - List recovery entries (optionally filter by name)
-  restore <id|name> [dir] - Restore a deleted file by recovery id or by original name (optional dest dir)
-  purge [id|oldest N|expired] - Purge recovery entries (default: older than ~30 days)
-  help               - Display this help message
-  exit               - Exit the BSFS browser
-```
-
-Leave with `exit`. For scripted demos, pipe commands through `stdin`:
 ```sh
-cat <<'CMDS' | ./bin/browser bsfs.img
-info
-mkdir demo
-cd demo
-echo "hello BSFS" > a.txt
-ls
-cat a.txt
-rm a.txt
-recovery
-restore a.txt
-ls
-exit
-CMDS
+./tests/smoke.sh                        # tests/smoke_guest.sh
+./tests/smoke.sh tests/stress_guest.sh  # any other guest script
 ```
 
-For API docs, run `doxygen Doxyfile` from the project root. HTML goes to `docs/html` and LaTeX to `docs/latex`.
+The benchmark harness is in `bench/`. `make bench` builds it, and `bench/README.md` explains how to run it.
+
+## Documentation
+
+`make docs` generates the API documentation with Doxygen into `doc/docs/html`. See `doc/README.md`.
