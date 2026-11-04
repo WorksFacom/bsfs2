@@ -1,7 +1,15 @@
+/**
+ * @file btree.c
+ * @brief the copy-on-write b+tree behind every index, see btree.h.
+ *
+ * each mutation is a transaction over a btree_cow_ctx. it clones the root up front, and cow_child() clones every
+ * node below it before anything writes to it. success publishes the new root and defers the replaced blocks,
+ * failure frees what the transaction allocated and the live tree never changed.
+ */
 #include "../include/btree.h"
 #include "../bsfs.h"
 
-typedef struct btree_cow_ctx btree_cow_ctx_t;
+typedef struct btree_cow_ctx btree_cow_ctx_t; ///< short name for struct btree_cow_ctx
 
 static int  __btree_insert_nonfull(struct super_block *sb, btree_handle_t *handle, __u32 node_block, struct btree_node *node, void *entry,
                                    btree_cow_ctx_t *cow);
@@ -179,18 +187,19 @@ static __u32 btree_descend_index_key(struct btree_node *node, btree_handle_t *ha
  * replaced blocks via bsfs_defer_free_block() instead of freeing them.
  * ------------------------------------------------------------------------- */
 
+/** @brief one copy-on-write transaction. allocated is its rollback list, replaced its release list. */
 struct btree_cow_ctx {
-  __u32 *allocated;
-  size_t allocated_count;
-  size_t allocated_cap;
+  __u32 *allocated;       ///< blocks this transaction created, freed on abort
+  size_t allocated_count; ///< entries in allocated
+  size_t allocated_cap;   ///< room in allocated
 
-  __u32 *replaced;
-  size_t replaced_count;
-  size_t replaced_cap;
+  __u32 *replaced;       ///< old blocks that got cloned, deferred on publish
+  size_t replaced_count; ///< entries in replaced
+  size_t replaced_cap;   ///< room in replaced
 
-  __u32 old_root;
-  __u32 new_root;
-  int   error;
+  __u32 old_root; ///< handle->root_block when the transaction began
+  __u32 new_root; ///< root cow_publish() installs
+  int   error;    ///< set when tracking ran out of memory, forces an abort
 };
 
 static int cow_track(__u32 **list, size_t *count, size_t *cap, __u32 block) {

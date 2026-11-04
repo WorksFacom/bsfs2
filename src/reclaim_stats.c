@@ -1,3 +1,7 @@
+/**
+ * @file reclaim_stats.c
+ * @brief the debugfs file behind reclaim_stats.h.
+ */
 #include "../include/reclaim_stats.h"
 
 #include <linux/debugfs.h>

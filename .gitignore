@@ -102,3 +102,4 @@ bench/results/
 
 # imagens e scripts ad-hoc de debug da VM
 tests/scratch/
+doc/docs/

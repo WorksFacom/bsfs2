@@ -1,14 +1,17 @@
-/*
- * recovery.bsfs, offline inspect/restore for the bsfs recovery tree.
+/**
+ * @file recovery.c
+ * @brief recovery.bsfs, offline inspect/restore for the bsfs recovery tree.
  *
  * reads an unmounted image or block device through libbsfs, which shares the on-disk format with the
  * kernel via include/bsfs_shared.h, no kernel build or qemu needed.
  * the kernel fills the tree with snapshots of deleted files at evict time.
  *
+ * @code{.unparsed}
  *   recovery.bsfs <img> list [name]   list recovery entries (optional name filter)
  *   recovery.bsfs <img> show <id>     show all fields of one entry by recovery_id
  *   recovery.bsfs <img> stats         summary: count, reclaimable size, age range
  *   recovery.bsfs <img> restore <id> [absolute-destination-directory]
+ * @endcode
  *
  * restore cow's the metadata, syncs allocations before publishing the new roots in the superblock,
  * then frees what it replaced. the snapshot's span tree moves to the new inode as is, data blocks
@@ -435,6 +438,7 @@ static int parse_id(const char *text, uint32_t *out) {
   return 0;
 }
 
+/** @brief runs the command in argv[2] against the image in argv[1]. 0, or 2 for any failure or bad usage. */
 int main(int argc, char **argv) {
   if (argc < 3) {
     usage(argv[0]);

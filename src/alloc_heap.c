@@ -12,9 +12,11 @@
  * the prototype starts from an empty bitmap. a mounted fs is full of holes and preloading them costs
  * 4 bytes per free block, 262 MB on 250 GiB. so the cursor skips allocated bits instead of counting up:
  *
+ * @code{.unparsed}
  *   alloc()      advance the cursor past occupied bits
  *                take min(heap top, cursor)
  *   freed(b)     push b only if b < cursor
+ * @endcode
  *
  * invariant: every free block below the cursor is in the heap. holds from an empty heap at mount since the
  * cursor only crosses used bits. blocks freed ahead of it need nothing, the cursor gets there. the cursor
@@ -30,21 +32,15 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 
-#define HEAP_INITIAL_CAP 64
+#define HEAP_INITIAL_CAP 64 ///< entries in the first heap array, doubled on every grow
 
-/**
- * @brief heap strategy state, hung off sbi->alloc_private.
- *
- * @var heap       recycled block indices, kvmalloc'd min-heap
- * @var next_fresh lowest block the cursor hasn't passed. free blocks below it are in the heap
- * @var lossy      a push failed to grow the array, so some free blocks are only reachable by a full scan
- */
+/** @brief heap strategy state, hung off sbi->alloc_private. */
 struct heap_alloc {
-  __u32 *heap;
-  __u32  len;
-  __u32  cap;
-  __u32  next_fresh;
-  bool   lossy;
+  __u32 *heap;       ///< recycled block indices, kvmalloc'd min-heap
+  __u32  len;        ///< entries in heap
+  __u32  cap;        ///< room in heap
+  __u32  next_fresh; ///< lowest block the cursor hasn't passed. free blocks below it are in the heap
+  bool   lossy;      ///< a push failed to grow the array, so some free blocks are only reachable by a full scan
 };
 
 /* ---------------------------------------------------------------- heap ---- */

@@ -1,3 +1,10 @@
+/**
+ * @file libbsfs.c
+ * @brief libbsfs, see libbsfs.h.
+ *
+ * the tree code follows the kernel's btree.c rules (separators copy the right leaf's first entry, a key equal
+ * to one goes right) but allocates first-fit from the txn's bitmap and writes nodes with pwrite().
+ */
 #include "libbsfs.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -11,6 +18,7 @@
 #include <unistd.h>
 
 #ifndef BLKGETSIZE64
+/// for libc headers that lack it, same value as <linux/fs.h>
 #define BLKGETSIZE64 _IOR(0x12, 114, uint64_t)
 #endif
 

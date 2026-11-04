@@ -11,9 +11,11 @@
  *
  * Exactly one implementation is compiled into the module, chosen at build time:
  *
+ * @code{.sh}
  *   make                        # BSFS_ALLOC=linear, the default
  *   make BSFS_ALLOC=heap        # min-heap
  *   make BSFS_ALLOC=twolevel    # two-level index
+ * @endcode
  *
  * so these are plain extern functions rather than a vtable. The linker picks
  * the implementation and the calls stay direct.
@@ -27,6 +29,7 @@
  * disk.
  *
  * The caller (src/alloc.c) owns:
+ *
  *   - sbi->bitmap_lock, held across every _alloc()/_freed() call
  *   - sbi->free_blocks and sbi->reserved_blocks, including the reserve floor
  *     that decides whether an allocation is allowed at all
@@ -41,6 +44,7 @@
 #include <linux/types.h>
 
 #ifndef BSFS_ALLOC_STRATEGY_NAME
+/// name of the compiled-in strategy. the Makefile passes BSFS_ALLOC, this is the fallback
 #define BSFS_ALLOC_STRATEGY_NAME "linear"
 #endif
 
@@ -110,10 +114,12 @@ void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
  * disappears entirely, leaving the exact code the benchmarks should measure.
  */
 #ifdef BSFS_ALLOC_STATS
+/// bumps sbi->alloc_stats.field. nothing without BSFS_ALLOC_STATS
 #define BSFS_STAT_INC(sb, field)                                                                                                           \
   do {                                                                                                                                     \
     bsfs_sb(sb)->alloc_stats.field++;                                                                                                      \
   } while (0)
+/// raises sbi->alloc_stats.field to value if it is higher. nothing without BSFS_ALLOC_STATS
 #define BSFS_STAT_MAX(sb, field, value)                                                                                                    \
   do {                                                                                                                                     \
     typeof(value) __v = (value);                                                                                                           \
@@ -136,6 +142,7 @@ void bsfs_alloc_strategy_stats(struct super_block *sb, char *buf, size_t len);
  * BSFS_ALLOC_STATS.
  */
 void bsfs_alloc_log_mount(struct super_block *sb);
+/** @copydoc bsfs_alloc_log_mount */
 void bsfs_alloc_log_unmount(struct super_block *sb);
 
 #endif // BSFS_ALLOC_STRATEGY_H

@@ -1,3 +1,11 @@
+/**
+ * @file bsfs.c
+ * @brief module entry, mount, and the superblock operations.
+ *
+ * registers the "bsfs" type. mount reads block 1, checks it with bsfs_super_check(), pins the bitmap, builds
+ * the allocator index and reads the root inode. block 1 stays pinned until unmount and the tree roots live in
+ * it, so ->sync_fs and ->put_super push them out through bsfs_commit_deferred_frees().
+ */
 #include "bsfs.h"
 #include "include/alloc_strategy.h"
 #include "include/bitmap.h"
@@ -38,7 +46,7 @@ static void bsfs_put_super(struct super_block *sb) {
 }
 
 /*
- * the superblock holds the tree roots, so sync(2) has to write it. otherwise it only hits disk at unmount.
+ * the superblock holds the tree roots, so sync(2) has to write it instead of leaving it to background writeback.
  */
 static int bsfs_sync_fs(struct super_block *sb, int wait) {
   if (!wait)
@@ -51,7 +59,7 @@ static int bsfs_sync_fs(struct super_block *sb, int wait) {
 
 /*
  * deferred frees count as used, they are until the next commit point.
- * f_bavail leaves out the metadata reserve since unprivileged writes can't have it.
+ * f_bavail leaves out the metadata reserve since file data can't have it.
  */
 static int bsfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
   struct super_block     *sb  = dentry->d_sb;

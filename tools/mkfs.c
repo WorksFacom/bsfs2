@@ -1,5 +1,6 @@
-/*
- * mkfs.bsfs, formats an unmounted image or block device.
+/**
+ * @file mkfs.c
+ * @brief mkfs.bsfs, formats an unmounted image or block device.
  *
  * builds the root directory and inode trees through the same libbsfs txn recovery.bsfs restores with,
  * so the layout and ordering come from the shared code. the old superblock is wiped first and the new
@@ -120,6 +121,7 @@ out:
   return rc;
 }
 
+/** @brief formats the target in argv[1]. EXIT_SUCCESS, or EXIT_FAILURE having printed why. */
 int main(int argc, char **argv) {
   int fd, rc;
 

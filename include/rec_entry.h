@@ -26,7 +26,8 @@ void bsfs_rec_tree_mount_init(struct super_block *sb);
  * @brief Adds a snapshot and publishes the new recovery_root.
  *
  * A recovery_id of 0 gets the next free id. A retention_until of 0 gets
- * deleted_at + DEFAULT_RECOVERY_TTL. Both are written back into @p entry. The
+ * deleted_at + DEFAULT_RECOVERY_TTL, if deleted_at is set. Both are written
+ * back into @p entry. The
  * caller holds sbi->rec_lock.
  *
  * @return 0, or -EIO if the insert kept failing.
@@ -45,8 +46,8 @@ int bsfs_rec_tree_add(struct super_block *sb, btree_handle_t *rec_tree, rec_entr
 int bsfs_rec_tree_remove(struct super_block *sb, btree_handle_t *rec_tree, __u32 recovery_id);
 
 /**
- * @brief Drops recovery snapshots, expired or oldest first, and frees the
- *        blocks they were holding.
+ * @brief Drops recovery snapshots, expired or oldest first, and queues the
+ *        blocks they were holding for release.
  *
  * Deleting a file parks its tree in a snapshot rather than releasing it, so
  * this is the only thing that ever gives that space back. Meant to run under

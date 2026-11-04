@@ -30,7 +30,7 @@ int bsfs_fsync(struct file *file, loff_t start, loff_t end, int datasync);
 /** @brief setattr for regular files. Any size change runs bsfs_truncate(). */
 extern const struct inode_operations bsfs_file_inode_operations;
 
-/** @brief Empty for now. Symlinks can be read from disk but not created. */
+/** @brief Empty for now, so a symlink inode loads but can't be followed. Nothing creates one. */
 extern const struct inode_operations bsfs_symlink_inode_operations;
 
 #endif // FILE_OPERATIONS_BSFS_H

@@ -113,7 +113,7 @@ static int __bsfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode) 
 
   mark_inode_dirty(inode);
 
-  // . and .. are synthesized, never stored
+  // . and .. are synthesized, only mkfs stores them, in the root
   err = bsfs_add_link(dentry, inode);
 
   if (err)
@@ -168,7 +168,7 @@ static int bsfs_unlink(struct inode *dir, struct dentry *dentry) {
   return 0;
 }
 
-// . and .. are never stored, so any entry means not empty
+// . and .. are only on disk in the root, which can't be removed, so any entry means not empty
 static bool bsfs_subtree_has_entry(struct super_block *sb, btree_handle_t *handle, __u32 node_block) {
   struct btree_node *node;
   __u32             *children = NULL;

@@ -1,9 +1,14 @@
+/**
+ * @file rec_entry.c
+ * @brief the recovery tree: adding, removing and purging snapshots.
+ *
+ * the kernel only records snapshots and purges them under space pressure. listing and restoring them is
+ * recovery.bsfs's job, offline.
+ */
 #include "../include/rec_entry.h"
 #include "../include/btree.h"
 #include "../include/inode.h"
 
-// TODO: rec tree CLI
-// TODO: init rec_tree in mkfs, see the old implementation
 void bsfs_rec_tree_mount_init(struct super_block *sb) {
   struct bsfs_super_info *sbi = bsfs_sb(sb);
 
@@ -133,7 +138,7 @@ static void rec_find_victim(struct super_block *sb, btree_handle_t *h, __u32 nod
 }
 
 /*
- * drops snapshots (expired, then oldest) and frees their blocks. deleting a file hands its span tree
+ * drops snapshots (expired, then oldest) and queues their blocks for release. deleting a file hands its span tree
  * to a snapshot, so this is the only way that space comes back. only runs under space pressure.
  * returns entries purged.
  */

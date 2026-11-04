@@ -76,8 +76,12 @@ bench:
 bench-check:
 	$(MAKE) -C bench check
 
+# html lands in doc/docs/html. the Doxyfile paths are relative to doc/
+docs:
+	cd doc && doxygen Doxyfile
+
 compile_commands.json:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) compile_commands.json
 
-.PHONY: all clean compile_commands.json bench bench-check
+.PHONY: all clean compile_commands.json bench bench-check docs
 endif

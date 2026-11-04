@@ -15,13 +15,13 @@
 #include "../bsfs.h"
 #include "bitmap.h"
 
-// Upper bound on the metadata reserve, in blocks. Sized for a handful of full
-// root-to-leaf copy-on-write paths, which is all a truncate or an unlink needs
-// to make progress on a filesystem that is otherwise full.
+/// Upper bound on the metadata reserve, in blocks. Sized for a handful of full
+/// root-to-leaf copy-on-write paths, which is all a truncate or an unlink needs
+/// to make progress on a filesystem that is otherwise full.
 #define BSFS_META_RESERVE 64
 
-// How many recovery snapshots one reclaim pass may drop. Bounded so a single
-// write does not pay for purging the whole trash.
+/// How many recovery snapshots one reclaim pass may drop. Bounded so a single
+/// write does not pay for purging the whole trash.
 #define BSFS_PURGE_BATCH 32
 
 /**
@@ -98,8 +98,8 @@ int bsfs_defer_free_bspan(struct super_block *sb, const bspan_t *bspan);
  * Syncs the block device and the superblock, issues a cache flush, and checks
  * sbi->writeback_error. Only then do the queued blocks go back to the bitmap.
  * Runs the barrier even when nothing is queued, so callers can use it to
- * publish the roots. Called from ->sync_fs, ->put_super and
- * bsfs_reclaim_space().
+ * publish the roots. Called from ->sync_fs and ->put_super.
+ * bsfs_reclaim_space() runs the same barrier after writing back inodes.
  *
  * @return 0, or a negative error if the barrier failed. The blocks stay queued
  *         in that case.

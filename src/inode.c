@@ -1,3 +1,10 @@
+/**
+ * @file inode.c
+ * @brief the inode tree, the inode lifecycle, block mapping and truncate.
+ *
+ * also bsfs_aops. write(2) allocates in ->write_begin through bsfs_get_block(), not at writeback, see the
+ * comment on bsfs_write_begin() for why.
+ */
 #include "../include/inode.h"
 #include "../include/btree.h"
 #include "../include/dir.h"

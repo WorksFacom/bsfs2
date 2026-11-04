@@ -1,4 +1,4 @@
-/*
+/**
  * @file bitmap.c
  * @brief loads and releases the on-disk block bitmap.
  */

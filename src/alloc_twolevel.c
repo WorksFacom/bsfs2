@@ -30,14 +30,14 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 
-/*
+/**
  * the prototype's 100 lands mid-byte and straddles bitmap blocks, so find_next_zero_bit_le() can't
  * search a bucket. powers of two don't work either, BITS_PER_BLOCK is 32736 = 2^5 x 3 x 11 x 31.
  * 96 is 12 bytes in one bh, 341 buckets per bitmap block.
  */
 #define BUCKET_SIZE 96
 
-typedef __u8 bucket_count_t;
+typedef __u8 bucket_count_t; ///< one summary entry, the free count of a bucket
 
 static_assert(BUCKET_SIZE <= (bucket_count_t)~0u, "BUCKET_SIZE does not fit in bucket_count_t");
 
@@ -45,19 +45,13 @@ static_assert(BUCKET_SIZE % 8 == 0, "BUCKET_SIZE must be a whole number of bytes
 
 static_assert(BITS_PER_BLOCK % BUCKET_SIZE == 0, "BUCKET_SIZE must divide BITS_PER_BLOCK so buckets never straddle a bitmap block");
 
-/**
- * @brief two-level strategy state, hung off sbi->alloc_private.
- *
- * @var free_in_bucket free count per bucket, kvmalloc'd at mount
- * @var num_buckets    covers block 0 onward so bucket = block / BUCKET_SIZE. buckets below data_block_start stay 0
- * @var cursor         bucket of the last alloc, probing starts here and wraps
- * @var probes         buckets examined, says whether the summary saves any work
- */
+/** @brief two-level strategy state, hung off sbi->alloc_private. */
 struct twolevel_alloc {
-  bucket_count_t *free_in_bucket;
-  __u32           num_buckets;
-  __u32           cursor;
-  __u64           probes;
+  bucket_count_t *free_in_bucket; ///< free count per bucket, kvmalloc'd at mount
+  /// covers block 0 onward so bucket = block / BUCKET_SIZE. buckets below data_block_start stay 0
+  __u32 num_buckets;
+  __u32 cursor; ///< bucket of the last alloc, probing starts here and wraps
+  __u64 probes; ///< buckets examined, says whether the summary saves any work
 };
 
 static inline __u32 bucket_of(__u32 block) {

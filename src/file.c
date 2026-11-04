@@ -17,7 +17,7 @@ int bsfs_fsync(struct file *file, loff_t start, loff_t end, int datasync) {
   struct inode       *inode = file->f_mapping->host;
   struct super_block *sb    = inode->i_sb;
 
-  // data first, delalloc writeback dirties btree nodes, the bitmap and the inode
+  // data first. writing the pages back can still dirty the inode, and bsfs_get_block() dirties tree nodes and the bitmap
   ret = file_write_and_wait_range(file, start, end);
 
   // ends up in bsfs_write_inode with WB_SYNC_ALL

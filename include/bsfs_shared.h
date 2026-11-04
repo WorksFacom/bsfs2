@@ -4,10 +4,12 @@
  *
  * Disk layout, in 4 KiB blocks:
  *
+ * @code{.unparsed}
  *   0                  reserved, zeroed
  *   1                  bsfs_super_block
  *   2 ..               the bitmap chain, block_bitmap_total blocks
  *   data_block_start.. everything else: tree nodes and file data
+ * @endcode
  *
  * Every tree node is one btree_node_t. Nothing in here is packed, so the module
  * and the tools agree on layout only because they are built for the same ABI.
@@ -30,34 +32,35 @@ typedef uint16_t __u16;
 typedef uint8_t  __u8;
 #endif
 
-#define BSFS_BLOCK_SIZE 4096
-#define MAGIC_NUMBER 0x53465342 // "BSFS" read as little-endian bytes
-#define MAX_FILENAME 255        // size of bsfs_dentry.filename, NUL included
-#define INVALID_BLOCK 0xFFFFFFFF
-#define BSFS_ROOT_INO 1
+#define BSFS_BLOCK_SIZE 4096     ///< block size in bytes, the only one supported
+#define MAGIC_NUMBER 0x53465342  ///< "BSFS" read as little-endian bytes
+#define MAX_FILENAME 255         ///< size of bsfs_dentry.filename, NUL included
+#define INVALID_BLOCK 0xFFFFFFFF ///< no block. allocation failure, and the end of the bitmap chain
+#define BSFS_ROOT_INO 1          ///< inode number of the root directory
 
-// bitmap bytes per chain block. the last 4 bytes hold next_block
+/// bitmap bytes per chain block. the last 4 bytes hold next_block
 #define BITMAP_BLOCK_BYTES (BSFS_BLOCK_SIZE - sizeof(__u32))
-#define BITS_PER_BLOCK (BITMAP_BLOCK_BYTES * 8)
+#define BITS_PER_BLOCK (BITMAP_BLOCK_BYTES * 8) ///< blocks tracked by one chain block, 32736
 
 /**
  * @brief The superblock, stored at block 1.
  *
  * inode_root and recovery_root are the roots of the inode tree and the recovery
- * tree. Copy-on-write moves them on every mutation. 0 means the tree is empty.
+ * tree. Copy-on-write moves them on every mutation. 0 means the tree is empty,
+ * which only the recovery tree can be.
  * root_inode is always BSFS_ROOT_INO.
  */
 typedef struct bsfs_super_block {
-  __u32 magic_number;
-  __u32 block_size;
-  __u64 fs_size;
-  __u32 total_blocks;
-  __u32 block_bitmap_start;
-  __u32 block_bitmap_total;
-  __u32 inode_root;
-  __u32 recovery_root;
-  __u32 data_block_start;
-  __u32 root_inode;
+  __u32 magic_number;       ///< MAGIC_NUMBER
+  __u32 block_size;         ///< always BSFS_BLOCK_SIZE
+  __u64 fs_size;            ///< total_blocks * BSFS_BLOCK_SIZE, in bytes
+  __u32 total_blocks;       ///< every block on the device, metadata included
+  __u32 block_bitmap_start; ///< first block of the bitmap chain, 2 as mkfs writes it
+  __u32 block_bitmap_total; ///< length of the bitmap chain
+  __u32 inode_root;         ///< root node of the inode tree
+  __u32 recovery_root;      ///< root node of the recovery tree, 0 while empty
+  __u32 data_block_start;   ///< first block the allocator may hand out
+  __u32 root_inode;         ///< always BSFS_ROOT_INO
 } bsfs_super_block;
 
 /**
@@ -68,8 +71,8 @@ typedef struct bsfs_super_block {
  * block_bitmap_total).
  */
 typedef struct bitmap_block_t {
-  __u8  bits[BITMAP_BLOCK_BYTES];
-  __u32 next_block;
+  __u8  bits[BITMAP_BLOCK_BYTES]; ///< one bit per block, LSB-first, set means allocated
+  __u32 next_block;               ///< next chain block, INVALID_BLOCK after the last one
 } bitmap_block_t;
 
 /**
@@ -79,13 +82,13 @@ typedef struct bitmap_block_t {
  * The entries of a file's extent tree, keyed by file_blk.
  */
 typedef struct bspan_t {
-  __u32 file_blk;
-  __u32 disk_blk;
-  __u16 length;
-  __u16 padding;
+  __u32 file_blk; ///< first file block of the run, the tree key
+  __u32 disk_blk; ///< disk block file_blk maps to
+  __u16 length;   ///< blocks in the run, at most BSFS_MAX_SPAN_BLOCKS
+  __u16 padding;  ///< unused
 } bspan_t;
 
-// length is a __u16, stop growing a span short of the wrap
+/// length is a __u16, stop growing a span short of the wrap
 #define BSFS_MAX_SPAN_BLOCKS 0xF000
 
 /**
@@ -97,19 +100,19 @@ typedef struct bspan_t {
  * maintained.
  */
 typedef struct disk_mapped_inode_t {
-  __u32 ino;
-  __u32 size;
-  __u8  unused;
-  __u32 block_count;
-  __u16 uid;
-  __u16 gid;
-  __u16 mode;
-  __u16 nlinks;
-  __u32 atime;
-  __u32 mtime;
-  __u32 ctime;
-  __u32 btree_root;
-  __u8  pad[34];
+  __u32 ino;         ///< inode number, the tree key
+  __u32 size;        ///< file size in bytes
+  __u8  unused;      ///< not maintained
+  __u32 block_count; ///< not maintained
+  __u16 uid;         ///< owner
+  __u16 gid;         ///< group
+  __u16 mode;        ///< the whole i_mode, type and permission bits
+  __u16 nlinks;      ///< link count. an entry at 0 is a deleted inode, iget refuses it
+  __u32 atime;       ///< last access
+  __u32 mtime;       ///< last data change
+  __u32 ctime;       ///< last inode change
+  __u32 btree_root;  ///< extent tree or dentry tree, 0 while empty
+  __u8  pad[34];     ///< zero on new inodes, carried over by updates
 } disk_mapped_inode_t;
 
 /**
@@ -120,9 +123,9 @@ typedef struct disk_mapped_inode_t {
  * of trusting the stored copy.
  */
 typedef struct bsfs_dentry {
-  __u32 ino;
-  __u32 name_hash;
-  char  filename[MAX_FILENAME];
+  __u32 ino;                    ///< inode the name points at
+  __u32 name_hash;              ///< hash_filename(filename), written but never trusted
+  char  filename[MAX_FILENAME]; ///< NUL-terminated name
 } bsfs_dentry;
 
 /**
@@ -134,23 +137,23 @@ typedef struct bsfs_dentry {
  * epoch. Purging drops expired entries first, then the oldest.
  */
 typedef struct rec_entry_t {
-  __u32 recovery_id;
-  __u64 deleted_at;
-  __u32 original_parent_ino;
-  char  original_name[256];
-  __u32 inode_number;
-  __u8  file_type;
-  __u16 uid;
-  __u16 gid;
-  __u16 permissions;
-  __u32 file_size;
-  __u32 block_count; // always 0, reclaim walks btree_root. kept for the layout
-  __u32 btree_root;
-  __u64 retention_until;
+  __u32 recovery_id;         ///< tree key, picked by bsfs_rec_tree_add()
+  __u64 deleted_at;          ///< when evict recorded the snapshot
+  __u32 original_parent_ino; ///< directory the last link was removed from
+  char  original_name[256];  ///< name it had there
+  __u32 inode_number;        ///< inode number it had. restore reuses it when free
+  __u8  file_type;           ///< BSFS_REC_TYPE_DIR or BSFS_REC_TYPE_FILE
+  __u16 uid;                 ///< owner at deletion
+  __u16 gid;                 ///< group at deletion
+  __u16 permissions;         ///< the whole i_mode
+  __u32 file_size;           ///< size in bytes at deletion
+  __u32 block_count;         ///< always 0, reclaim walks btree_root. kept for the layout
+  __u32 btree_root;          ///< the file's extent tree, or dentry tree for a directory
+  __u64 retention_until;     ///< expiry, deleted_at + DEFAULT_RECOVERY_TTL
 } rec_entry_t;
 
-#define BSFS_REC_TYPE_DIR 0
-#define BSFS_REC_TYPE_FILE 1 // anything that isn't a directory
+#define BSFS_REC_TYPE_DIR 0  ///< rec_entry_t.file_type of a directory
+#define BSFS_REC_TYPE_FILE 1 ///< anything that isn't a directory
 
 /**
  * @brief One tree node, exactly one block.
@@ -161,10 +164,10 @@ typedef struct rec_entry_t {
  * and bchildren() in btree.h.
  */
 typedef struct btree_node_t {
-  __u32 num_entries;
-  __u8  is_leaf;
+  __u32 num_entries; ///< entries in use, at most 2t-1
+  __u8  is_leaf;     ///< 1 for a leaf, 0 for an internal node
 
-  // must match the size btree_create_handle() assumes when it computes min_degree
+  /// must match the size btree_create_handle() assumes when it computes min_degree
   __u8 data[BSFS_BLOCK_SIZE - sizeof(__u32) - sizeof(__u8)];
 } btree_node_t;
 
